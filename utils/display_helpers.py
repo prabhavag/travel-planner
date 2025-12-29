@@ -2,17 +2,20 @@
 Streamlit display helpers for rendering travel plans.
 """
 import streamlit as st
-from typing import List
+import streamlit.components.v1 as components
+from typing import List, Optional
 from models.travel_plan import TravelPlan, Activity, DayItinerary
+from utils.map_display import create_day_map, extract_places_from_day
 
 
-def display_travel_plan(plan: TravelPlan, plan_number: int):
+def display_travel_plan(plan: TravelPlan, plan_number: int, places_client=None):
     """
     Display a travel plan in Streamlit.
-    
+
     Args:
         plan: TravelPlan object to display
         plan_number: Plan number (1, 2, or 3)
+        places_client: Optional PlacesClient for fetching map data
     """
     plan_titles = {
         "budget": "💰 Budget-Friendly",
@@ -99,9 +102,9 @@ def display_travel_plan(plan: TravelPlan, plan_number: int):
         # Itinerary
         st.markdown("---")
         st.markdown("### 📅 Day-by-Day Itinerary")
-        
+
         for day in plan.itinerary:
-            display_day_itinerary(day)
+            display_day_itinerary(day, places_client)
         
         # Tips
         if plan.tips:
@@ -112,31 +115,51 @@ def display_travel_plan(plan: TravelPlan, plan_number: int):
         st.markdown("---")
 
 
-def display_day_itinerary(day: DayItinerary):
-    """Display a single day's itinerary."""
+def display_day_itinerary(day: DayItinerary, places_client=None):
+    """Display a single day's itinerary with a map."""
     st.markdown(f"#### Day {day.day_number} - {day.date}")
-    
-    # Morning
-    if day.morning:
-        st.markdown("**☀️ Morning**")
-        for activity in day.morning:
-            display_activity(activity)
-    
-    # Afternoon
-    if day.afternoon:
-        st.markdown("**🌤️ Afternoon**")
-        for activity in day.afternoon:
-            display_activity(activity)
-    
-    # Evening
-    if day.evening:
-        st.markdown("**🌙 Evening**")
-        for activity in day.evening:
-            display_activity(activity)
-    
-    if day.notes:
-        st.caption(f"*Note: {day.notes}*")
-    
+
+    # Create two columns: activities on left, map on right
+    col_activities, col_map = st.columns([3, 2])
+
+    with col_activities:
+        # Morning
+        if day.morning:
+            st.markdown("**☀️ Morning**")
+            for activity in day.morning:
+                display_activity(activity)
+
+        # Afternoon
+        if day.afternoon:
+            st.markdown("**🌤️ Afternoon**")
+            for activity in day.afternoon:
+                display_activity(activity)
+
+        # Evening
+        if day.evening:
+            st.markdown("**🌙 Evening**")
+            for activity in day.evening:
+                display_activity(activity)
+
+        if day.notes:
+            st.caption(f"*Note: {day.notes}*")
+
+    with col_map:
+        # Extract places and create map for this day
+        if places_client:
+            with st.spinner("Loading map..."):
+                day_places = extract_places_from_day(day, places_client)
+                if day_places:
+                    map_html = create_day_map(day_places, day.day_number, height=280)
+                    if map_html:
+                        components.html(map_html, height=300)
+                    else:
+                        st.caption("📍 Map not available")
+                else:
+                    st.caption("📍 Map locations not found")
+        else:
+            st.caption("📍 Map requires Places API")
+
     st.markdown("---")
 
 

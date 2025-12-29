@@ -3,6 +3,7 @@ LLM client for generating travel plans.
 Supports OpenAI and DeepSeek APIs.
 """
 import json
+import re
 import openai
 from typing import Dict, Any, Optional, List
 import config
@@ -235,4 +236,140 @@ CRITICAL REQUIREMENTS:
 10. Return ONLY valid JSON, no additional text"""
         
         return prompt
+
+    def modify_itinerary(
+        self,
+        current_plan: Dict[str, Any],
+        user_message: str,
+        conversation_history: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """
+        Modify an existing travel plan based on user chat input.
+
+        Args:
+            current_plan: The current travel plan as a dictionary
+            user_message: The user's modification request
+            conversation_history: List of previous chat messages
+
+        Returns:
+            Dictionary containing the modified travel plan
+        """
+        system_prompt = """You are an expert travel planner assistant. You are helping modify an existing travel itinerary based on user feedback.
+
+Your task is to:
+1. Understand the user's request for changes
+2. Modify ONLY the relevant parts of the itinerary
+3. Keep ALL other fields intact (source, destination, dates, travelers, costs, etc.)
+4. Return the complete modified plan in the EXACT same JSON structure
+
+Be helpful. If the user asks to:
+- Add an activity: Find an appropriate time slot and add it
+- Remove an activity: Remove it from the itinerary
+- Change a restaurant: Replace it with a suitable alternative
+- Swap days: Reorganize the itinerary accordingly
+- Add more free time: Reduce activities appropriately
+- Make it more active/relaxed: Adjust activity density
+- Focus on specific interests: Modify activities to match
+
+CRITICAL: Your response must be a valid JSON object with this EXACT structure:
+{
+    "plan_type": "string",
+    "source": "string",
+    "destination": "string",
+    "start_date": "YYYY-MM-DD",
+    "end_date": "YYYY-MM-DD",
+    "duration_days": number,
+    "travelers": number,
+    "transportation": [{"type": "flight", "from_location": "...", "to_location": "...", "departure_date": "...", "arrival_date": "...", ...}],
+    "accommodation": {"name": "...", "type": "hotel", "location": "...", "check_in": "...", "check_out": "...", "nights": number, ...},
+    "itinerary": [{"date": "YYYY-MM-DD", "day_number": 1, "morning": [...], "afternoon": [...], "evening": [...]}],
+    "cost_breakdown": {"transportation": 0, "accommodation": 0, "activities": 0, "food": 0, "local_transport": 0, "total": 0},
+    "summary": "string",
+    "highlights": ["..."],
+    "tips": ["..."]
+}
+
+IMPORTANT:
+- "transportation" must be an ARRAY (list) of transportation objects
+- Keep all existing field values unless the user specifically asks to change them
+- Return ONLY the JSON object, no additional text or explanation"""
+
+        # Build conversation context
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add the current plan context
+        plan_context = f"""Here is the current travel plan that needs to be modified:
+
+```json
+{json.dumps(current_plan, indent=2)}
+```
+
+Modify this plan according to the user's request. Return the complete updated plan as a valid JSON object."""
+
+        messages.append({"role": "user", "content": plan_context})
+        messages.append({"role": "assistant", "content": "I understand the current travel plan. What changes would you like to make?"})
+
+        # Add conversation history (limit to last 6 messages to avoid token limits)
+        recent_history = conversation_history[-6:] if len(conversation_history) > 6 else conversation_history
+        for msg in recent_history:
+            messages.append(msg)
+
+        # Add the current user message
+        messages.append({"role": "user", "content": user_message})
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0.7,
+                response_format={"type": "json_object"} if self.use_openai else None
+            )
+
+            content = response.choices[0].message.content
+
+            # Try to parse the JSON from the response
+            modified_plan = json.loads(content)
+
+            # Ensure transportation is a list
+            if "transportation" in modified_plan and not isinstance(modified_plan["transportation"], list):
+                modified_plan["transportation"] = [modified_plan["transportation"]]
+
+            # Merge with original plan to ensure no required fields are missing
+            merged_plan = {**current_plan, **modified_plan}
+
+            return {
+                "success": True,
+                "plan": merged_plan,
+                "message": "Itinerary updated successfully!"
+            }
+
+        except json.JSONDecodeError:
+            # If JSON parsing fails, try to extract JSON from the response
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                try:
+                    modified_plan = json.loads(json_match.group())
+                    # Ensure transportation is a list
+                    if "transportation" in modified_plan and not isinstance(modified_plan["transportation"], list):
+                        modified_plan["transportation"] = [modified_plan["transportation"]]
+                    merged_plan = {**current_plan, **modified_plan}
+                    return {
+                        "success": True,
+                        "plan": merged_plan,
+                        "message": "Itinerary updated successfully!"
+                    }
+                except json.JSONDecodeError:
+                    pass
+            return {
+                "success": False,
+                "plan": current_plan,
+                "message": "I understood your request but had trouble updating the plan. Could you try rephrasing?"
+            }
+        except Exception as e:
+            print(f"Error modifying itinerary: {e}")
+            return {
+                "success": False,
+                "plan": current_plan,
+                "message": "Sorry, something went wrong while updating the itinerary. Please try again."
+            }
 

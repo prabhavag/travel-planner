@@ -232,6 +232,53 @@ class PlacesClient:
             print(f"Error getting autocomplete suggestions: {e}")
             return []
 
+    def autocomplete_areas(
+        self,
+        query: str,
+        location: Optional[Tuple[float, float]] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Get area/neighborhood autocomplete suggestions for hotel location preferences.
+
+        Args:
+            query: Partial area text to autocomplete (e.g., "downtown", "near airport")
+            location: Optional (lat, lng) tuple to bias results toward a destination
+
+        Returns:
+            List of autocomplete suggestions with description and place_id
+        """
+        if not query or len(query) < 2:
+            return []
+
+        try:
+            params = {
+                "input_text": query,
+                # Use geocode type to get neighborhoods, areas, addresses
+                "types": ["geocode"]
+            }
+
+            # Add location bias if provided (bias toward destination city)
+            if location:
+                params["location"] = location
+                params["radius"] = 50000  # 50km radius
+
+            predictions = self.client.places_autocomplete(**params)
+
+            suggestions = []
+            for prediction in predictions[:8]:  # Limit to 8 suggestions
+                suggestions.append({
+                    "description": prediction.get("description", ""),
+                    "place_id": prediction.get("place_id", ""),
+                    "main_text": prediction.get("structured_formatting", {}).get("main_text", ""),
+                    "secondary_text": prediction.get("structured_formatting", {}).get("secondary_text", "")
+                })
+
+            return suggestions
+
+        except Exception as e:
+            print(f"Error getting area autocomplete suggestions: {e}")
+            return []
+
     def autocomplete_hotels(
         self,
         query: str,
