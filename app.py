@@ -16,7 +16,7 @@ from utils.places_client import PlacesClient
 from utils.hotels_client import HotelsClient
 from utils.geocoding import GeocodingService
 from utils.map_display import create_itinerary_map, extract_places_from_plan
-from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 import config
 
 
@@ -713,10 +713,10 @@ def main():
                         places = extract_places_from_plan(plan, places_client)
 
                         if places:
-                            # Create and display the map
-                            itinerary_map = create_itinerary_map(places)
-                            st_folium(itinerary_map, width=None, height=500, returned_objects=[])
-                            st.caption(f"Showing {len(places)} locations across your {duration}-day trip")
+                            # Create and display the Google Map
+                            map_html = create_itinerary_map(places, height=500)
+                            components.html(map_html, height=520)
+                            st.caption(f"Showing {len(places)} locations across your {duration}-day trip. Click markers to see details and photos.")
                         else:
                             st.info("Map coordinates not available for this itinerary. The places will be shown without map visualization.")
 
