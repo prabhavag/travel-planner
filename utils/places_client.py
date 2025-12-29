@@ -169,12 +169,12 @@ class PlacesClient:
     ) -> Optional[Dict[str, Any]]:
         """
         Enrich an activity name with real place data.
-        
+
         Args:
             activity_name: Name of the activity
             location: (lat, lng) tuple
             activity_type: Type of place to search for
-            
+
         Returns:
             Enriched place data or None
         """
@@ -184,9 +184,51 @@ class PlacesClient:
             place_type=activity_type,
             radius=2000
         )
-        
+
         if places:
             # Return the best match (highest rating)
             return max(places, key=lambda x: x.get('rating', 0))
         return None
+
+    def autocomplete_locations(
+        self,
+        query: str,
+        types: Optional[List[str]] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Get location autocomplete suggestions using Google Places Autocomplete API.
+
+        Args:
+            query: Partial location text to autocomplete
+            types: List of place types to filter (e.g., ['(cities)'] for cities only)
+
+        Returns:
+            List of autocomplete suggestions with description and place_id
+        """
+        if not query or len(query) < 2:
+            return []
+
+        try:
+            # Use (cities) type to get city-level suggestions for travel destinations
+            autocomplete_types = types or ["(cities)"]
+
+            predictions = self.client.places_autocomplete(
+                input_text=query,
+                types=autocomplete_types
+            )
+
+            suggestions = []
+            for prediction in predictions[:8]:  # Limit to 8 suggestions
+                suggestions.append({
+                    "description": prediction.get("description", ""),
+                    "place_id": prediction.get("place_id", ""),
+                    "main_text": prediction.get("structured_formatting", {}).get("main_text", ""),
+                    "secondary_text": prediction.get("structured_formatting", {}).get("secondary_text", "")
+                })
+
+            return suggestions
+
+        except Exception as e:
+            print(f"Error getting autocomplete suggestions: {e}")
+            return []
 

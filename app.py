@@ -3,15 +3,151 @@ Travel Planner Streamlit App
 Main application entry point.
 """
 import streamlit as st
+from streamlit_searchbox import st_searchbox
 from datetime import date, datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 
 from models.travel_plan import TravelPlan, TravelRequest
 from utils.travel_planner import TravelPlanner
 from utils.display_helpers import display_travel_plan
 from utils.flights_client import FlightsClient
 from utils.flight_display import display_flight_comparison_table
+from utils.places_client import PlacesClient
+from utils.hotels_client import HotelsClient
+from utils.geocoding import GeocodingService
 import config
+
+
+# Initialize PlacesClient for autocomplete (cached to avoid re-initialization)
+@st.cache_resource
+def get_places_client():
+    """Get or create a cached PlacesClient instance."""
+    try:
+        return PlacesClient()
+    except ValueError:
+        return None
+
+
+def search_locations(query: str) -> List[tuple]:
+    """
+    Search function for location autocomplete.
+    Returns list of (display_text, value) tuples for the searchbox.
+    """
+    if not query or len(query) < 2:
+        return []
+
+    places_client = get_places_client()
+    if not places_client:
+        return []
+
+    suggestions = places_client.autocomplete_locations(query)
+    # Return tuples of (display_text, value)
+    return [(s["description"], s["description"]) for s in suggestions]
+
+
+@st.cache_resource
+def get_geocoding_service():
+    """Get or create a cached GeocodingService instance."""
+    try:
+        return GeocodingService()
+    except ValueError:
+        return None
+
+
+def display_hotel_comparison_table(hotels: List[Dict[str, Any]]) -> None:
+    """Display hotels in a filterable table with selection."""
+    if not hotels:
+        st.warning("No hotels found.")
+        return
+
+    # Filtering options
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        sort_by = st.selectbox(
+            "Sort by",
+            options=["price", "distance", "rating"],
+            format_func=lambda x: {"price": "Price (Low to High)", "distance": "Distance (Nearest)", "rating": "Rating (Highest)"}[x],
+            key="hotel_sort"
+        )
+
+    with col2:
+        max_price = st.slider(
+            "Max Price per Night ($)",
+            min_value=50,
+            max_value=1000,
+            value=500,
+            step=25,
+            key="hotel_max_price"
+        )
+
+    with col3:
+        max_distance = st.slider(
+            "Max Distance (km)",
+            min_value=1.0,
+            max_value=20.0,
+            value=10.0,
+            step=0.5,
+            key="hotel_max_distance"
+        )
+
+    # Filter hotels
+    filtered_hotels = [
+        h for h in hotels
+        if h.get('price_per_night', 0) <= max_price
+        and (h.get('distance_km') is None or h.get('distance_km', 0) <= max_distance)
+    ]
+
+    # Sort hotels
+    if sort_by == "price":
+        filtered_hotels.sort(key=lambda x: x.get('price_per_night', float('inf')))
+    elif sort_by == "distance":
+        filtered_hotels.sort(key=lambda x: x.get('distance_km', float('inf')))
+    elif sort_by == "rating":
+        filtered_hotels.sort(key=lambda x: x.get('rating', 0), reverse=True)
+
+    # Store filtered hotels in session state for selection
+    st.session_state.filtered_hotels = filtered_hotels
+
+    if not filtered_hotels:
+        st.warning("No hotels match your filters. Try adjusting the price or distance limits.")
+        return
+
+    st.markdown(f"**Showing {len(filtered_hotels)} hotels**")
+
+    # Display hotels as cards
+    for idx, hotel in enumerate(filtered_hotels):
+        with st.container():
+            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+
+            with col1:
+                st.markdown(f"**{hotel.get('name', 'Unknown Hotel')}**")
+                rating = hotel.get('rating', 0)
+                stars = "⭐" * int(rating) if rating else ""
+                st.caption(f"{stars} ({rating}/5) | {hotel.get('room_type', 'Standard Room')}")
+                if hotel.get('amenities'):
+                    st.caption(", ".join(hotel.get('amenities', [])[:4]))
+
+            with col2:
+                st.metric(
+                    "Price/Night",
+                    f"${hotel.get('price_per_night', 0):,.0f}",
+                    help=f"Total: ${hotel.get('total_price', 0):,.0f}"
+                )
+
+            with col3:
+                distance = hotel.get('distance_km')
+                if distance:
+                    st.metric("Distance", f"{distance:.1f} km", help="Distance to city center/landmark")
+                else:
+                    st.metric("Distance", "N/A")
+
+            with col4:
+                if st.button("Select", key=f"select_hotel_{idx}"):
+                    st.session_state.selected_hotel = hotel
+                    st.success(f"Selected: {hotel.get('name')}")
+
+            st.divider()
 
 
 # Page configuration
@@ -42,13 +178,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def validate_inputs(source: str, destination: str, start_date: date, end_date: date) -> Optional[str]:
+def validate_inputs(source: Optional[str], destination: Optional[str], start_date: date, end_date: date) -> Optional[str]:
     """Validate user inputs."""
-    if not source or not source.strip():
-        return "Please enter a source location"
-    
-    if not destination or not destination.strip():
-        return "Please enter a destination"
+    if not source or (isinstance(source, str) and not source.strip()):
+        return "Please select a source location"
+
+    if not destination or (isinstance(destination, str) and not destination.strip()):
+        return "Please select a destination"
     
     if start_date < date.today():
         return "Start date cannot be in the past"
@@ -76,17 +212,25 @@ def main():
     # Sidebar for inputs
     with st.sidebar:
         st.header("📍 Trip Details")
-        
-        source = st.text_input(
-            "Source Location",
-            placeholder="e.g., New York, NY",
-            help="Your current location or departure city"
+
+        st.markdown("**Source Location**")
+        st.caption("Your current location or departure city")
+        source = st_searchbox(
+            search_locations,
+            key="source_searchbox",
+            placeholder="Type to search cities...",
+            clear_on_submit=False,
+            rerun_on_update=False
         )
-        
-        destination = st.text_input(
-            "Destination",
-            placeholder="e.g., Paris, France",
-            help="Your travel destination"
+
+        st.markdown("**Destination**")
+        st.caption("Your travel destination")
+        destination = st_searchbox(
+            search_locations,
+            key="destination_searchbox",
+            placeholder="Type to search cities...",
+            clear_on_submit=False,
+            rerun_on_update=False
         )
         
         trip_type = st.radio(
@@ -204,8 +348,9 @@ def main():
         )
         
         st.markdown("---")
-        
+
         search_flights_button = st.button("🔍 Search Flights", type="secondary")
+        search_hotels_button = st.button("🏨 Search Hotels", type="secondary")
         generate_button = st.button("🚀 Generate Travel Plan", type="primary")
         
         st.markdown("---")
@@ -229,6 +374,14 @@ def main():
         st.session_state.selected_flight = None
     if 'available_flights' not in st.session_state:
         st.session_state.available_flights = []
+
+    # Initialize session state for hotels
+    if 'selected_hotel' not in st.session_state:
+        st.session_state.selected_hotel = None
+    if 'available_hotels' not in st.session_state:
+        st.session_state.available_hotels = []
+    if 'destination_coords' not in st.session_state:
+        st.session_state.destination_coords = None
     
     # Main content area
     # Flight search functionality
@@ -323,7 +476,81 @@ def main():
         else:
             # Default: use first flight if no selection made
             st.session_state.selected_flight = st.session_state.available_flights[0] if st.session_state.available_flights else None
-    
+
+    # Hotel search functionality
+    if search_hotels_button:
+        # Validate inputs
+        error = validate_inputs(source, destination, start_date, end_date)
+        if error:
+            st.error(error)
+        else:
+            # Search for hotels
+            with st.spinner("🏨 Searching for hotels... This may take a moment."):
+                try:
+                    hotels_client = HotelsClient()
+
+                    # Get destination coordinates for distance calculation
+                    geocoding = get_geocoding_service()
+                    landmark_coords = None
+                    if geocoding and destination:
+                        coords = geocoding.geocode(destination)
+                        if coords:
+                            landmark_coords = coords
+                            st.session_state.destination_coords = coords
+
+                    # Extract city code from destination (first 3 letters uppercase as fallback)
+                    city_code = destination[:3].upper() if destination else "NYC"
+
+                    hotels = hotels_client.search_hotels(
+                        city_code=city_code,
+                        check_in_date=start_date.strftime("%Y-%m-%d"),
+                        check_out_date=end_date.strftime("%Y-%m-%d"),
+                        adults=travelers,
+                        rooms=1,
+                        landmark_coords=landmark_coords
+                    )
+
+                    if hotels:
+                        # Filter by price range
+                        filtered_hotels = [
+                            h for h in hotels
+                            if hotel_price_min <= h.get("price_per_night", float("inf")) <= hotel_price_max
+                        ]
+
+                        if filtered_hotels:
+                            st.session_state.available_hotels = filtered_hotels
+                            if hotels_client.use_mock_data:
+                                st.info(f"ℹ️ Using demo hotel data (API unavailable). Found {len(filtered_hotels)} hotel options.")
+                            else:
+                                st.success(f"✅ Found {len(filtered_hotels)} hotel options!")
+                        elif hotels:
+                            st.session_state.available_hotels = hotels
+                            st.warning(f"⚠️ Found {len(hotels)} hotels, but none in your price range. Showing all options.")
+                        else:
+                            st.session_state.available_hotels = []
+                            st.warning("⚠️ No hotels found.")
+                    else:
+                        st.session_state.available_hotels = []
+                        st.warning("⚠️ No hotels found for this destination.")
+
+                except Exception as e:
+                    st.error(f"Error searching hotels: {str(e)}")
+                    st.session_state.available_hotels = []
+
+    # Display hotel options if available
+    if st.session_state.available_hotels:
+        st.markdown("---")
+        st.markdown("### 🏨 Available Hotels")
+        if st.session_state.destination_coords:
+            st.caption(f"Distances calculated from city center")
+
+        # Display hotel comparison table with selection
+        display_hotel_comparison_table(st.session_state.available_hotels)
+
+        # Show selected hotel if any
+        if st.session_state.selected_hotel:
+            st.success(f"✅ Selected Hotel: **{st.session_state.selected_hotel.get('name')}** - ${st.session_state.selected_hotel.get('price_per_night', 0):,.0f}/night")
+
     # Generate travel plan
     if generate_button:
         # Validate inputs
@@ -340,10 +567,10 @@ def main():
             st.info("Please check your API keys in the .env file")
             return
         
-        # Create travel request with selected flight if available
+        # Create travel request with selected flight and hotel if available
         travel_request = TravelRequest(
-            source=source.strip(),
-            destination=destination.strip(),
+            source=source.strip() if source else "",
+            destination=destination.strip() if destination else "",
             start_date=start_date,
             end_date=end_date,
             travelers=travelers,
@@ -356,7 +583,8 @@ def main():
             hotel_price_max=float(hotel_price_max),
             interest_categories=interest_categories if interest_categories else ["culture", "food", "nature"],
             activity_level=activity_level,
-            selected_flight=st.session_state.selected_flight
+            selected_flight=st.session_state.selected_flight,
+            selected_hotel=st.session_state.selected_hotel
         )
         
         # Show progress

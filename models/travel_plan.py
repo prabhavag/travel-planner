@@ -124,3 +124,6 @@ class TravelRequest(BaseModel):
     # Selected flight (optional - user can select from flight options)
     selected_flight: Optional[Dict[str, Any]] = None
 
+    # Selected hotel (optional - user can select from hotel options)
+    selected_hotel: Optional[Dict[str, Any]] = None
+

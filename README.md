@@ -33,7 +33,7 @@ cd travel-planner
 
 ```bash
 conda create -n travel-planner
-conda activate tranver-planner
+conda activate travel-planner
 pip install -r requirements.txt
 ```
 
