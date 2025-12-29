@@ -232,3 +232,99 @@ class PlacesClient:
             print(f"Error getting autocomplete suggestions: {e}")
             return []
 
+    def autocomplete_hotels(
+        self,
+        query: str,
+        location: Optional[Tuple[float, float]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get hotel autocomplete suggestions using Google Places Autocomplete API.
+
+        Args:
+            query: Hotel name or partial text to search
+            location: Optional (lat, lng) tuple to bias results toward a location
+
+        Returns:
+            List of hotel suggestions with details
+        """
+        if not query or len(query) < 2:
+            return []
+
+        try:
+            # Search for lodging/hotels
+            params = {
+                "input_text": query,
+                "types": ["lodging"]
+            }
+
+            # Add location bias if provided
+            if location:
+                params["location"] = location
+                params["radius"] = 50000  # 50km radius
+
+            predictions = self.client.places_autocomplete(**params)
+
+            suggestions = []
+            for prediction in predictions[:10]:  # Limit to 10 suggestions
+                place_id = prediction.get("place_id", "")
+
+                suggestion = {
+                    "description": prediction.get("description", ""),
+                    "place_id": place_id,
+                    "name": prediction.get("structured_formatting", {}).get("main_text", ""),
+                    "address": prediction.get("structured_formatting", {}).get("secondary_text", "")
+                }
+
+                suggestions.append(suggestion)
+
+            return suggestions
+
+        except Exception as e:
+            print(f"Error getting hotel autocomplete suggestions: {e}")
+            return []
+
+    def get_hotel_details(
+        self,
+        place_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed information about a hotel using its place_id.
+
+        Args:
+            place_id: Google Places place_id for the hotel
+
+        Returns:
+            Hotel details including name, address, rating, coordinates, etc.
+        """
+        if not place_id:
+            return None
+
+        try:
+            place_details = self.client.place(place_id=place_id)
+            result = place_details.get('result', {})
+
+            geometry = result.get('geometry', {})
+            location = geometry.get('location', {})
+
+            details = {
+                "place_id": place_id,
+                "name": result.get('name', ''),
+                "address": result.get('formatted_address', ''),
+                "phone": result.get('formatted_phone_number', ''),
+                "website": result.get('website', ''),
+                "rating": result.get('rating', 0.0),
+                "user_ratings_total": result.get('user_ratings_total', 0),
+                "price_level": result.get('price_level'),
+                "latitude": location.get('lat'),
+                "longitude": location.get('lng'),
+                "opening_hours": result.get('opening_hours', {}),
+                "photos": result.get('photos', [])[:3],
+                "types": result.get('types', [])
+            }
+
+            return details
+
+        except Exception as e:
+            print(f"Error getting hotel details: {e}")
+            return None
+

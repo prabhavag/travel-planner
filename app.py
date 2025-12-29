@@ -45,6 +45,34 @@ def search_locations(query: str) -> List[tuple]:
     return [(s["description"], s["description"]) for s in suggestions]
 
 
+def search_hotels_autocomplete(query: str) -> List[tuple]:
+    """
+    Search function for hotel autocomplete.
+    Returns list of (display_text, value_dict) tuples for the searchbox.
+    """
+    if not query or len(query) < 2:
+        return []
+
+    places_client = get_places_client()
+    if not places_client:
+        return []
+
+    # Get destination coordinates if available for location bias
+    location = None
+    if 'destination_coords' in st.session_state and st.session_state.destination_coords:
+        location = st.session_state.destination_coords
+
+    suggestions = places_client.autocomplete_hotels(query, location=location)
+
+    # Return tuples of (display_text, place_id) for selection
+    results = []
+    for s in suggestions:
+        display = f"{s['name']} - {s['address']}" if s.get('address') else s['name']
+        results.append((display, s['place_id']))
+
+    return results
+
+
 @st.cache_resource
 def get_geocoding_service():
     """Get or create a cached GeocodingService instance."""
@@ -295,13 +323,46 @@ def main():
         
         st.markdown("---")
         st.markdown("### 🏨 Hotel Preferences")
-        
+
+        st.markdown("**Search for a Specific Hotel (Optional)**")
+        st.caption("Search by hotel name to find a specific property")
+        hotel_lookup = st_searchbox(
+            search_hotels_autocomplete,
+            key="hotel_lookup_searchbox",
+            placeholder="Type hotel name to search...",
+            clear_on_submit=False,
+            rerun_on_update=False
+        )
+
+        # If a hotel is selected via lookup, get its details
+        if hotel_lookup and hotel_lookup != st.session_state.get('last_hotel_lookup'):
+            st.session_state.last_hotel_lookup = hotel_lookup
+            places_client = get_places_client()
+            if places_client:
+                hotel_details = places_client.get_hotel_details(hotel_lookup)
+                if hotel_details:
+                    st.session_state.looked_up_hotel = hotel_details
+                    st.success(f"Found: **{hotel_details.get('name')}**")
+
+        # Show looked up hotel details if available
+        if 'looked_up_hotel' in st.session_state and st.session_state.looked_up_hotel:
+            hotel_info = st.session_state.looked_up_hotel
+            with st.expander("📍 Selected Hotel Details", expanded=True):
+                st.markdown(f"**{hotel_info.get('name', 'Unknown')}**")
+                if hotel_info.get('rating'):
+                    st.caption(f"⭐ {hotel_info.get('rating')}/5 ({hotel_info.get('user_ratings_total', 0)} reviews)")
+                st.caption(f"📍 {hotel_info.get('address', 'Address not available')}")
+                if st.button("Clear Selection", key="clear_hotel_lookup"):
+                    st.session_state.looked_up_hotel = None
+                    st.session_state.last_hotel_lookup = None
+                    st.rerun()
+
         hotel_address = st.text_input(
-            "Preferred Hotel Location/Address (Optional)",
+            "Or Enter Hotel Location/Area (Optional)",
             placeholder="e.g., City center, Near airport, Downtown",
             help="Specify your preferred hotel location or area"
         )
-        
+
         hotel_price_range = st.slider(
             "Hotel Price Range (USD per night)",
             min_value=30,
@@ -382,6 +443,10 @@ def main():
         st.session_state.available_hotels = []
     if 'destination_coords' not in st.session_state:
         st.session_state.destination_coords = None
+    if 'looked_up_hotel' not in st.session_state:
+        st.session_state.looked_up_hotel = None
+    if 'last_hotel_lookup' not in st.session_state:
+        st.session_state.last_hotel_lookup = None
     
     # Main content area
     # Flight search functionality
@@ -567,6 +632,22 @@ def main():
             st.info("Please check your API keys in the .env file")
             return
         
+        # Determine which hotel to use: looked up hotel takes priority, then selected from search
+        final_selected_hotel = None
+        if st.session_state.looked_up_hotel:
+            # Convert looked up hotel to the expected format
+            looked_up = st.session_state.looked_up_hotel
+            final_selected_hotel = {
+                'name': looked_up.get('name', ''),
+                'address': looked_up.get('address', ''),
+                'rating': looked_up.get('rating', 0),
+                'latitude': looked_up.get('latitude'),
+                'longitude': looked_up.get('longitude'),
+                'place_id': looked_up.get('place_id', '')
+            }
+        elif st.session_state.selected_hotel:
+            final_selected_hotel = st.session_state.selected_hotel
+
         # Create travel request with selected flight and hotel if available
         travel_request = TravelRequest(
             source=source.strip() if source else "",
@@ -584,7 +665,7 @@ def main():
             interest_categories=interest_categories if interest_categories else ["culture", "food", "nature"],
             activity_level=activity_level,
             selected_flight=st.session_state.selected_flight,
-            selected_hotel=st.session_state.selected_hotel
+            selected_hotel=final_selected_hotel
         )
         
         # Show progress
