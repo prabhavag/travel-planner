@@ -46,17 +46,3 @@ exports.modifyPlan = async (req, res) => {
     }
 };
 
-exports.autocomplete = async (req, res) => {
-    try {
-        const { query } = req.query;
-        if (!query) {
-            return res.json([]);
-        }
-
-        const suggestions = await planner.placesClient.autocompleteLocations(query);
-        res.json(suggestions);
-    } catch (error) {
-        console.error("Error in autocomplete:", error);
-        res.status(500).json({ error: error.message });
-    }
-}

@@ -15,7 +15,6 @@ app.use(express.json());
 app.get('/health', (req, res) => res.send('Travel Planner API is running'));
 app.post('/api/generate-plan', plannerController.generatePlan);
 app.post('/api/modify-plan', plannerController.modifyPlan);
-app.get('/api/autocomplete', plannerController.autocomplete);
 app.get('/api/config', (req, res) => {
     res.json({ googleMapsApiKey: process.env.GOOGLE_PLACES_API_KEY || '' });
 });

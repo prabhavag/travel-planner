@@ -31,17 +31,6 @@ export const modifyPlan = async (data) => {
     }
 };
 
-// Autocomplete API (optional)
-export const autocomplete = async (query) => {
-    try {
-        const response = await api.get(`/autocomplete?query=${query}`);
-        return response.data;
-    } catch (error) {
-        console.error("Autocomplete error", error);
-        return [];
-    }
-}
-
 // Get frontend config (API keys, etc.)
 export const getConfig = async () => {
     try {

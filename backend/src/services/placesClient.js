@@ -110,30 +110,6 @@ class PlacesClient {
         }
     }
 
-    async autocompleteLocations(query, types = ["(cities)"]) {
-        if (!query || query.length < 2) return [];
-
-        try {
-            const response = await this.client.placeAutocomplete({
-                params: {
-                    input: query,
-                    types: types,
-                    key: this.apiKey
-                }
-            });
-
-            return response.data.predictions.slice(0, 8).map(prediction => ({
-                description: prediction.description,
-                place_id: prediction.place_id,
-                main_text: prediction.structured_formatting.main_text,
-                secondary_text: prediction.structured_formatting.secondary_text
-            }));
-        } catch (error) {
-            console.error("Error getting autocomplete suggestions:", error.message);
-            return [];
-        }
-    }
-
     getPlacePhotoUrl(photoReference, maxWidth = 400) {
         if (!photoReference) return null;
         return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=${maxWidth}&photo_reference=${photoReference}&key=${this.apiKey}`;

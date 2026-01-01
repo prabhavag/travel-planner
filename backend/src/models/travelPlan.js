@@ -1,37 +1,5 @@
 const { z } = require('zod');
 
-const TransportationSchema = z.object({
-    type: z.string(),
-    to_location: z.string().optional().nullable(),
-    departure_date: z.string().optional().nullable(),
-    departure_time: z.string().optional().nullable(),
-    arrival_date: z.string().optional().nullable(),
-    arrival_time: z.string().optional().nullable(),
-    airline: z.string().optional().nullable(),
-    flight_number: z.string().optional().nullable(),
-    class_type: z.string().optional().nullable(),
-    price: z.number().optional().nullable(),
-    currency: z.string().default("USD"),
-    duration: z.string().optional().nullable(),
-    notes: z.string().optional().nullable(),
-});
-
-const AccommodationSchema = z.object({
-    name: z.string(),
-    type: z.string(),
-    location: z.string(),
-    price_per_night: z.number().optional().nullable(),
-    total_price: z.number().optional().nullable(),
-    currency: z.string().default("USD"),
-    rating: z.number().optional().nullable(),
-    address: z.string().optional().nullable(),
-    check_in: z.string().optional().nullable(),
-    check_out: z.string().optional().nullable(),
-    nights: z.number().optional().nullable(),
-    notes: z.string().optional().nullable(),
-    amenities: z.array(z.string()).optional().nullable(),
-});
-
 const ActivitySchema = z.object({
     name: z.string(),
     type: z.string(),
@@ -57,8 +25,6 @@ const DayItinerarySchema = z.object({
 });
 
 const CostBreakdownSchema = z.object({
-    transportation: z.number(),
-    accommodation: z.number(),
     activities: z.number(),
     food: z.number(),
     local_transport: z.number(),
@@ -73,8 +39,6 @@ const TravelPlanSchema = z.object({
     start_date: z.string().optional().nullable(),
     end_date: z.string().optional().nullable(),
     duration_days: z.number().optional().nullable(),
-    transportation: z.array(TransportationSchema).optional().default([]),
-    accommodation: AccommodationSchema.optional().nullable(),
     itinerary: z.array(DayItinerarySchema).optional().default([]),
     cost_breakdown: CostBreakdownSchema.optional().nullable(),
     summary: z.string().optional().nullable(),
