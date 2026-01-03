@@ -154,4 +154,28 @@ export const getSession = async (sessionId) => {
     }
 };
 
+// ==================== TWO-STEP EXPAND DAY FLOW ====================
+
+// Suggest activities only (no meals) - Step 1
+export const suggestActivities = async (sessionId, dayNumber, userMessage = '') => {
+    try {
+        const response = await api.post('/suggest-activities', { sessionId, dayNumber, userMessage });
+        return response.data;
+    } catch (error) {
+        console.error('Error suggesting activities:', error);
+        throw error;
+    }
+};
+
+// Suggest meals nearby selected activities - Step 2
+export const suggestMealsNearby = async (sessionId, dayNumber, selectedActivities) => {
+    try {
+        const response = await api.post('/suggest-meals-nearby', { sessionId, dayNumber, selectedActivities });
+        return response.data;
+    } catch (error) {
+        console.error('Error suggesting meals:', error);
+        throw error;
+    }
+};
+
 export default api;

@@ -83,6 +83,39 @@ const DaySuggestionsSchema = z.object({
     eveningActivities: z.array(ActivityOptionSchema).default([])
 });
 
+// Activity-only suggestions (no meals) - for two-step flow
+const ActivitySuggestionsSchema = z.object({
+    dayNumber: z.number(),
+    date: z.string(),
+    theme: z.string(),
+    morningActivities: z.array(ActivityOptionSchema).default([]),
+    afternoonActivities: z.array(ActivityOptionSchema).default([]),
+    eveningActivities: z.array(ActivityOptionSchema).default([])
+});
+
+// Meal option from Google Places API nearby search
+const MealFromPlacesSchema = z.object({
+    id: z.string(),
+    name: z.string(),
+    cuisine: z.string().optional().nullable(),
+    description: z.string().optional().nullable(), // vicinity/address
+    rating: z.number().optional().nullable(),
+    priceRange: z.string().optional().nullable(), // $, $$, $$$, $$$$
+    coordinates: z.object({
+        lat: z.number(),
+        lng: z.number()
+    }),
+    place_id: z.string()
+});
+
+// Meal suggestions from Places API for a day
+const MealSuggestionsFromPlacesSchema = z.object({
+    dayNumber: z.number(),
+    breakfast: z.array(MealFromPlacesSchema).default([]),
+    lunch: z.array(MealFromPlacesSchema).default([]),
+    dinner: z.array(MealFromPlacesSchema).default([])
+});
+
 // User selections from suggestions
 const DaySelectionsSchema = z.object({
     dayNumber: z.number(),
@@ -181,5 +214,9 @@ module.exports = {
     ActivityOptionSchema,
     MealOptionSchema,
     DaySuggestionsSchema,
-    DaySelectionsSchema
+    DaySelectionsSchema,
+    // Two-step flow schemas (activities first, then meals)
+    ActivitySuggestionsSchema,
+    MealFromPlacesSchema,
+    MealSuggestionsFromPlacesSchema
 };

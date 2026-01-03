@@ -84,6 +84,77 @@ RULES:
 - Return ONLY valid JSON, no additional text`,
 
     /**
+     * SUGGEST_ACTIVITIES: Generate activity options only (no meals)
+     */
+    SUGGEST_ACTIVITIES: `You are an expert travel planner suggesting activity options for a day.
+
+For each activity time slot, provide 2-3 OPTIONS for the user to choose from. Do NOT include meal suggestions - meals will be suggested separately based on activity locations.
+
+RESPONSE FORMAT (JSON):
+{
+    "message": "Conversational message presenting the activity options",
+    "suggestions": {
+        "dayNumber": 1,
+        "date": "YYYY-MM-DD",
+        "theme": "Day theme",
+        "morningActivities": [
+            {
+                "id": "m1",
+                "name": "Specific Place Name",
+                "type": "attraction|museum|park|landmark",
+                "description": "What to do/see here and why it's recommended",
+                "estimatedDuration": "2 hours",
+                "estimatedCost": 0,
+                "coordinates": { "lat": 37.7949, "lng": -122.3994 }
+            },
+            {
+                "id": "m2",
+                "name": "Alternative Morning Activity",
+                "type": "attraction|museum|etc",
+                "description": "What to do/see here",
+                "estimatedDuration": "2 hours",
+                "estimatedCost": 15,
+                "coordinates": { "lat": 37.7959, "lng": -122.3984 }
+            }
+        ],
+        "afternoonActivities": [
+            {
+                "id": "a1",
+                "name": "Afternoon Activity",
+                "type": "attraction|shopping|etc",
+                "description": "What to do/see here",
+                "estimatedDuration": "2.5 hours",
+                "estimatedCost": 20,
+                "coordinates": { "lat": 37.7879, "lng": -122.4064 }
+            }
+        ],
+        "eveningActivities": [
+            {
+                "id": "e1",
+                "name": "Evening Activity",
+                "type": "nightlife|show|walk|etc",
+                "description": "What to experience",
+                "estimatedDuration": "1.5 hours",
+                "estimatedCost": 30,
+                "coordinates": { "lat": 37.7899, "lng": -122.4044 }
+            }
+        ]
+    }
+}
+
+RULES:
+- Provide 2-3 OPTIONS for each activity slot (morning, afternoon, evening)
+- Do NOT include any meal suggestions (breakfast, lunch, dinner) - those will be added later
+- Use REAL, specific place names that exist in the destination
+- IMPORTANT: Include accurate "coordinates" (lat/lng) for EVERY option - use the actual GPS coordinates of the real place
+- Each option should have a unique id (e.g., "m1", "m2" for morning, "a1" for afternoon, "e1" for evening)
+- Options should offer variety (different activity types, different price points)
+- Evening activities are optional - can provide 0-2 options based on activity level
+- Match options to user's interests
+- Include a mix of popular spots and hidden gems
+- Return ONLY valid JSON, no additional text`,
+
+    /**
      * SUGGEST_DAY: Generate options for user to choose from
      */
     SUGGEST_DAY: `You are an expert travel planner suggesting options for a day's activities and meals.
@@ -679,6 +750,34 @@ Generate a day-by-day skeleton with themes and highlights for each day.`
 }
 
 /**
+ * Build messages for SUGGEST_ACTIVITIES (activities only, no meals)
+ */
+function buildSuggestActivitiesMessages({ tripInfo, skeletonDay, userMessage }) {
+    const messages = [{ role: "system", content: SYSTEM_PROMPTS.SUGGEST_ACTIVITIES }];
+
+    messages.push({
+        role: "user",
+        content: `Suggest activity options for Day ${skeletonDay.dayNumber} of the trip to ${tripInfo.destination}:
+
+Day Theme: ${skeletonDay.theme}
+Day Highlights: ${skeletonDay.highlights.join(', ')}
+Date: ${skeletonDay.date}
+
+Trip Context:
+- Interests: ${tripInfo.interests.join(', ') || 'General tourism'}
+- Activity Level: ${tripInfo.activityLevel}
+- Travelers: ${tripInfo.travelers || 1}
+${tripInfo.budget ? `- Budget: ${tripInfo.budget}` : ''}
+
+${userMessage ? `User preferences: ${userMessage}` : ''}
+
+Provide 2-3 activity options for each time slot (morning, afternoon, evening). Do NOT include meal suggestions - those will be added separately based on activity locations.`
+    });
+
+    return messages;
+}
+
+/**
  * Build messages for SUGGEST_DAY
  */
 function buildSuggestDayMessages({ tripInfo, skeletonDay, userMessage }) {
@@ -864,6 +963,7 @@ module.exports = {
     // New workflow message builders
     buildInfoGatheringMessages,
     buildSkeletonMessages,
+    buildSuggestActivitiesMessages,
     buildSuggestDayMessages,
     buildExpandDayFromSelectionsMessages,
     buildExpandDayMessages,

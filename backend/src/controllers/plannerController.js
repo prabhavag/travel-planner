@@ -4,6 +4,7 @@ const LLMClient = require('../services/llmClient');
 const { sessionStore, WORKFLOW_STATES } = require('../services/sessionStore');
 const { getSessionWelcomeMessage } = require('../services/prompts');
 const GeocodingService = require('../services/geocodingService');
+const PlacesClient = require('../services/placesClient');
 
 const planner = new TravelPlanner();
 const llmClient = new LLMClient();
@@ -818,6 +819,313 @@ exports.finalize = async (req, res) => {
     } catch (error) {
         console.error("Error in finalize:", error);
         res.status(500).json({ success: false, message: "Failed to finalize itinerary", error: error.message });
+    }
+};
+
+// ==================== TWO-STEP EXPAND DAY FLOW ====================
+
+/**
+ * Geocode activity suggestions (no meals)
+ */
+async function geocodeActivitySuggestions(suggestions, destination) {
+    if (!geocodingService || !suggestions) return suggestions;
+
+    const geocodeOption = async (option) => {
+        if (option.coordinates) return option;
+        try {
+            const query = `${option.name}, ${destination}`;
+            const coords = await geocodingService.geocode(query);
+            if (coords) {
+                return { ...option, coordinates: coords };
+            }
+        } catch (error) {
+            console.warn(`Failed to geocode ${option.name}:`, error.message);
+        }
+        return option;
+    };
+
+    // Geocode all activity options in parallel
+    const [morning, afternoon, evening] = await Promise.all([
+        Promise.all((suggestions.morningActivities || []).map(geocodeOption)),
+        Promise.all((suggestions.afternoonActivities || []).map(geocodeOption)),
+        Promise.all((suggestions.eveningActivities || []).map(geocodeOption))
+    ]);
+
+    return {
+        ...suggestions,
+        morningActivities: morning,
+        afternoonActivities: afternoon,
+        eveningActivities: evening
+    };
+}
+
+/**
+ * Convert Google Places price_level to price range string
+ */
+function priceLevelToRange(priceLevel) {
+    switch (priceLevel) {
+        case 0: return 'Free';
+        case 1: return '$';
+        case 2: return '$$';
+        case 3: return '$$$';
+        case 4: return '$$$$';
+        default: return '$$'; // Default to moderate
+    }
+}
+
+/**
+ * Infer cuisine type from Google Places types array
+ */
+function inferCuisineFromTypes(types) {
+    if (!types || types.length === 0) return null;
+
+    const cuisineTypes = [
+        'italian_restaurant', 'chinese_restaurant', 'japanese_restaurant',
+        'mexican_restaurant', 'indian_restaurant', 'thai_restaurant',
+        'french_restaurant', 'greek_restaurant', 'korean_restaurant',
+        'vietnamese_restaurant', 'american_restaurant', 'mediterranean_restaurant',
+        'middle_eastern_restaurant', 'seafood_restaurant', 'steakhouse',
+        'pizza_restaurant', 'sushi_restaurant', 'cafe', 'bakery',
+        'breakfast_restaurant', 'brunch_restaurant'
+    ];
+
+    for (const type of types) {
+        if (cuisineTypes.includes(type)) {
+            // Convert type to readable format
+            return type.replace('_restaurant', '').replace(/_/g, ' ')
+                .split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        }
+    }
+
+    // Fallback based on common types
+    if (types.includes('restaurant')) return 'Restaurant';
+    if (types.includes('cafe')) return 'Café';
+    if (types.includes('bakery')) return 'Bakery';
+    return null;
+}
+
+/**
+ * Suggest activities only (no meals) - Step 1 of two-step flow
+ */
+exports.suggestActivities = async (req, res) => {
+    try {
+        const { sessionId, dayNumber, userMessage } = req.body;
+
+        if (!sessionId) {
+            return res.status(400).json({ success: false, message: "Missing sessionId" });
+        }
+
+        const session = sessionStore.get(sessionId);
+        if (!session) {
+            return res.status(404).json({ success: false, message: "Session not found or expired" });
+        }
+
+        if (session.workflowState !== WORKFLOW_STATES.SKELETON &&
+            session.workflowState !== WORKFLOW_STATES.EXPAND_DAY) {
+            return res.status(400).json({
+                success: false,
+                message: "Can only suggest activities from SKELETON or EXPAND_DAY state"
+            });
+        }
+
+        const targetDay = dayNumber || session.currentExpandDay || 1;
+        const skeletonDay = session.skeleton?.days?.find(d => d.dayNumber === targetDay);
+
+        if (!skeletonDay) {
+            return res.status(400).json({
+                success: false,
+                message: `Day ${targetDay} not found in skeleton`
+            });
+        }
+
+        const result = await llmClient.suggestActivities({
+            tripInfo: session.tripInfo,
+            skeletonDay,
+            userMessage: userMessage || ''
+        });
+
+        if (!result.success) {
+            return res.status(500).json(result);
+        }
+
+        // Geocode activity suggestions
+        let suggestions = result.suggestions;
+        try {
+            suggestions = await geocodeActivitySuggestions(suggestions, session.tripInfo.destination);
+        } catch (geocodeError) {
+            console.warn('Geocoding activity suggestions failed:', geocodeError.message);
+        }
+
+        // Store activity suggestions in session
+        sessionStore.update(sessionId, {
+            workflowState: WORKFLOW_STATES.EXPAND_DAY,
+            currentExpandDay: targetDay,
+            currentActivitySuggestions: {
+                dayNumber: targetDay,
+                suggestions: suggestions
+            }
+        });
+
+        sessionStore.addToConversation(sessionId, 'assistant', result.message);
+
+        res.json({
+            success: true,
+            sessionId,
+            workflowState: WORKFLOW_STATES.EXPAND_DAY,
+            message: result.message,
+            suggestions: suggestions,
+            dayNumber: targetDay
+        });
+
+    } catch (error) {
+        console.error("Error in suggestActivities:", error);
+        res.status(500).json({ success: false, message: "Failed to suggest activities", error: error.message });
+    }
+};
+
+/**
+ * Suggest meals nearby selected activities - Step 2 of two-step flow
+ */
+exports.suggestMealsNearby = async (req, res) => {
+    try {
+        const { sessionId, dayNumber, selectedActivities } = req.body;
+
+        if (!sessionId || !selectedActivities) {
+            return res.status(400).json({ success: false, message: "Missing sessionId or selectedActivities" });
+        }
+
+        const session = sessionStore.get(sessionId);
+        if (!session) {
+            return res.status(404).json({ success: false, message: "Session not found or expired" });
+        }
+
+        const targetDay = dayNumber || session.currentExpandDay || 1;
+
+        // Get stored activity suggestions
+        const storedSuggestions = session.currentActivitySuggestions;
+        if (!storedSuggestions || storedSuggestions.dayNumber !== targetDay) {
+            return res.status(400).json({
+                success: false,
+                message: "No activity suggestions found. Call suggest-activities first."
+            });
+        }
+
+        // Find reference coordinates for each meal based on selected activities
+        const activitySuggestions = storedSuggestions.suggestions;
+
+        // Helper to get selected activities with coordinates
+        const getSelectedWithCoords = (options, selectedIds) => {
+            if (!options || !selectedIds || selectedIds.length === 0) return [];
+            return options.filter(opt => selectedIds.includes(opt.id) && opt.coordinates);
+        };
+
+        const selectedMorning = getSelectedWithCoords(activitySuggestions.morningActivities, selectedActivities.morningActivities);
+        const selectedAfternoon = getSelectedWithCoords(activitySuggestions.afternoonActivities, selectedActivities.afternoonActivities);
+        const selectedEvening = getSelectedWithCoords(activitySuggestions.eveningActivities, selectedActivities.eveningActivities);
+
+        // Determine reference coordinates for each meal
+        // Breakfast: near first morning activity
+        // Lunch: near last morning or first afternoon activity
+        // Dinner: near last afternoon or first evening activity
+        const breakfastRef = selectedMorning[0]?.coordinates || null;
+        const lunchRef = selectedAfternoon[0]?.coordinates ||
+                         selectedMorning[selectedMorning.length - 1]?.coordinates || null;
+        const dinnerRef = selectedEvening[0]?.coordinates ||
+                          selectedAfternoon[selectedAfternoon.length - 1]?.coordinates || null;
+
+        // Initialize PlacesClient
+        let placesClient;
+        try {
+            placesClient = new PlacesClient();
+        } catch (error) {
+            console.error("PlacesClient initialization failed:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Places API not available"
+            });
+        }
+
+        const destination = session.tripInfo.destination;
+        const radius = 1500; // 1.5km radius
+
+        // Search for nearby restaurants for each meal
+        const searchMeals = async (coords, mealType) => {
+            if (!coords) {
+                // Fallback: text search in destination
+                const results = await placesClient.searchPlaces(
+                    `${mealType} restaurant ${destination}`,
+                    null,
+                    null,
+                    'restaurant'
+                );
+                return results.slice(0, 3).map((place, idx) => ({
+                    id: `${mealType[0]}${idx + 1}`,
+                    name: place.name,
+                    cuisine: inferCuisineFromTypes(place.types),
+                    description: place.vicinity || '',
+                    rating: place.rating,
+                    priceRange: priceLevelToRange(place.price_level),
+                    coordinates: place.location,
+                    place_id: place.place_id
+                }));
+            }
+
+            const results = await placesClient.searchPlaces(
+                `${mealType} restaurant`,
+                coords,
+                radius,
+                'restaurant'
+            );
+
+            return results.slice(0, 3).map((place, idx) => ({
+                id: `${mealType[0]}${idx + 1}`,
+                name: place.name,
+                cuisine: inferCuisineFromTypes(place.types),
+                description: place.vicinity || '',
+                rating: place.rating,
+                priceRange: priceLevelToRange(place.price_level),
+                coordinates: place.location,
+                place_id: place.place_id
+            }));
+        };
+
+        // Search for all meals in parallel
+        const [breakfast, lunch, dinner] = await Promise.all([
+            searchMeals(breakfastRef, 'breakfast'),
+            searchMeals(lunchRef, 'lunch'),
+            searchMeals(dinnerRef, 'dinner')
+        ]);
+
+        const mealSuggestions = {
+            dayNumber: targetDay,
+            breakfast,
+            lunch,
+            dinner
+        };
+
+        // Store meal suggestions in session
+        sessionStore.update(sessionId, {
+            currentMealSuggestions: {
+                dayNumber: targetDay,
+                suggestions: mealSuggestions
+            }
+        });
+
+        const message = `I found some great dining options near your selected activities! Here are restaurant suggestions for breakfast, lunch, and dinner. Select your preferences for each meal.`;
+        sessionStore.addToConversation(sessionId, 'assistant', message);
+
+        res.json({
+            success: true,
+            sessionId,
+            workflowState: WORKFLOW_STATES.EXPAND_DAY,
+            message,
+            mealSuggestions,
+            dayNumber: targetDay
+        });
+
+    } catch (error) {
+        console.error("Error in suggestMealsNearby:", error);
+        res.status(500).json({ success: false, message: "Failed to suggest meals", error: error.message });
     }
 };
 

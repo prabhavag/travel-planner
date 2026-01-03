@@ -8,6 +8,7 @@ const {
     // New workflow message builders
     buildInfoGatheringMessages,
     buildSkeletonMessages,
+    buildSuggestActivitiesMessages,
     buildSuggestDayMessages,
     buildExpandDayFromSelectionsMessages,
     buildExpandDayMessages,
@@ -259,6 +260,42 @@ class LLMClient {
                 success: false,
                 message: "Sorry, I couldn't generate the trip overview. Please try again.",
                 skeleton: null
+            };
+        }
+    }
+
+    /**
+     * SUGGEST_ACTIVITIES: Generate activity options only (no meals)
+     */
+    async suggestActivities({ tripInfo, skeletonDay, userMessage }) {
+        const messages = buildSuggestActivitiesMessages({
+            tripInfo,
+            skeletonDay,
+            userMessage
+        });
+
+        try {
+            const completion = await this.openai.chat.completions.create({
+                messages,
+                model: this.model,
+                temperature: this.temperature,
+                response_format: { type: "json_object" }
+            });
+
+            const response = this._parseJsonResponse(completion);
+
+            return {
+                success: true,
+                message: response.message,
+                suggestions: response.suggestions
+            };
+
+        } catch (error) {
+            console.error("Error suggesting activities:", error);
+            return {
+                success: false,
+                message: "Sorry, I couldn't generate activity suggestions. Please try again.",
+                suggestions: null
             };
         }
     }

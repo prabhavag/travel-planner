@@ -35,6 +35,10 @@ app.post('/api/start-review', plannerController.startReview);
 app.post('/api/finalize', plannerController.finalize);
 app.get('/api/session/:sessionId', plannerController.getSession);
 
+// Two-step expand day flow (activities first, then meals nearby)
+app.post('/api/suggest-activities', plannerController.suggestActivities);
+app.post('/api/suggest-meals-nearby', plannerController.suggestMealsNearby);
+
 // Start server
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

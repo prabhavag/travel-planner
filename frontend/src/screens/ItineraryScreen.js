@@ -10,7 +10,9 @@ import {
     expandDay,
     modifyDay,
     startReview,
-    finalize
+    finalize,
+    suggestActivities,
+    suggestMealsNearby
 } from '../services/api';
 import MapComponent from '../components/MapComponent';
 import DetailedItineraryView from '../components/DetailedItineraryView';
@@ -45,7 +47,7 @@ const ItineraryScreen = ({ route, navigation }) => {
     const [canProceed, setCanProceed] = useState(false);
     const [canReview, setCanReview] = useState(false);
 
-    // Suggestions state (for day planning)
+    // Suggestions state (for day planning) - Legacy combined flow
     const [suggestions, setSuggestions] = useState(null);
     const [selections, setSelections] = useState({
         breakfast: null,
@@ -54,6 +56,21 @@ const ItineraryScreen = ({ route, navigation }) => {
         afternoonActivities: [],
         dinner: null,
         eveningActivities: []
+    });
+
+    // Two-step expand day flow state
+    const [expandDayStep, setExpandDayStep] = useState('activities'); // 'activities' | 'meals'
+    const [activitySuggestions, setActivitySuggestions] = useState(null);
+    const [mealSuggestions, setMealSuggestions] = useState(null);
+    const [activitySelections, setActivitySelections] = useState({
+        morningActivities: [],
+        afternoonActivities: [],
+        eveningActivities: []
+    });
+    const [mealSelections, setMealSelections] = useState({
+        breakfast: null,
+        lunch: null,
+        dinner: null
     });
 
     const chatScrollRef = useRef(null);
@@ -191,12 +208,27 @@ const ItineraryScreen = ({ route, navigation }) => {
         }
     };
 
-    // Get suggestions for a day (first step of expanding)
+    // Get suggestions for a day - now uses two-step flow (activities first)
     const handleSuggestDay = async (dayNumber) => {
         if (!sessionId) return;
         setLoading(true);
         setCurrentExpandDay(dayNumber);
-        // Reset selections for new day
+
+        // Reset all selections for new day
+        setActivitySelections({
+            morningActivities: [],
+            afternoonActivities: [],
+            eveningActivities: []
+        });
+        setMealSelections({
+            breakfast: null,
+            lunch: null,
+            dinner: null
+        });
+        setMealSuggestions(null);
+        setExpandDayStep('activities');
+
+        // Also reset legacy state
         setSelections({
             breakfast: null,
             morningActivities: [],
@@ -205,17 +237,93 @@ const ItineraryScreen = ({ route, navigation }) => {
             dinner: null,
             eveningActivities: []
         });
+        setSuggestions(null);
 
         try {
-            const response = await suggestDay(sessionId, dayNumber);
+            // Use new two-step flow: activities first
+            const response = await suggestActivities(sessionId, dayNumber);
             if (response.success) {
                 setWorkflowState(WORKFLOW_STATES.EXPAND_DAY);
-                setSuggestions(response.suggestions);
+                setActivitySuggestions(response.suggestions);
                 setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
             }
         } catch (error) {
-            console.error('Suggest day error:', error);
-            Alert.alert('Error', 'Failed to get suggestions. Please try again.');
+            console.error('Suggest activities error:', error);
+            Alert.alert('Error', 'Failed to get activity suggestions. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Toggle selection for an activity in the two-step flow
+    const toggleActivitySelectionTwoStep = (slotType, optionId) => {
+        setActivitySelections(prev => {
+            const current = prev[slotType] || [];
+            const isSelected = current.includes(optionId);
+            return {
+                ...prev,
+                [slotType]: isSelected
+                    ? current.filter(id => id !== optionId)
+                    : [...current, optionId]
+            };
+        });
+    };
+
+    // Toggle selection for a meal in the two-step flow
+    const toggleMealSelectionTwoStep = (mealType, optionId) => {
+        setMealSelections(prev => ({
+            ...prev,
+            [mealType]: prev[mealType] === optionId ? null : optionId
+        }));
+    };
+
+    // Confirm activity selections and get meal suggestions (Step 1 -> Step 2)
+    const handleConfirmActivities = async () => {
+        if (!sessionId || !currentExpandDay) return;
+        setLoading(true);
+
+        try {
+            const response = await suggestMealsNearby(sessionId, currentExpandDay, activitySelections);
+            if (response.success) {
+                setMealSuggestions(response.mealSuggestions);
+                setExpandDayStep('meals');
+                setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+            }
+        } catch (error) {
+            console.error('Suggest meals error:', error);
+            Alert.alert('Error', 'Failed to get meal suggestions. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Confirm both activity and meal selections to create the final day
+    const handleConfirmDayTwoStep = async () => {
+        if (!sessionId || !currentExpandDay) return;
+        setLoading(true);
+
+        try {
+            // Combine activity and meal selections
+            const combinedSelections = {
+                ...activitySelections,
+                ...mealSelections
+            };
+
+            const response = await confirmDaySelections(sessionId, currentExpandDay, combinedSelections);
+            if (response.success) {
+                setExpandedDays(response.allExpandedDays || { ...expandedDays, [currentExpandDay]: response.expandedDay });
+                setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+                setCurrentExpandDay(response.nextDayToExpand || currentExpandDay);
+                setCanReview(response.canReview || false);
+
+                // Clear two-step flow state
+                setActivitySuggestions(null);
+                setMealSuggestions(null);
+                setExpandDayStep('activities');
+            }
+        } catch (error) {
+            console.error('Confirm day error:', error);
+            Alert.alert('Error', 'Failed to confirm day. Please try again.');
         } finally {
             setLoading(false);
         }
@@ -344,7 +452,7 @@ const ItineraryScreen = ({ route, navigation }) => {
 
     // Build preview from selected suggestions (for real-time map updates)
     const getSelectedSuggestionsPreview = () => {
-        if (!suggestions || !currentExpandDay) return null;
+        if (!currentExpandDay) return null;
 
         const getSelectedOption = (options, selectedId) => {
             if (!options || !selectedId) return null;
@@ -362,6 +470,48 @@ const ItineraryScreen = ({ route, navigation }) => {
             if (!coords) return null;
             return { name: item.name, type, coordinates: coords };
         };
+
+        // Handle two-step flow (activitySuggestions + mealSuggestions)
+        if (activitySuggestions) {
+            const selectedMorning = getSelectedOptions(activitySuggestions.morningActivities, activitySelections.morningActivities);
+            const selectedAfternoon = getSelectedOptions(activitySuggestions.afternoonActivities, activitySelections.afternoonActivities);
+            const selectedEvening = getSelectedOptions(activitySuggestions.eveningActivities, activitySelections.eveningActivities);
+
+            // Also include meal selections if in meals step
+            const selectedBreakfast = mealSuggestions ? getSelectedOption(mealSuggestions.breakfast, mealSelections.breakfast) : null;
+            const selectedLunch = mealSuggestions ? getSelectedOption(mealSuggestions.lunch, mealSelections.lunch) : null;
+            const selectedDinner = mealSuggestions ? getSelectedOption(mealSuggestions.dinner, mealSelections.dinner) : null;
+
+            const morning = [
+                createMapEntry(selectedBreakfast, 'restaurant'),
+                ...selectedMorning.map(a => createMapEntry(a, a.type || 'attraction'))
+            ].filter(Boolean);
+
+            const afternoon = [
+                createMapEntry(selectedLunch, 'restaurant'),
+                ...selectedAfternoon.map(a => createMapEntry(a, a.type || 'attraction'))
+            ].filter(Boolean);
+
+            const evening = [
+                createMapEntry(selectedDinner, 'restaurant'),
+                ...selectedEvening.map(a => createMapEntry(a, a.type || 'attraction'))
+            ].filter(Boolean);
+
+            if (morning.length === 0 && afternoon.length === 0 && evening.length === 0) {
+                return null;
+            }
+
+            return {
+                day_number: currentExpandDay,
+                date: activitySuggestions.date,
+                morning,
+                afternoon,
+                evening
+            };
+        }
+
+        // Handle legacy flow (combined suggestions)
+        if (!suggestions) return null;
 
         // Build activities from selections
         const selectedBreakfast = getSelectedOption(suggestions.breakfast, selections.breakfast);
@@ -532,7 +682,43 @@ const ItineraryScreen = ({ route, navigation }) => {
                 const totalDays = skeleton?.days?.length || 0;
                 const expandedCount = Object.keys(expandedDays).length;
 
-                // If we have suggestions, show confirm button
+                // Two-step flow: Activity suggestions active
+                if (activitySuggestions) {
+                    if (expandDayStep === 'activities') {
+                        // Step 1: Confirm activities to get meal suggestions
+                        const hasActivitySelections =
+                            activitySelections.morningActivities.length > 0 ||
+                            activitySelections.afternoonActivities.length > 0 ||
+                            activitySelections.eveningActivities.length > 0;
+
+                        return (
+                            <Button
+                                mode="contained"
+                                onPress={handleConfirmActivities}
+                                loading={loading}
+                                disabled={loading || !hasActivitySelections}
+                                style={[styles.actionButton, styles.confirmButton]}
+                            >
+                                Confirm Activities & Find Nearby Restaurants
+                            </Button>
+                        );
+                    } else {
+                        // Step 2: Confirm meals to create the final day
+                        return (
+                            <Button
+                                mode="contained"
+                                onPress={handleConfirmDayTwoStep}
+                                loading={loading}
+                                disabled={loading}
+                                style={[styles.actionButton, styles.confirmButton]}
+                            >
+                                Confirm Day {currentExpandDay}
+                            </Button>
+                        );
+                    }
+                }
+
+                // Legacy flow: Combined suggestions active
                 if (suggestions) {
                     return (
                         <Button
@@ -633,8 +819,14 @@ const ItineraryScreen = ({ route, navigation }) => {
         );
     };
 
-    // Render suggestions section
+    // Render suggestions section - Two-step flow (activities first, then meals)
     const renderSuggestions = () => {
+        // Handle two-step flow
+        if (activitySuggestions) {
+            return renderTwoStepSuggestions();
+        }
+
+        // Legacy flow fallback
         if (!suggestions) return null;
 
         const sections = [
@@ -682,6 +874,112 @@ const ItineraryScreen = ({ route, navigation }) => {
                         </View>
                     );
                 })}
+            </View>
+        );
+    };
+
+    // Render two-step flow suggestions (activities first, then meals)
+    const renderTwoStepSuggestions = () => {
+        const activitySections = [
+            { key: 'morningActivities', label: '☀️ Morning Activities', options: activitySuggestions?.morningActivities || [] },
+            { key: 'afternoonActivities', label: '🌤️ Afternoon Activities', options: activitySuggestions?.afternoonActivities || [] },
+            { key: 'eveningActivities', label: '✨ Evening Activities', options: activitySuggestions?.eveningActivities || [] }
+        ];
+
+        const mealSections = mealSuggestions ? [
+            { key: 'breakfast', label: '🌅 Breakfast Options', options: mealSuggestions.breakfast || [] },
+            { key: 'lunch', label: '🍽️ Lunch Options', options: mealSuggestions.lunch || [] },
+            { key: 'dinner', label: '🌙 Dinner Options', options: mealSuggestions.dinner || [] }
+        ] : [];
+
+        return (
+            <View style={styles.suggestionsContainer}>
+                <Text style={styles.suggestionsTitle}>
+                    Day {activitySuggestions.dayNumber}: {activitySuggestions.theme}
+                </Text>
+
+                {/* Step indicator */}
+                <View style={styles.stepIndicator}>
+                    <View style={[styles.stepBadge, expandDayStep === 'activities' && styles.stepBadgeActive]}>
+                        <Text style={[styles.stepText, expandDayStep === 'activities' && styles.stepTextActive]}>
+                            1. Activities
+                        </Text>
+                    </View>
+                    <Text style={styles.stepArrow}>→</Text>
+                    <View style={[styles.stepBadge, expandDayStep === 'meals' && styles.stepBadgeActive]}>
+                        <Text style={[styles.stepText, expandDayStep === 'meals' && styles.stepTextActive]}>
+                            2. Meals
+                        </Text>
+                    </View>
+                </View>
+
+                {/* Activity sections */}
+                <Text style={styles.suggestionsSubtitle}>
+                    {expandDayStep === 'activities'
+                        ? 'Select your activities for each time slot:'
+                        : 'Your selected activities:'}
+                </Text>
+
+                {activitySections.map(section => {
+                    if (!section.options || section.options.length === 0) return null;
+
+                    return (
+                        <View key={section.key} style={[
+                            styles.suggestionSection,
+                            expandDayStep === 'meals' && styles.confirmedSection
+                        ]}>
+                            <Text style={styles.sectionLabel}>{section.label}</Text>
+                            <View style={styles.optionsRow}>
+                                {section.options.map(option => {
+                                    const isSelected = (activitySelections[section.key] || []).includes(option.id);
+
+                                    // In meals step, only show selected activities
+                                    if (expandDayStep === 'meals' && !isSelected) return null;
+
+                                    return renderOptionCard(
+                                        option,
+                                        isSelected,
+                                        expandDayStep === 'activities'
+                                            ? () => toggleActivitySelectionTwoStep(section.key, option.id)
+                                            : () => {}, // No action in meals step
+                                        'activity'
+                                    );
+                                })}
+                            </View>
+                        </View>
+                    );
+                })}
+
+                {/* Meal sections (only visible in step 2) */}
+                {expandDayStep === 'meals' && mealSections.length > 0 && (
+                    <>
+                        <Text style={[styles.suggestionsSubtitle, { marginTop: 20 }]}>
+                            Select restaurants near your activities:
+                        </Text>
+
+                        {mealSections.map(section => {
+                            if (!section.options || section.options.length === 0) return null;
+
+                            return (
+                                <View key={section.key} style={styles.suggestionSection}>
+                                    <Text style={styles.sectionLabel}>{section.label}</Text>
+                                    <View style={styles.optionsRow}>
+                                        {section.options.map(option => {
+                                            const isSelected = mealSelections[section.key] === option.id;
+
+                                            return renderOptionCard(
+                                                option,
+                                                isSelected,
+                                                () => toggleMealSelectionTwoStep(section.key, option.id),
+                                                'meal'
+                                            );
+                                        })}
+                                    </View>
+                                </View>
+                            );
+                        })}
+                    </>
+                )}
             </View>
         );
     };
@@ -1022,6 +1320,41 @@ const styles = StyleSheet.create({
     },
     selectButton: {
         marginTop: 4,
+    },
+    // Two-step flow styles
+    stepIndicator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 15,
+        gap: 10,
+    },
+    stepBadge: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 16,
+        backgroundColor: '#e0e0e0',
+    },
+    stepBadgeActive: {
+        backgroundColor: '#1f77b4',
+    },
+    stepText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#666',
+    },
+    stepTextActive: {
+        color: '#fff',
+    },
+    stepArrow: {
+        fontSize: 16,
+        color: '#999',
+    },
+    confirmedSection: {
+        opacity: 0.7,
+        backgroundColor: '#f5f5f5',
+        borderRadius: 8,
+        padding: 8,
     },
 });
 
