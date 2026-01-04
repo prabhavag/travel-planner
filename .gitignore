@@ -1,15 +1,11 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-*.egg-info/
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Build
 dist/
 build/
 
@@ -29,10 +25,17 @@ build/
 .DS_Store
 Thumbs.db
 
-# Streamlit
-.streamlit/secrets.toml
-# Keep .streamlit/secrets.toml.example (example file)
-
 # Logs
 *.log
+
+# npm/yarn cache
+.npm-cache/
+.yarn/
+*.tsbuildinfo
+
+# Python (if any)
+__pycache__/
+*.py[cod]
+venv/
+*.egg-info/
 

@@ -71,9 +71,10 @@ Execute refactoring with these principles:
 
 **For this travel-planner project:**
 - Backend services in `/backend/src/services/` should have single responsibilities
-- Frontend components should separate logic from presentation
-- Shared validation logic should use Zod schemas from `/backend/src/models/`
-- API client functions in `/frontend/src/services/api.js` should follow consistent patterns
+- Next.js components in `/components/` should separate logic from presentation
+- Shared validation logic should use Zod schemas from `/lib/models/`
+- API client functions in `/lib/api-client.ts` should follow consistent patterns
+- Next.js API routes in `/app/api/` should proxy to backend services in `/lib/services/`
 - Consider extracting shared constants for workflow states used across frontend and backend
 
 ## Output Standards
