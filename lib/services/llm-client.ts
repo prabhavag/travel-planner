@@ -1,26 +1,13 @@
 import OpenAI from "openai";
 import {
-  TravelPlanSchema,
   type TripInfo,
-  type SkeletonDay,
   type ExpandedDay,
-  type DaySuggestions,
   type SuggestedActivity,
   type DayGroup,
 } from "@/lib/models/travel-plan";
 import {
-  buildTravelPlanPrompt,
-  buildModifyItineraryMessages,
-  getWelcomeResponse,
-  SYSTEM_PROMPTS,
   buildInfoGatheringMessages,
-  buildSkeletonMessages,
-  buildSuggestActivitiesMessages,
-  buildExpandDayFromSelectionsMessages,
-  buildExpandDayMessages,
-  buildModifyDayMessages,
   buildReviewMessages,
-  buildFinalizeMessages,
   buildSuggestTopActivitiesMessages,
   buildGroupActivitiesMessages,
   buildRegenerateDayThemeMessages,
@@ -56,27 +43,6 @@ class LLMClient {
     this.temperature = options.temperature ?? envTemp ?? DEFAULT_TEMPERATURE;
   }
 
-  private _parseAndValidateResponse(completion: OpenAI.Chat.Completions.ChatCompletion) {
-    const content = completion.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error("Empty response from LLM");
-    }
-
-    let parsed;
-    try {
-      parsed = JSON.parse(content);
-    } catch (parseError) {
-      throw new Error(`Failed to parse LLM response as JSON: ${(parseError as Error).message}`);
-    }
-
-    const validation = TravelPlanSchema.safeParse(parsed);
-    if (!validation.success) {
-      console.warn("LLM response validation warnings:", validation.error.issues);
-    }
-
-    return validation.success ? validation.data : parsed;
-  }
-
   private _parseJsonResponse(completion: OpenAI.Chat.Completions.ChatCompletion) {
     const content = completion.choices?.[0]?.message?.content;
     if (!content) {
@@ -87,96 +53,6 @@ class LLMClient {
       return JSON.parse(content);
     } catch (parseError) {
       throw new Error(`Failed to parse LLM response as JSON: ${(parseError as Error).message}`);
-    }
-  }
-
-  async generateTravelPlan({
-    destination,
-    start_date,
-    end_date,
-    duration_days,
-    interest_categories,
-    activity_level,
-  }: {
-    destination?: string | null;
-    start_date?: string | null;
-    end_date?: string | null;
-    duration_days?: number | null;
-    interest_categories?: string[];
-    activity_level?: string;
-  }) {
-    if (!destination && !start_date && !end_date) {
-      return getWelcomeResponse();
-    }
-
-    const prompt = buildTravelPlanPrompt({
-      destination,
-      start_date,
-      end_date,
-      duration_days,
-      interest_categories,
-      activity_level,
-    });
-
-    try {
-      const completion = await this.openai.chat.completions.create({
-        messages: [
-          { role: "system", content: SYSTEM_PROMPTS.TRAVEL_PLANNER },
-          { role: "user", content: prompt },
-        ],
-        model: this.model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-      });
-
-      return this._parseAndValidateResponse(completion);
-    } catch (error) {
-      console.error("Error generating travel plan:", error);
-      throw error;
-    }
-  }
-
-  async modifyItinerary(
-    currentPlan: unknown,
-    userMessage: string,
-    conversationHistory: ConversationMessage[],
-    finalize: boolean = false
-  ) {
-    const messages = buildModifyItineraryMessages({
-      currentPlan,
-      userMessage,
-      conversationHistory,
-      finalize,
-    });
-
-    try {
-      const completion = await this.openai.chat.completions.create({
-        messages: messages,
-        model: this.model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-      });
-
-      let modifiedPlan = this._parseAndValidateResponse(completion);
-
-      if (modifiedPlan.transportation && !Array.isArray(modifiedPlan.transportation)) {
-        modifiedPlan.transportation = [modifiedPlan.transportation];
-      }
-
-      const mergedPlan = { ...(currentPlan as Record<string, unknown>), ...modifiedPlan };
-
-      return {
-        success: true,
-        plan: mergedPlan,
-        message: modifiedPlan.summary || "Itinerary updated!",
-      };
-    } catch (error) {
-      console.error("Error modifying itinerary:", error);
-      return {
-        success: false,
-        plan: currentPlan,
-        message: "Sorry, something went wrong while updating the itinerary. Please try again.",
-      };
     }
   }
 
@@ -243,206 +119,6 @@ class LLMClient {
     }
   }
 
-  async generateSkeleton({ tripInfo }: { tripInfo: TripInfo }) {
-    const messages = buildSkeletonMessages({ tripInfo });
-
-    try {
-      const completion = await this.openai.chat.completions.create({
-        messages,
-        model: this.model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-      });
-
-      const response = this._parseJsonResponse(completion);
-
-      return {
-        success: true,
-        message: response.message,
-        skeleton: response.skeleton,
-      };
-    } catch (error) {
-      console.error("Error generating skeleton:", error);
-      return {
-        success: false,
-        message: "Sorry, I couldn't generate the trip overview. Please try again.",
-        skeleton: null,
-      };
-    }
-  }
-
-  async suggestActivities({
-    tripInfo,
-    skeletonDay,
-    userMessage,
-  }: {
-    tripInfo: TripInfo;
-    skeletonDay: SkeletonDay;
-    userMessage?: string;
-  }) {
-    const messages = buildSuggestActivitiesMessages({
-      tripInfo,
-      skeletonDay,
-      userMessage,
-    });
-
-    try {
-      const completion = await this.openai.chat.completions.create({
-        messages,
-        model: this.model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-      });
-
-      const response = this._parseJsonResponse(completion);
-
-      return {
-        success: true,
-        message: response.message,
-        suggestions: response.suggestions,
-      };
-    } catch (error) {
-      console.error("Error suggesting activities:", error);
-      return {
-        success: false,
-        message: "Sorry, I couldn't generate activity suggestions. Please try again.",
-        suggestions: null,
-      };
-    }
-  }
-
-  async expandDayFromSelections({
-    tripInfo,
-    skeletonDay,
-    selections,
-    suggestions,
-  }: {
-    tripInfo: TripInfo;
-    skeletonDay: SkeletonDay;
-    selections: Record<string, unknown>;
-    suggestions: DaySuggestions;
-  }) {
-    const messages = buildExpandDayFromSelectionsMessages({
-      tripInfo,
-      skeletonDay,
-      selections,
-      suggestions,
-    });
-
-    try {
-      const completion = await this.openai.chat.completions.create({
-        messages,
-        model: this.model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-      });
-
-      const response = this._parseJsonResponse(completion);
-
-      return {
-        success: true,
-        message: response.message,
-        expandedDay: response.expandedDay,
-        suggestModifications: response.suggestModifications,
-      };
-    } catch (error) {
-      console.error("Error expanding day from selections:", error);
-      return {
-        success: false,
-        message: "Sorry, I couldn't create the day plan. Please try again.",
-        expandedDay: null,
-      };
-    }
-  }
-
-  async expandDay({
-    tripInfo,
-    skeletonDay,
-    userMessage,
-    conversationHistory,
-  }: {
-    tripInfo: TripInfo;
-    skeletonDay: SkeletonDay;
-    userMessage?: string;
-    conversationHistory?: ConversationMessage[];
-  }) {
-    const messages = buildExpandDayMessages({
-      tripInfo,
-      skeletonDay,
-      userMessage,
-      conversationHistory,
-    });
-
-    try {
-      const completion = await this.openai.chat.completions.create({
-        messages,
-        model: this.model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-      });
-
-      const response = this._parseJsonResponse(completion);
-
-      return {
-        success: true,
-        message: response.message,
-        expandedDay: response.expandedDay,
-        suggestModifications: response.suggestModifications,
-      };
-    } catch (error) {
-      console.error("Error expanding day:", error);
-      return {
-        success: false,
-        message: "Sorry, I couldn't expand this day. Please try again.",
-        expandedDay: null,
-      };
-    }
-  }
-
-  async modifyDay({
-    tripInfo,
-    currentDay,
-    userMessage,
-    conversationHistory,
-  }: {
-    tripInfo: TripInfo;
-    currentDay: ExpandedDay;
-    userMessage: string;
-    conversationHistory?: ConversationMessage[];
-  }) {
-    const messages = buildModifyDayMessages({
-      tripInfo,
-      currentDay,
-      userMessage,
-      conversationHistory,
-    });
-
-    try {
-      const completion = await this.openai.chat.completions.create({
-        messages,
-        model: this.model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-      });
-
-      const response = this._parseJsonResponse(completion);
-
-      return {
-        success: true,
-        message: response.message,
-        expandedDay: response.expandedDay,
-        suggestModifications: response.suggestModifications,
-      };
-    } catch (error) {
-      console.error("Error modifying day:", error);
-      return {
-        success: false,
-        message: "Sorry, I couldn't modify this day. Please try again.",
-        expandedDay: currentDay,
-      };
-    }
-  }
-
   async reviewPlan({
     tripInfo,
     expandedDays,
@@ -487,47 +163,6 @@ class LLMClient {
       };
     }
   }
-
-  async finalizePlan({
-    tripInfo,
-    expandedDays,
-  }: {
-    tripInfo: TripInfo;
-    expandedDays: Record<number, ExpandedDay>;
-  }) {
-    const messages = buildFinalizeMessages({
-      tripInfo,
-      expandedDays,
-    });
-
-    try {
-      const completion = await this.openai.chat.completions.create({
-        messages,
-        model: this.model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-      });
-
-      const response = this._parseJsonResponse(completion);
-
-      return {
-        success: true,
-        message: response.message,
-        finalPlan: response.finalPlan,
-      };
-    } catch (error) {
-      console.error("Error finalizing plan:", error);
-      return {
-        success: false,
-        message: "Sorry, I couldn't finalize the itinerary. Please try again.",
-        finalPlan: null,
-      };
-    }
-  }
-
-  // ============================================
-  // NEW FLOW: Activity-First Planning Methods
-  // ============================================
 
   async suggestTopActivities({ tripInfo }: { tripInfo: TripInfo }): Promise<{
     success: boolean;

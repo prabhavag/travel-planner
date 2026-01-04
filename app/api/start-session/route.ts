@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { sessionStore } from "@/lib/services/session-store";
-import { getSessionWelcomeMessage } from "@/lib/services/prompts";
+
+function getSessionWelcomeMessage(): string {
+  return "Hello! I'm your AI travel assistant. Let's plan your perfect trip together!\n\nTo get started, could you tell me:\n1. Where would you like to go?\n2. When are you planning to travel? (dates)\n\nFeel free to share any other preferences like interests, activity level, or budget!";
+}
 
 export async function POST() {
   try {
