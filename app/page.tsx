@@ -73,6 +73,7 @@ export default function PlannerPage() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [canProceed, setCanProceed] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "constraints">("chat");
+  const [hoveredActivityId, setHoveredActivityId] = useState<string | null>(null);
 
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -388,6 +389,7 @@ export default function PlannerPage() {
               selectedIds={selectedActivityIds}
               onSelectionChange={handleActivitySelectionChange}
               onConfirm={handleConfirmActivitySelection}
+              onHoverActivity={setHoveredActivityId}
               isLoading={loading}
             />
           </div>
@@ -516,6 +518,7 @@ export default function PlannerPage() {
                   : undefined
               }
               onActivityClick={handleMapActivityClick}
+              hoveredActivityId={hoveredActivityId}
             />
           </div>
 
@@ -543,8 +546,8 @@ export default function PlannerPage() {
             <button
               onClick={() => setActiveTab("chat")}
               className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "chat"
-                  ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
                 }`}
             >
               <MessageSquare className="w-4 h-4" />
@@ -553,8 +556,8 @@ export default function PlannerPage() {
             <button
               onClick={() => setActiveTab("constraints")}
               className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "constraints"
-                  ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
                 }`}
             >
               <ListChecks className="w-4 h-4" />

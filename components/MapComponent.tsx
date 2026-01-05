@@ -74,6 +74,7 @@ interface MapComponentProps {
   selectedActivityIds?: string[];
   groupedDays?: GroupedDay[];
   onActivityClick?: (activityId: string) => void;
+  hoveredActivityId?: string | null;
 }
 
 const libraries: ("places")[] = ["places"];
@@ -85,6 +86,7 @@ export default function MapComponent({
   selectedActivityIds,
   groupedDays,
   onActivityClick,
+  hoveredActivityId,
 }: MapComponentProps) {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -225,6 +227,7 @@ export default function MapComponent({
         destination={destination}
         isActivitySelectionMode={isActivitySelectionMode}
         onActivityClick={onActivityClick}
+        hoveredActivityId={hoveredActivityId}
       />
     </div>
   );
@@ -237,6 +240,7 @@ interface GoogleMapContentProps {
   destination?: string | null;
   isActivitySelectionMode?: boolean;
   onActivityClick?: (activityId: string) => void;
+  hoveredActivityId?: string | null;
 }
 
 function GoogleMapContent({
@@ -246,6 +250,7 @@ function GoogleMapContent({
   destination,
   isActivitySelectionMode,
   onActivityClick,
+  hoveredActivityId,
 }: GoogleMapContentProps) {
   const [selectedMarker, setSelectedMarker] = useState<Location | null>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
@@ -318,18 +323,21 @@ function GoogleMapContent({
 
   // Get marker icon based on day or selection state
   const getMarkerIcon = (loc: Location): google.maps.Symbol => {
-    // In activity selection mode, use selected/unselected colors
+    // In activity selection mode, use pin shapes
     if (isActivitySelectionMode) {
+      const isHovered = loc.activityId === hoveredActivityId;
       return {
-        path: window.google.maps.SymbolPath.CIRCLE,
+        path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
         fillColor: loc.isSelected ? SELECTED_COLOR : UNSELECTED_COLOR,
-        fillOpacity: loc.isSelected ? 1 : 0.6,
-        strokeColor: "#ffffff",
-        strokeWeight: 2,
-        scale: loc.isSelected ? 12 : 8,
+        fillOpacity: loc.isSelected || isHovered ? 1 : 0.6,
+        strokeColor: isHovered ? "#3B82F6" : "#ffffff",
+        strokeWeight: isHovered ? 2 : 1,
+        scale: isHovered ? 2 : (loc.isSelected ? 1.5 : 1.2),
+        anchor: new window.google.maps.Point(12, 21),
+        labelOrigin: new window.google.maps.Point(12, 8),
       };
     }
-    // Otherwise use day-based colors
+    // Otherwise use day-based circles
     return {
       path: window.google.maps.SymbolPath.CIRCLE,
       fillColor: getDayColor(loc.day),
@@ -384,8 +392,8 @@ function GoogleMapContent({
         fullscreenControl: true,
       }}
     >
-      {/* Draw polylines connecting locations for each day */}
-      {Object.entries(locationsByDay)
+      {/* Draw polylines connecting locations for each day - only if not in activity selection mode */}
+      {!isActivitySelectionMode && Object.entries(locationsByDay)
         .filter(([, dayLocations]) => dayLocations.length >= 2)
         .map(([day, dayLocations]) => (
           <Polyline
@@ -405,6 +413,16 @@ function GoogleMapContent({
           key={idx}
           position={{ lat: loc.lat, lng: loc.lng }}
           icon={getMarkerIcon(loc)}
+          label={
+            isActivitySelectionMode
+              ? {
+                text: (loc.actIndex + 1).toString(),
+                color: "white",
+                fontWeight: "bold",
+                fontSize: loc.activityId === hoveredActivityId ? "14px" : "11px",
+              }
+              : undefined
+          }
           onClick={() => {
             if (isActivitySelectionMode && onActivityClick && loc.activityId) {
               onActivityClick(loc.activityId);
