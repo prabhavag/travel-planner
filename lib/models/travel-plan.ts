@@ -21,6 +21,7 @@ export const TripInfoSchema = z.object({
   activityLevel: z.string().default("moderate"),
   travelers: z.number().default(1),
   budget: z.string().nullable(),
+  constraints: z.array(z.string()).default([]),
 });
 
 export type TripInfo = z.infer<typeof TripInfoSchema>;

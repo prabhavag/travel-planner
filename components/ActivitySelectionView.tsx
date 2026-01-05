@@ -12,6 +12,7 @@ interface ActivitySelectionViewProps {
   selectedIds: string[];
   onSelectionChange: (selectedIds: string[]) => void;
   onConfirm: () => void;
+  onHoverActivity?: (id: string | null) => void;
   isLoading?: boolean;
 }
 
@@ -20,6 +21,7 @@ export function ActivitySelectionView({
   selectedIds,
   onSelectionChange,
   onConfirm,
+  onHoverActivity,
   isLoading = false,
 }: ActivitySelectionViewProps) {
   const [localSelectedIds, setLocalSelectedIds] = useState<Set<string>>(new Set(selectedIds));
@@ -93,19 +95,23 @@ export function ActivitySelectionView({
 
       {/* Activity grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {activities.map((activity) => {
+        {activities.map((activity, index) => {
           const isSelected = localSelectedIds.has(activity.id);
           return (
             <Card
               key={activity.id}
-              className={`cursor-pointer transition-all hover:shadow-md ${
-                isSelected ? "ring-2 ring-primary bg-primary/5" : ""
-              }`}
+              className={`cursor-pointer transition-all hover:shadow-md ${isSelected ? "ring-2 ring-primary bg-primary/5" : ""
+                }`}
               onClick={() => toggleActivity(activity.id)}
+              onMouseEnter={() => onHoverActivity?.(activity.id)}
+              onMouseLeave={() => onHoverActivity?.(null)}
             >
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
-                  <CardTitle className="text-base line-clamp-2">{activity.name}</CardTitle>
+                  <CardTitle className="text-base line-clamp-2">
+                    <span className="text-gray-400 mr-2">#{index + 1}</span>
+                    {activity.name}
+                  </CardTitle>
                   {isSelected && (
                     <div className="flex-shrink-0 w-6 h-6 bg-primary rounded-full flex items-center justify-center">
                       <Check className="w-4 h-4 text-white" />

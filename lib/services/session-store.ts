@@ -89,6 +89,7 @@ class SessionStore {
         activityLevel: "moderate",
         travelers: 1,
         budget: null,
+        constraints: [],
       },
       conversationHistory: [],
       finalPlan: null,

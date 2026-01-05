@@ -14,7 +14,7 @@ import {
 } from "./prompts";
 
 const DEFAULT_MODEL = "gpt-4o-mini";
-const DEFAULT_TEMPERATURE = 0.7;
+const DEFAULT_TEMPERATURE = 0.5;
 
 interface LLMClientOptions {
   model?: string;

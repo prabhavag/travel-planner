@@ -86,6 +86,7 @@ export interface TripInfo {
   activityLevel: string;
   travelers: number;
   budget: string | null;
+  constraints: string[];
 }
 
 export interface SkeletonDay {
@@ -402,3 +403,15 @@ export async function setMealPreferences(
     body: JSON.stringify({ sessionId, wantsRestaurants, selectedRestaurantIds }),
   });
 }
+
+// Update trip information (e.g. constraints)
+export async function updateTripInfo(
+  sessionId: string,
+  tripInfo: Partial<TripInfo>
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/session/${sessionId}/update-trip-info`, {
+    method: "POST",
+    body: JSON.stringify({ tripInfo }),
+  });
+}
+

@@ -22,12 +22,16 @@ import {
   confirmDayGrouping,
   getRestaurantSuggestions,
   setMealPreferences,
+  updateTripInfo,
   type TripInfo,
   type SuggestedActivity,
   type GroupedDay,
   type RestaurantSuggestion,
   type DayGroup,
 } from "@/lib/api-client";
+import { ConstraintsView } from "@/components/ConstraintsView";
+import { MessageSquare, ListChecks } from "lucide-react";
+
 
 // Workflow states
 const WORKFLOW_STATES = {
@@ -68,6 +72,9 @@ export default function PlannerPage() {
   const [chatInput, setChatInput] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [canProceed, setCanProceed] = useState(false);
+  const [activeTab, setActiveTab] = useState<"chat" | "constraints">("chat");
+  const [hoveredActivityId, setHoveredActivityId] = useState<string | null>(null);
+
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
@@ -313,6 +320,29 @@ export default function PlannerPage() {
     }
   };
 
+  // Update constraints
+  const handleUpdateConstraints = async (newConstraints: string[]) => {
+    if (!sessionId || !tripInfo) return;
+
+    // Optimistic update
+    const updatedTripInfo = { ...tripInfo, constraints: newConstraints };
+    setTripInfo(updatedTripInfo);
+    setLoading(true);
+
+    try {
+      const response = await updateTripInfo(sessionId, { constraints: newConstraints });
+      if (response.success && response.tripInfo) {
+        setTripInfo(response.tripInfo);
+      }
+    } catch (error) {
+      console.error("Failed to update constraints:", error);
+      alert("Failed to save constraints. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
   // Handle clicking activity on map
   const handleMapActivityClick = (activityId: string) => {
     if (workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES) {
@@ -359,6 +389,7 @@ export default function PlannerPage() {
               selectedIds={selectedActivityIds}
               onSelectionChange={handleActivitySelectionChange}
               onConfirm={handleConfirmActivitySelection}
+              onHoverActivity={setHoveredActivityId}
               isLoading={loading}
             />
           </div>
@@ -472,21 +503,22 @@ export default function PlannerPage() {
               destination={tripInfo?.destination}
               suggestedActivities={
                 workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES ||
-                workflowState === WORKFLOW_STATES.SELECT_ACTIVITIES
+                  workflowState === WORKFLOW_STATES.SELECT_ACTIVITIES
                   ? suggestedActivities
                   : undefined
               }
               selectedActivityIds={selectedActivityIds}
               groupedDays={
                 workflowState === WORKFLOW_STATES.GROUP_DAYS ||
-                workflowState === WORKFLOW_STATES.DAY_ITINERARY ||
-                workflowState === WORKFLOW_STATES.MEAL_PREFERENCES ||
-                workflowState === WORKFLOW_STATES.REVIEW ||
-                workflowState === WORKFLOW_STATES.FINALIZE
+                  workflowState === WORKFLOW_STATES.DAY_ITINERARY ||
+                  workflowState === WORKFLOW_STATES.MEAL_PREFERENCES ||
+                  workflowState === WORKFLOW_STATES.REVIEW ||
+                  workflowState === WORKFLOW_STATES.FINALIZE
                   ? groupedDays
                   : undefined
               }
               onActivityClick={handleMapActivityClick}
+              hoveredActivityId={hoveredActivityId}
             />
           </div>
 
@@ -509,48 +541,87 @@ export default function PlannerPage() {
             <Badge className="mt-2 bg-blue-500">{getStateLabel()}</Badge>
           </div>
 
-          {/* Chat Messages */}
-          <ScrollArea className="flex-1 p-4" ref={chatScrollRef}>
-            <div className="space-y-3">
-              {chatHistory.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`p-3 rounded-2xl max-w-[85%] ${
-                    msg.role === "user" ? "bg-blue-500 text-white ml-auto" : "bg-gray-200 text-gray-800"
-                  }`}
-                >
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
-                </div>
-              ))}
-              {loading && (
-                <div className="flex justify-center">
-                  <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
-                </div>
+          {/* Tab Switcher */}
+          <div className="flex border-b border-gray-200">
+            <button
+              onClick={() => setActiveTab("chat")}
+              className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "chat"
+                ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                }`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              Chat
+            </button>
+            <button
+              onClick={() => setActiveTab("constraints")}
+              className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "constraints"
+                ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                }`}
+            >
+              <ListChecks className="w-4 h-4" />
+              Constraints
+              {tripInfo?.constraints && tripInfo.constraints.length > 0 && (
+                <Badge className="ml-1 px-1.5 py-0 min-w-[18px] h-[18px] bg-blue-100 text-blue-700 hover:bg-blue-100">
+                  {tripInfo.constraints.length}
+                </Badge>
               )}
-            </div>
-
-            {/* Action Button */}
-            {renderActionButton()}
-          </ScrollArea>
-
-          {/* Chat Input */}
-          <div className="p-4 border-t border-gray-200 flex gap-2 flex-shrink-0">
-            <Input
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              placeholder={
-                workflowState === WORKFLOW_STATES.INFO_GATHERING
-                  ? "Tell me about your trip..."
-                  : "Ask questions or request changes..."
-              }
-              onKeyDown={(e) => e.key === "Enter" && handleChat()}
-              disabled={loading || isFinalized}
-              className="flex-1"
-            />
-            <Button onClick={handleChat} disabled={loading || !chatInput.trim() || isFinalized} size="icon">
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            </Button>
+            </button>
           </div>
+
+          {activeTab === "chat" ? (
+            <>
+              {/* Chat Messages */}
+              <ScrollArea className="flex-1 p-4" ref={chatScrollRef}>
+                <div className="space-y-3">
+                  {chatHistory.map((msg, idx) => (
+                    <div
+                      key={idx}
+                      className={`p-3 rounded-2xl max-w-[85%] ${msg.role === "user" ? "bg-blue-500 text-white ml-auto" : "bg-gray-200 text-gray-800"
+                        }`}
+                    >
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    </div>
+                  ))}
+                  {loading && (
+                    <div className="flex justify-center">
+                      <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+                    </div>
+                  )}
+                </div>
+
+                {/* Action Button */}
+                {renderActionButton()}
+              </ScrollArea>
+
+              {/* Chat Input */}
+              <div className="p-4 border-t border-gray-200 flex gap-2 flex-shrink-0">
+                <Input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder={
+                    workflowState === WORKFLOW_STATES.INFO_GATHERING
+                      ? "Tell me about your trip..."
+                      : "Ask questions or request changes..."
+                  }
+                  onKeyDown={(e) => e.key === "Enter" && handleChat()}
+                  disabled={loading || isFinalized}
+                  className="flex-1"
+                />
+                <Button onClick={handleChat} disabled={loading || !chatInput.trim() || isFinalized} size="icon">
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <ConstraintsView
+              constraints={tripInfo?.constraints || []}
+              onUpdateConstraints={handleUpdateConstraints}
+              isLoading={loading}
+            />
+          )}
+
         </div>
       </div>
     </div>
