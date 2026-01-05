@@ -20,20 +20,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const totalDays = session.skeleton?.days?.length || 0;
-    const expandedCount = Object.keys(session.expandedDays).length;
-
-    if (expandedCount < totalDays) {
+    if (!session.groupedDays || session.groupedDays.length === 0) {
       return NextResponse.json(
         {
           success: false,
-          message: `Not all days expanded. ${expandedCount}/${totalDays} completed.`,
+          message: "No days have been grouped yet. Complete the day grouping step first.",
         },
         { status: 400 }
       );
     }
 
-    const daysSummary = Object.values(session.expandedDays)
+    const daysSummary = session.groupedDays
       .sort((a, b) => a.dayNumber - b.dayNumber)
       .map((day) => `Day ${day.dayNumber}: ${day.theme}`)
       .join("\n");
@@ -49,8 +46,7 @@ export async function POST(request: NextRequest) {
       workflowState: WORKFLOW_STATES.REVIEW,
       message: reviewMessage,
       tripInfo: session.tripInfo,
-      skeleton: session.skeleton,
-      expandedDays: session.expandedDays,
+      groupedDays: session.groupedDays,
     });
   } catch (error) {
     console.error("Error in startReview:", error);

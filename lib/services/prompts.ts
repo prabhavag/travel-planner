@@ -2,7 +2,7 @@
  * Externalized system prompts for LLM client
  */
 
-import type { TripInfo, SuggestedActivity } from "@/lib/models/travel-plan";
+import type { TripInfo, SuggestedActivity, GroupedDay } from "@/lib/models/travel-plan";
 
 export const SYSTEM_PROMPTS = {
   INFO_GATHERING: `You are an expert travel planning assistant. You are in the INFO GATHERING phase.
@@ -148,6 +148,28 @@ RULES:
 - Theme should be creative and memorable
 - Reflect the types of activities and areas visited
 - Return ONLY valid JSON, no additional text`,
+
+  SUGGEST_ACTIVITIES_CHAT: `You are helping users explore and select activities for their trip.
+
+You have already suggested 10 activities. Now help the user:
+1. Answer questions about any of the suggested activities
+2. Suggest additional or alternative activities if requested
+3. Update trip info if the user provides new details
+
+RESPONSE FORMAT (JSON):
+{
+  "message": "Your helpful response",
+  "tripInfo": { /* only include if user changed trip details */ },
+  "newActivities": [ /* only include if suggesting new activities, same format as original */ ]
+}
+
+RULES:
+- Be conversational and helpful
+- If asked about a specific activity, provide detailed info
+- If asked for more activities, generate 1-5 new ones matching the request
+- New activities must have unique ids (act11, act12, etc.)
+- Only update tripInfo if user explicitly changes trip details
+- Return ONLY valid JSON, no additional text`,
 };
 
 interface ConversationMessage {
@@ -196,11 +218,11 @@ export function buildInfoGatheringMessages({
 
 export function buildReviewMessages({
   tripInfo,
-  expandedDays,
+  groupedDays,
   userMessage,
 }: {
   tripInfo: TripInfo;
-  expandedDays: Record<number, unknown>;
+  groupedDays: GroupedDay[];
   userMessage: string;
   conversationHistory?: ConversationMessage[];
 }) {
@@ -208,12 +230,9 @@ export function buildReviewMessages({
     { role: "system", content: SYSTEM_PROMPTS.REVIEW },
   ];
 
-  const daysSummary = Object.values(expandedDays)
-    .sort((a: unknown, b: unknown) => (a as { dayNumber: number }).dayNumber - (b as { dayNumber: number }).dayNumber)
-    .map((day: unknown) => {
-      const d = day as { dayNumber: number; date: string; theme: string };
-      return `Day ${d.dayNumber} (${d.date}): ${d.theme}`;
-    })
+  const daysSummary = groupedDays
+    .sort((a, b) => a.dayNumber - b.dayNumber)
+    .map((day) => `Day ${day.dayNumber} (${day.date}): ${day.theme}`)
     .join("\n");
 
   messages.push({
@@ -226,7 +245,7 @@ ${daysSummary}
 ${tripInfo.preferences.length > 0 ? `User Preferences:\n- ${tripInfo.preferences.join("\n- ")}\n` : ""}
 
 Full Itinerary:
-${JSON.stringify(expandedDays, null, 2)}
+${JSON.stringify(groupedDays, null, 2)}
 
 User feedback: ${userMessage}`,
   });
@@ -313,6 +332,56 @@ export function buildRegenerateDayThemeMessages({ activities }: { activities: Su
     role: "user",
     content: `Generate a theme for a day with these activities: ${activitySummary}`,
   });
+
+  return messages;
+}
+
+export function buildSuggestActivitiesChatMessages({
+  tripInfo,
+  suggestedActivities,
+  selectedActivityIds,
+  userMessage,
+  conversationHistory,
+}: {
+  tripInfo: TripInfo;
+  suggestedActivities: SuggestedActivity[];
+  selectedActivityIds: string[];
+  userMessage: string;
+  conversationHistory: ConversationMessage[];
+}) {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: SYSTEM_PROMPTS.SUGGEST_ACTIVITIES_CHAT },
+  ];
+
+  // Add context about current activities
+  messages.push({
+    role: "user",
+    content: `Trip to ${tripInfo.destination} (${tripInfo.durationDays} days)
+Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
+
+Current suggested activities:
+${JSON.stringify(suggestedActivities, null, 2)}
+
+Selected so far: ${selectedActivityIds.length > 0 ? selectedActivityIds.join(", ") : "None yet"}`,
+  });
+
+  messages.push({
+    role: "assistant",
+    content: "I have the activity list ready. How can I help?",
+  });
+
+  // Add recent conversation history
+  const recentHistory = (conversationHistory || []).slice(-6);
+  recentHistory.forEach((msg) => {
+    if (msg.role === "user" || msg.role === "assistant") {
+      messages.push({
+        role: msg.role,
+        content: String(msg.content || "").slice(0, 5000),
+      });
+    }
+  });
+
+  messages.push({ role: "user", content: userMessage });
 
   return messages;
 }

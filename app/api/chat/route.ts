@@ -40,12 +40,15 @@ export async function POST(request: NextRequest) {
         oldDestination.toLowerCase() !== newDestination.toLowerCase();
 
       if (destinationChanged) {
+        // Reset activity-related data when destination changes
         sessionStore.update(sessionId, {
           tripInfo: result.tripInfo!,
-          skeleton: null,
-          expandedDays: {},
-          currentExpandDay: null,
-          currentSuggestions: null,
+          suggestedActivities: [],
+          selectedActivityIds: [],
+          dayGroups: [],
+          groupedDays: [],
+          restaurantSuggestions: [],
+          selectedRestaurantIds: [],
           finalPlan: null,
         });
       } else {
@@ -63,31 +66,69 @@ export async function POST(request: NextRequest) {
         tripInfo: result.tripInfo,
         canProceed: result.isComplete,
         missingInfo: result.missingInfo,
-        skeleton: updatedSession?.skeleton,
-        expandedDays: updatedSession?.expandedDays,
       });
-    } else if (session.workflowState === WORKFLOW_STATES.REVIEW) {
-      const result = await llmClient.reviewPlan({
+    } else if (session.workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES) {
+      const result = await llmClient.chatDuringSuggestActivities({
         tripInfo: session.tripInfo,
-        expandedDays: session.expandedDays,
+        suggestedActivities: session.suggestedActivities || [],
+        selectedActivityIds: session.selectedActivityIds || [],
         userMessage: message,
         conversationHistory: session.conversationHistory,
       });
 
-      if (result.modifications) {
-        for (const [dayNum, dayData] of Object.entries(result.modifications)) {
-          sessionStore.setExpandedDay(sessionId, parseInt(dayNum), dayData as never);
-        }
+      // Update trip info if changed
+      if (result.tripInfo) {
+        sessionStore.update(sessionId, { tripInfo: result.tripInfo });
+      }
+
+      // Merge new activities with existing
+      if (result.newActivities && result.newActivities.length > 0) {
+        const existingActivities = session.suggestedActivities || [];
+        sessionStore.update(sessionId, {
+          suggestedActivities: [...existingActivities, ...result.newActivities],
+        });
       }
 
       sessionStore.addToConversation(sessionId, "assistant", result.message);
+      const updatedSession = sessionStore.get(sessionId);
+
+      return NextResponse.json({
+        success: true,
+        sessionId,
+        workflowState: updatedSession?.workflowState,
+        message: result.message,
+        tripInfo: updatedSession?.tripInfo,
+        suggestedActivities: updatedSession?.suggestedActivities,
+      });
+    } else if (session.workflowState === WORKFLOW_STATES.REVIEW) {
+      const result = await llmClient.reviewPlan({
+        tripInfo: session.tripInfo,
+        groupedDays: session.groupedDays,
+        userMessage: message,
+        conversationHistory: session.conversationHistory,
+      });
+
+      // Handle modifications to groupedDays
+      if (result.modifications) {
+        const updatedGroupedDays = [...session.groupedDays];
+        for (const [dayNum, dayData] of Object.entries(result.modifications)) {
+          const dayIndex = updatedGroupedDays.findIndex((d) => d.dayNumber === parseInt(dayNum));
+          if (dayIndex !== -1) {
+            updatedGroupedDays[dayIndex] = { ...updatedGroupedDays[dayIndex], ...(dayData as object) };
+          }
+        }
+        sessionStore.setGroupedDays(sessionId, updatedGroupedDays);
+      }
+
+      sessionStore.addToConversation(sessionId, "assistant", result.message);
+      const updatedSession = sessionStore.get(sessionId);
 
       return NextResponse.json({
         success: true,
         sessionId,
         workflowState: session.workflowState,
         message: result.message,
-        expandedDays: session.expandedDays,
+        groupedDays: updatedSession?.groupedDays,
         readyToFinalize: result.readyToFinalize,
       });
     } else {

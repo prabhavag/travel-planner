@@ -44,7 +44,7 @@ When verifying new functionality, you will:
 Key areas to focus on based on the architecture:
 - **Map interactions** (60% left panel) - verify MapComponent renders and updates correctly
 - **Chat sidebar** (40% right panel) - test conversation flow and responses
-- **Session workflow states** - verify transitions: INFO_GATHERING → SKELETON → EXPAND_DAY → REVIEW → FINALIZE
+- **Session workflow states** - verify transitions: INFO_GATHERING → SUGGEST_ACTIVITIES → SELECT_ACTIVITIES → GROUP_DAYS → DAY_ITINERARY → MEAL_PREFERENCES → REVIEW → FINALIZE
 - **API integrations** - confirm endpoints respond correctly and data displays properly
 - **Loading states** - verify SkeletonView and progress indicators work during async operations
 

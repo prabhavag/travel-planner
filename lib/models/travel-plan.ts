@@ -3,8 +3,11 @@ import { z } from "zod";
 // Workflow state enum
 export const WorkflowStateSchema = z.enum([
   "INFO_GATHERING",
-  "SKELETON",
-  "EXPAND_DAY",
+  "SUGGEST_ACTIVITIES",
+  "SELECT_ACTIVITIES",
+  "GROUP_DAYS",
+  "DAY_ITINERARY",
+  "MEAL_PREFERENCES",
   "REVIEW",
   "FINALIZE",
 ]);
@@ -24,22 +27,6 @@ export const TripInfoSchema = z.object({
 });
 
 export type TripInfo = z.infer<typeof TripInfoSchema>;
-
-// Skeleton day (day themes only, no activities)
-export const SkeletonDaySchema = z.object({
-  dayNumber: z.number(),
-  date: z.string(),
-  theme: z.string(),
-  highlights: z.array(z.string()),
-});
-
-export type SkeletonDay = z.infer<typeof SkeletonDaySchema>;
-
-export const SkeletonItinerarySchema = z.object({
-  days: z.array(SkeletonDaySchema),
-});
-
-export type SkeletonItinerary = z.infer<typeof SkeletonItinerarySchema>;
 
 // Coordinates schema
 export const CoordinatesSchema = z.object({
@@ -173,22 +160,6 @@ export const ActivitySchema = z.object({
 
 export type Activity = z.infer<typeof ActivitySchema>;
 
-// Expanded day with full activities and meals
-export const ExpandedDaySchema = z.object({
-  dayNumber: z.number(),
-  date: z.string(),
-  theme: z.string(),
-  breakfast: MealSchema.nullable().optional(),
-  morning: z.array(ActivitySchema).default([]),
-  lunch: MealSchema.nullable().optional(),
-  afternoon: z.array(ActivitySchema).default([]),
-  dinner: MealSchema.nullable().optional(),
-  evening: z.array(ActivitySchema).default([]),
-  notes: z.string().optional().nullable(),
-});
-
-export type ExpandedDay = z.infer<typeof ExpandedDaySchema>;
-
 export const DayItinerarySchema = z.object({
   date: z.string(),
   day_number: z.number(),
@@ -240,26 +211,8 @@ export const TravelRequestSchema = z.object({
 
 export type TravelRequest = z.infer<typeof TravelRequestSchema>;
 
-// Stored suggestions with dayNumber for session storage
-export interface StoredSuggestions {
-  dayNumber: number;
-  suggestions: DaySuggestions;
-}
-
-// Stored activity suggestions (for two-step flow)
-export interface StoredActivitySuggestions {
-  dayNumber: number;
-  suggestions: ActivitySuggestions;
-}
-
-// Stored meal suggestions from Places API
-export interface StoredMealSuggestions {
-  dayNumber: number;
-  suggestions: MealSuggestionsFromPlaces;
-}
-
 // ============================================
-// NEW FLOW: Activity-First Planning Schemas
+// Activity-First Planning Schemas
 // ============================================
 
 // Suggested activity from LLM (top 15)

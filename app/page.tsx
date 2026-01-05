@@ -126,6 +126,7 @@ export default function PlannerPage() {
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
         if (response.tripInfo) setTripInfo(response.tripInfo);
         if (response.canProceed !== undefined) setCanProceed(response.canProceed);
+        if (response.suggestedActivities) setSuggestedActivities(response.suggestedActivities);
       }
     } catch (error) {
       console.error("Chat error:", error);
@@ -523,9 +524,9 @@ export default function PlannerPage() {
     <div className="h-screen overflow-hidden bg-gray-100">
       <div className="flex h-full">
         {/* Left Panel: Map + Content View */}
-        <div className="w-[60%] h-full overflow-y-auto">
-          {/* Map */}
-          <div className="h-[400px] min-h-[300px]">
+        <div className="w-[65%] h-full flex flex-col">
+          {/* Map - fixed at 50% height */}
+          <div className="h-[50%] flex-shrink-0 overflow-hidden">
             <MapComponent
               destination={tripInfo?.destination}
               suggestedActivities={
@@ -549,12 +550,14 @@ export default function PlannerPage() {
             />
           </div>
 
-          {/* State-specific content */}
-          {renderLeftPanelContent()}
+          {/* State-specific content - scrollable */}
+          <div className="flex-1 overflow-y-auto bg-gray-100 relative z-10">
+            {renderLeftPanelContent()}
+          </div>
         </div>
 
         {/* Right Panel: Chat */}
-        <div className="w-[40%] h-full bg-white border-l border-gray-200 flex flex-col">
+        <div className="w-[35%] h-full bg-white border-l border-gray-200 flex flex-col">
           {/* Header */}
           <div className="p-4 border-b border-gray-200 text-center flex-shrink-0">
             <h1 className="text-xl font-bold text-gray-800">

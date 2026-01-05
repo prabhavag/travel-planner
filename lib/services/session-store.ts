@@ -1,12 +1,7 @@
 import { randomUUID } from "crypto";
 import type {
   TripInfo,
-  SkeletonItinerary,
-  ExpandedDay,
   TravelPlan,
-  StoredSuggestions,
-  StoredActivitySuggestions,
-  StoredMealSuggestions,
   SuggestedActivity,
   DayGroup,
   GroupedDay,
@@ -22,9 +17,6 @@ export const WORKFLOW_STATES = {
   MEAL_PREFERENCES: "MEAL_PREFERENCES",
   REVIEW: "REVIEW",
   FINALIZE: "FINALIZE",
-  // Legacy states (kept for backwards compatibility during migration)
-  SKELETON: "SKELETON",
-  EXPAND_DAY: "EXPAND_DAY",
 } as const;
 
 export type WorkflowState = (typeof WORKFLOW_STATES)[keyof typeof WORKFLOW_STATES];
@@ -43,7 +35,7 @@ export interface Session {
   conversationHistory: ConversationMessage[];
   finalPlan: TravelPlan | null;
 
-  // New activity-first flow fields
+  // Activity-first flow fields
   suggestedActivities: SuggestedActivity[];
   selectedActivityIds: string[];
   dayGroups: DayGroup[];
@@ -51,14 +43,6 @@ export interface Session {
   restaurantSuggestions: RestaurantSuggestion[];
   selectedRestaurantIds: string[];
   wantsRestaurants: boolean | null;
-
-  // Legacy fields (kept for backwards compatibility during migration)
-  skeleton: SkeletonItinerary | null;
-  expandedDays: Record<number, ExpandedDay>;
-  currentExpandDay: number | null;
-  currentSuggestions: StoredSuggestions | null;
-  currentActivitySuggestions: StoredActivitySuggestions | null;
-  currentMealSuggestions: StoredMealSuggestions | null;
 }
 
 class SessionStore {
@@ -93,7 +77,7 @@ class SessionStore {
       conversationHistory: [],
       finalPlan: null,
 
-      // New activity-first flow fields
+      // Activity-first flow fields
       suggestedActivities: [],
       selectedActivityIds: [],
       dayGroups: [],
@@ -101,14 +85,6 @@ class SessionStore {
       restaurantSuggestions: [],
       selectedRestaurantIds: [],
       wantsRestaurants: null,
-
-      // Legacy fields
-      skeleton: null,
-      expandedDays: {},
-      currentExpandDay: null,
-      currentSuggestions: null,
-      currentActivitySuggestions: null,
-      currentMealSuggestions: null,
     };
 
     this.sessions.set(sessionId, session);
@@ -162,18 +138,7 @@ class SessionStore {
     return session;
   }
 
-  setExpandedDay(sessionId: string, dayNumber: number, dayData: ExpandedDay): Session | null {
-    const session = this.get(sessionId);
-    if (!session) {
-      return null;
-    }
-
-    session.expandedDays[dayNumber] = dayData;
-    session.lastAccessed = Date.now();
-    return session;
-  }
-
-  // New activity-first flow helpers
+  // Activity-first flow helpers
   setSuggestedActivities(sessionId: string, activities: SuggestedActivity[]): Session | null {
     const session = this.get(sessionId);
     if (!session) return null;
@@ -256,5 +221,16 @@ class SessionStore {
   }
 }
 
-// Export singleton instance
-export const sessionStore = new SessionStore();
+// Declare global type for TypeScript
+declare global {
+  // eslint-disable-next-line no-var
+  var sessionStoreInstance: SessionStore | undefined;
+}
+
+// Use globalThis to persist across HMR in development
+export const sessionStore = globalThis.sessionStoreInstance ?? new SessionStore();
+
+// Assign to global in development to survive HMR
+if (process.env.NODE_ENV !== "production") {
+  globalThis.sessionStoreInstance = sessionStore;
+}

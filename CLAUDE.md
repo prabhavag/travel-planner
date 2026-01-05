@@ -45,13 +45,14 @@ This is a full-stack AI travel planning application built with Next.js (App Rout
 - **planner/** - Travel planner interface
 - **api/** - API route handlers:
   - `start-session/` - Initialize session, begin INFO_GATHERING
-  - `chat/` - Chat in INFO_GATHERING or REVIEW states
-  - `generate-skeleton/` - Generate day themes after info complete
-  - `expand-day/` - Expand a specific day with activities + meals
-  - `modify-day/` - Modify an already-expanded day
-  - `suggest-activities/` - Suggest activities for a day
-  - `suggest-meals-nearby/` - Find restaurants near selected activities
-  - `confirm-day-selections/` - Confirm user selections
+  - `chat/` - Chat in INFO_GATHERING, SUGGEST_ACTIVITIES, or REVIEW states
+  - `suggest-activities/` - Generate top 10-15 activities for destination
+  - `select-activities/` - Record user's activity selections
+  - `group-days/` - Organize selected activities into day groups
+  - `adjust-day-groups/` - Modify day groupings
+  - `confirm-day-grouping/` - Confirm day structure
+  - `get-restaurant-suggestions/` - Find restaurants near activities
+  - `meal-preferences/` - Add/skip restaurants
   - `start-review/` - Transition to REVIEW state
   - `finalize/` - Enrich with Places API, generate final plan
   - `session/[sessionId]/` - Get current session state
@@ -59,7 +60,6 @@ This is a full-stack AI travel planning application built with Next.js (App Rout
 ### Components (`/components/`)
 
 - **MapComponent.tsx** - Google Maps integration
-- **SkeletonView.tsx** - Display day themes and progress during planning
 - **DetailedItineraryView.tsx** - Day-by-day itinerary with activity details
 - **ui/** - Reusable UI components (Button, Card, Badge, etc.)
 
@@ -81,10 +81,13 @@ This is a full-stack AI travel planning application built with Next.js (App Rout
 1. Map view on the left (60%), chat sidebar on the right (40%)
 2. Session-based workflow with the following states:
    1. **INFO_GATHERING** - Collect destination, dates, interests via chat
-   2. **SKELETON** - Generate day themes only (no detailed activities)
-   3. **EXPAND_DAY** - Expand each day with activities + meals
-   4. **REVIEW** - All days expanded, user can edit any day
-   5. **FINALIZE** - Enrich with Places API, generate final itinerary
+   2. **SUGGEST_ACTIVITIES** - Generate top 10-15 activities for destination
+   3. **SELECT_ACTIVITIES** - User selects which activities interest them
+   4. **GROUP_DAYS** - Organize selected activities into daily itineraries
+   5. **DAY_ITINERARY** - Present day-by-day breakdown, user can add restaurants
+   6. **MEAL_PREFERENCES** - User selects restaurants or skips
+   7. **REVIEW** - Final review, user can request changes
+   8. **FINALIZE** - Enrich with Places API, generate final itinerary
 
 ## Environment Variables
 

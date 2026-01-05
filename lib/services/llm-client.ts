@@ -1,9 +1,9 @@
 import OpenAI from "openai";
 import {
   type TripInfo,
-  type ExpandedDay,
   type SuggestedActivity,
   type DayGroup,
+  type GroupedDay,
 } from "@/lib/models/travel-plan";
 import {
   buildInfoGatheringMessages,
@@ -11,6 +11,7 @@ import {
   buildSuggestTopActivitiesMessages,
   buildGroupActivitiesMessages,
   buildRegenerateDayThemeMessages,
+  buildSuggestActivitiesChatMessages,
 } from "./prompts";
 
 const DEFAULT_MODEL = "gpt-4o-mini";
@@ -121,18 +122,18 @@ class LLMClient {
 
   async reviewPlan({
     tripInfo,
-    expandedDays,
+    groupedDays,
     userMessage,
     conversationHistory,
   }: {
     tripInfo: TripInfo;
-    expandedDays: Record<number, ExpandedDay>;
+    groupedDays: GroupedDay[];
     userMessage: string;
     conversationHistory?: ConversationMessage[];
   }) {
     const messages = buildReviewMessages({
       tripInfo,
-      expandedDays,
+      groupedDays,
       userMessage,
       conversationHistory,
     });
@@ -259,6 +260,59 @@ class LLMClient {
       return {
         success: false,
         theme: "A Day of Adventures",
+      };
+    }
+  }
+
+  async chatDuringSuggestActivities({
+    tripInfo,
+    suggestedActivities,
+    selectedActivityIds,
+    userMessage,
+    conversationHistory,
+  }: {
+    tripInfo: TripInfo;
+    suggestedActivities: SuggestedActivity[];
+    selectedActivityIds: string[];
+    userMessage: string;
+    conversationHistory: ConversationMessage[];
+  }): Promise<{
+    success: boolean;
+    message: string;
+    tripInfo: TripInfo | null;
+    newActivities: SuggestedActivity[];
+  }> {
+    const messages = buildSuggestActivitiesChatMessages({
+      tripInfo,
+      suggestedActivities,
+      selectedActivityIds,
+      userMessage,
+      conversationHistory,
+    });
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: this.temperature,
+        response_format: { type: "json_object" },
+      });
+
+      const response = this._parseJsonResponse(completion);
+
+      return {
+        success: true,
+        message: response.message,
+        tripInfo: response.tripInfo || null,
+        newActivities: response.newActivities || [],
+      };
+    } catch (error) {
+      console.error("Error in chatDuringSuggestActivities:", error);
+      return {
+        success: false,
+        message: "Sorry, I had trouble processing that. Please try again.",
+        tripInfo: null,
+        newActivities: [],
       };
     }
   }
