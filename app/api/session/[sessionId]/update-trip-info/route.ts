@@ -3,10 +3,10 @@ import { sessionStore } from "@/lib/services/session-store";
 
 export async function POST(
     request: NextRequest,
-    { params }: { params: { sessionId: string } }
+    { params }: { params: Promise<{ sessionId: string }> }
 ) {
     try {
-        const { sessionId } = params;
+        const { sessionId } = await params;
         const { tripInfo } = await request.json();
 
         if (!sessionId || !tripInfo) {
