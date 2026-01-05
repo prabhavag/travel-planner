@@ -86,7 +86,7 @@ class LLMClient {
         startDate: null,
         endDate: null,
         durationDays: null,
-        interests: [],
+        preferences: [],
         activityLevel: "moderate",
         travelers: 1,
         budget: null,

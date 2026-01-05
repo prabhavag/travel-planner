@@ -29,8 +29,8 @@ import {
   type RestaurantSuggestion,
   type DayGroup,
 } from "@/lib/api-client";
-import { ConstraintsView } from "@/components/ConstraintsView";
-import { MessageSquare, ListChecks } from "lucide-react";
+import { InterestsPreferencesView } from "@/components/InterestsPreferencesView";
+import { MessageSquare, Heart } from "lucide-react";
 
 
 // Workflow states
@@ -72,7 +72,7 @@ export default function PlannerPage() {
   const [chatInput, setChatInput] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [canProceed, setCanProceed] = useState(false);
-  const [activeTab, setActiveTab] = useState<"chat" | "constraints">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "interests">("chat");
   const [hoveredActivityId, setHoveredActivityId] = useState<string | null>(null);
 
 
@@ -347,23 +347,23 @@ export default function PlannerPage() {
     }
   };
 
-  // Update constraints
-  const handleUpdateConstraints = async (newConstraints: string[]) => {
+  // Update preferences
+  const handleUpdatePreferences = async (newPreferences: string[]) => {
     if (!sessionId || !tripInfo) return;
 
     // Optimistic update
-    const updatedTripInfo = { ...tripInfo, constraints: newConstraints };
+    const updatedTripInfo = { ...tripInfo, preferences: newPreferences };
     setTripInfo(updatedTripInfo);
     setLoading(true);
 
     try {
-      const response = await updateTripInfo(sessionId, { constraints: newConstraints });
+      const response = await updateTripInfo(sessionId, { preferences: newPreferences });
       if (response.success && response.tripInfo) {
         setTripInfo(response.tripInfo);
       }
     } catch (error) {
-      console.error("Failed to update constraints:", error);
-      alert("Failed to save constraints. Please try again.");
+      console.error("Failed to update preferences:", error);
+      alert("Failed to save preferences. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -581,17 +581,17 @@ export default function PlannerPage() {
               Chat
             </button>
             <button
-              onClick={() => setActiveTab("constraints")}
-              className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "constraints"
-                ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
+              onClick={() => setActiveTab("interests")}
+              className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "interests"
+                ? "text-rose-600 border-b-2 border-rose-600 bg-rose-50/50"
                 : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
                 }`}
             >
-              <ListChecks className="w-4 h-4" />
-              Constraints
-              {tripInfo?.constraints && tripInfo.constraints.length > 0 && (
-                <Badge className="ml-1 px-1.5 py-0 min-w-[18px] h-[18px] bg-blue-100 text-blue-700 hover:bg-blue-100">
-                  {tripInfo.constraints.length}
+              <Heart className="w-4 h-4" />
+              Interests & preferences
+              {tripInfo?.preferences && tripInfo.preferences.length > 0 && (
+                <Badge className="ml-1 px-1.5 py-0 min-w-[18px] h-[18px] bg-rose-100 text-rose-700 hover:bg-rose-100">
+                  {tripInfo.preferences.length}
                 </Badge>
               )}
             </button>
@@ -662,9 +662,9 @@ export default function PlannerPage() {
               </div>
             </>
           ) : (
-            <ConstraintsView
-              constraints={tripInfo?.constraints || []}
-              onUpdateConstraints={handleUpdateConstraints}
+            <InterestsPreferencesView
+              preferences={tripInfo?.preferences || []}
+              onUpdatePreferences={handleUpdatePreferences}
               isLoading={loading}
             />
           )}

@@ -11,7 +11,7 @@ Your goal is to collect the following essential trip information through natural
 1. Destination (city/region/country) - REQUIRED
 2. Travel dates (start and end dates) - REQUIRED
 3. Trip duration (calculated from dates)
-4. Traveler interests (history, food, adventure, relaxation, art, nature, nightlife, etc.)
+4. Traveler interests and preferences (food, adventure, relaxation, no seafood, etc.)
 5. Activity level preference (relaxed, moderate, active)
 6. Number of travelers (optional)
 7. Budget range (optional)
@@ -24,11 +24,10 @@ RESPONSE FORMAT (JSON):
         "startDate": "YYYY-MM-DD or null",
         "endDate": "YYYY-MM-DD or null",
         "durationDays": number or null,
-        "interests": ["interest1", "interest2"],
+        "preferences": ["pref1", "pref2"],
         "activityLevel": "relaxed|moderate|active",
         "travelers": number,
-        "budget": "budget range or null",
-        "constraints": ["constraint1", "constraint2"]
+        "budget": "budget range or null"
     },
     "isComplete": true or false,
     "missingInfo": ["list of missing required fields"]
@@ -59,7 +58,7 @@ RULES:
 - Only include modifications if user explicitly requested changes
 - If user is satisfied, set readyToFinalize=true
 - Be helpful and suggest improvements proactively if you see issues
-- Always follow constraints if specified in tripInfo
+- Always follow interests and preferences if specified in tripInfo
 - Return ONLY valid JSON, no additional text`,
 
   SUGGEST_TOP_ACTIVITIES: `You are an expert travel planner suggesting the TOP 10 activities for a trip.
@@ -93,11 +92,11 @@ RULES:
 - Use REAL, specific place names that exist in the destination
 - Each activity must have a unique id (act1, act2, ... act10)
 - Provide variety: mix popular spots with hidden gems
-- Balance different activity types based on user interests
+- Balance different activity types based on user preferences
 - bestTimeOfDay helps with grouping activities into days later
 -neighborhood helps with proximity-based grouping
 - estimatedCost should be realistic for the destination (0 for free activities)
-- STRICTLY FOLLOW USER CONSTRAINTS (e.g., if user says 'no shopping', do not suggest malls)
+- STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)
 - Return ONLY valid JSON, no additional text`,
 
   GROUP_ACTIVITIES_INTO_DAYS: `You are an expert travel planner grouping selected activities into days.
@@ -130,7 +129,7 @@ RULES:
 - Create thematic coherence within each day
 - Generate a descriptive, engaging theme for each day
 - Theme should capture the essence of activities in that day
-- RESPECT USER CONSTRAINTS when organizing (e.g., if user prefers relaxed pace, limit activities)
+- RESPECT USER PREFERENCES when organizing (e.g., if user prefers relaxed pace, limit activities)
 - Return ONLY valid JSON, no additional text`,
 
   REGENERATE_DAY_THEME: `You are generating a catchy, descriptive theme for a day of activities.
@@ -224,7 +223,7 @@ export function buildReviewMessages({
 Trip Overview:
 ${daysSummary}
 
-${tripInfo.constraints.length > 0 ? `User Constraints:\n- ${tripInfo.constraints.join("\n- ")}\n` : ""}
+${tripInfo.preferences.length > 0 ? `User Preferences:\n- ${tripInfo.preferences.join("\n- ")}\n` : ""}
 
 Full Itinerary:
 ${JSON.stringify(expandedDays, null, 2)}
@@ -247,11 +246,10 @@ export function buildSuggestTopActivitiesMessages({ tripInfo }: { tripInfo: Trip
 Destination: ${tripInfo.destination}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Duration: ${tripInfo.durationDays} days
-Interests: ${tripInfo.interests.join(", ") || "General tourism"}
+Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
 Activity Level: ${tripInfo.activityLevel}
 Travelers: ${tripInfo.travelers || 1}
 ${tripInfo.budget ? `Budget: ${tripInfo.budget}` : ""}
-${tripInfo.constraints.length > 0 ? `Constraints:\n- ${tripInfo.constraints.join("\n- ")}` : ""}
 
 Generate exactly 10 activity suggestions that match the traveler's interests.`,
   });
@@ -287,7 +285,7 @@ export function buildGroupActivitiesMessages({
 
 Trip Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Duration: ${tripInfo.durationDays} days
-${tripInfo.constraints.length > 0 ? `Constraints:\n- ${tripInfo.constraints.join("\n- ")}` : ""}
+${tripInfo.preferences.length > 0 ? `Preferences:\n- ${tripInfo.preferences.join("\n- ")}` : ""}
 
 Selected Activities:
 ${JSON.stringify(activitiesForLLM, null, 2)}

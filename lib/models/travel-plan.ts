@@ -17,11 +17,10 @@ export const TripInfoSchema = z.object({
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),
   durationDays: z.number().nullable(),
-  interests: z.array(z.string()).default([]),
+  preferences: z.array(z.string()).default([]),
   activityLevel: z.string().default("moderate"),
   travelers: z.number().default(1),
   budget: z.string().nullable(),
-  constraints: z.array(z.string()).default([]),
 });
 
 export type TripInfo = z.infer<typeof TripInfoSchema>;

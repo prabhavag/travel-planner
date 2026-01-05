@@ -82,11 +82,10 @@ export interface TripInfo {
   startDate: string | null;
   endDate: string | null;
   durationDays: number | null;
-  interests: string[];
+  preferences: string[];
   activityLevel: string;
   travelers: number;
   budget: string | null;
-  constraints: string[];
 }
 
 export interface SkeletonDay {
