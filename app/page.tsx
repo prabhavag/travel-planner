@@ -138,6 +138,33 @@ export default function PlannerPage() {
     }
   };
 
+  // Handle suggestion chips
+  const handleSuggestionClick = async (suggestion: string) => {
+    if (!sessionId || loading) return;
+
+    const userMessage = suggestion;
+    setChatInput("");
+    setChatHistory((prev) => [...prev, { role: "user", content: userMessage }]);
+    setLoading(true);
+
+    try {
+      const response = await chat(sessionId, userMessage);
+      if (response.success) {
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+        if (response.tripInfo) setTripInfo(response.tripInfo);
+        if (response.canProceed !== undefined) setCanProceed(response.canProceed);
+      }
+    } catch (error) {
+      console.error("Suggestion chat error:", error);
+      setChatHistory((prev) => [
+        ...prev,
+        { role: "assistant", content: "Sorry, I had trouble processing that suggestion." },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Suggest top 15 activities
   const handleSuggestActivities = async () => {
     if (!sessionId) return;
@@ -590,6 +617,26 @@ export default function PlannerPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Suggestion Chips */}
+                {workflowState === WORKFLOW_STATES.INFO_GATHERING &&
+                  chatHistory.length === 1 &&
+                  !loading && (
+                    <div className="mt-4 flex flex-wrap gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                      <button
+                        onClick={() => handleSuggestionClick("Plan a 4-day moderate trip to Maui from May 10th to May 14th 2026. I'm interested in snorkeling, hiking, and local seafood.")}
+                        className="px-4 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100 transition-colors shadow-sm"
+                      >
+                        🌴 Maui: 4-day adventure
+                      </button>
+                      <button
+                        onClick={() => handleSuggestionClick("Plan a 4-day relaxed trip to Switzerland from June 15th to June 19th 2026. I'm interested in scenic trains, chocolate, and mountain views.")}
+                        className="px-4 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100 transition-colors shadow-sm"
+                      >
+                        🏔️ Switzerland: 4-day escape
+                      </button>
+                    </div>
+                  )}
 
                 {/* Action Button */}
                 {renderActionButton()}
