@@ -165,35 +165,72 @@ class LLMClient {
     }
   }
 
-  async suggestTopActivities({ tripInfo }: { tripInfo: TripInfo }): Promise<{
-    success: boolean;
-    message: string;
-    activities: SuggestedActivity[];
-  }> {
+  async *suggestTopActivities({ tripInfo }: { tripInfo: TripInfo }): AsyncGenerator<
+    | { type: "message"; message: string }
+    | { type: "activity"; activity: SuggestedActivity }
+    | { type: "complete" }
+    | { type: "error"; message: string }
+  > {
     const messages = buildSuggestTopActivitiesMessages({ tripInfo });
+    console.log("Suggesting top activities with messages:", messages);
 
     try {
-      const completion = await this.openai.chat.completions.create({
+      const stream = await this.openai.chat.completions.create({
         messages,
         model: this.model,
         temperature: this.temperature,
-        response_format: { type: "json_object" },
+        stream: true,
+        // Note: No response_format since JSONL is not valid JSON
       });
 
-      const response = this._parseJsonResponse(completion);
+      let buffer = "";
+      let messageYielded = false;
 
-      return {
-        success: true,
-        message: response.message,
-        activities: response.activities || [],
-      };
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || "";
+        buffer += content;
+
+        // Process complete lines as they arrive
+        while (buffer.includes("\n")) {
+          const newlineIndex = buffer.indexOf("\n");
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+
+          if (line) {
+            try {
+              const parsed = JSON.parse(line);
+              if (!messageYielded && parsed.message && !parsed.id) {
+                // First line is the message
+                yield { type: "message", message: parsed.message };
+                messageYielded = true;
+              } else if (parsed.id) {
+                // Activity line
+                yield { type: "activity", activity: parsed as SuggestedActivity };
+              }
+            } catch {
+              // Not valid JSON yet, might be partial - skip this line
+              console.warn("Skipping invalid JSON line:", line);
+            }
+          }
+        }
+      }
+
+      // Process any remaining content in buffer
+      if (buffer.trim()) {
+        try {
+          const parsed = JSON.parse(buffer.trim());
+          if (parsed.id) {
+            yield { type: "activity", activity: parsed as SuggestedActivity };
+          }
+        } catch {
+          console.warn("Skipping final invalid JSON:", buffer);
+        }
+      }
+
+      yield { type: "complete" };
     } catch (error) {
       console.error("Error suggesting top activities:", error);
-      return {
-        success: false,
-        message: "Sorry, I couldn't generate activity suggestions. Please try again.",
-        activities: [],
-      };
+      yield { type: "error", message: "Sorry, I couldn't generate activity suggestions. Please try again." };
     }
   }
 

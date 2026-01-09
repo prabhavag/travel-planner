@@ -166,23 +166,40 @@ export default function PlannerPage() {
     }
   };
 
-  // Suggest top 15 activities
+  // Suggest top 10 activities (streaming)
   const handleSuggestActivities = async () => {
     if (!sessionId) return;
     setLoading(true);
+    setWorkflowState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
+    setSuggestedActivities([]); // Clear and prepare for streaming
+    setSelectedActivityIds([]);
 
     try {
-      const response = await suggestTopActivities(sessionId);
-      if (response.success) {
-        setWorkflowState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
-        setSuggestedActivities(response.suggestedActivities || []);
-        setSelectedActivityIds([]);
-        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
-      }
+      await suggestTopActivities(
+        sessionId,
+        (activity) => {
+          // Add each activity as it arrives
+          setSuggestedActivities((prev) => [...prev, activity]);
+        },
+        (message) => {
+          setChatHistory((prev) => [...prev, { role: "assistant", content: message }]);
+          setLoading(false);
+        },
+        (error) => {
+          console.error("Suggest activities error:", error);
+          alert("Failed to suggest activities. Please try again.");
+          setLoading(false);
+        },
+        (enrichedActivity) => {
+          // Update activity with enrichment data (coordinates, rating, place_id)
+          setSuggestedActivities((prev) =>
+            prev.map((a) => (a.id === enrichedActivity.id ? enrichedActivity : a))
+          );
+        }
+      );
     } catch (error) {
       console.error("Suggest activities error:", error);
       alert("Failed to suggest activities. Please try again.");
-    } finally {
       setLoading(false);
     }
   };

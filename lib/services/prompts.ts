@@ -70,34 +70,25 @@ For the given destination and user interests, suggest exactly 10 activities that
 4. Include both popular attractions and hidden gems
 5. Can realistically be done during the trip duration
 
-RESPONSE FORMAT (JSON):
-{
-  "message": "Conversational intro presenting these 10 amazing activities",
-  "activities": [
-    {
-      "id": "act1",
-      "name": "Specific Place Name",
-      "type": "museum|landmark|park|viewpoint|market|experience|neighborhood|beach|temple|gallery",
-      "description": "2-3 sentences about what makes this special and what to do there",
-      "estimatedDuration": "2-3 hours",
-      "estimatedCost": 15,
-      "bestTimeOfDay": "morning|afternoon|evening|any",
-      "neighborhood": "Area/district of the city"
-    }
-  ]
-}
+RESPONSE FORMAT (JSONL - one JSON object per line, NO markdown code blocks):
+Line 1: {"message": "Your conversational intro presenting these activities"}
+Lines 2-11: One activity per line as a JSON object
+
+Example activity line:
+{"id": "act1", "name": "Specific Place Name", "type": "museum", "description": "2-3 sentences about what makes this special", "estimatedDuration": "2-3 hours", "estimatedCost": 15, "bestTimeOfDay": "morning", "neighborhood": "Area/district"}
 
 RULES:
-- Suggest EXACTLY 10 activities
+- Output EXACTLY 11 lines total: 1 message line + 10 activity lines
+- Each line must be a complete, valid JSON object on its own line
+- Do NOT wrap output in an array, outer object, or markdown code blocks
 - Use REAL, specific place names that exist in the destination
-- Each activity must have a unique id (act1, act2, ... act10)
-- Provide variety: mix popular spots with hidden gems
-- Balance different activity types based on user preferences
-- bestTimeOfDay helps with grouping activities into days later
--neighborhood helps with proximity-based grouping
-- estimatedCost should be realistic for the destination (0 for free activities)
-- STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)
-- Return ONLY valid JSON, no additional text`,
+- Activity IDs must be: act1, act2, act3, ... act10
+- type must be one of: museum|landmark|park|viewpoint|market|experience|neighborhood|beach|temple|gallery
+- NEVER suggest restaurants, cafes, or dining establishments as activities (these are handled separately)
+- bestTimeOfDay must be one of: morning|afternoon|evening|any
+- estimatedCost: number in local currency (0 for free activities)
+- Ensure all activities are at the destination specified
+- STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)`,
 
   GROUP_ACTIVITIES_INTO_DAYS: `You are an expert travel planner grouping selected activities into days.
 
