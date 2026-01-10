@@ -8,13 +8,13 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
-  DollarSign,
   Star,
   MapPin,
   Utensils,
   ExternalLink,
 } from "lucide-react";
 import type { GroupedDay, SuggestedActivity, RestaurantSuggestion } from "@/lib/api-client";
+import { formatCost } from "@/lib/utils/currency";
 
 interface DayItineraryViewProps {
   groupedDays: GroupedDay[];
@@ -106,10 +106,9 @@ export function DayItineraryView({ groupedDays, tripInfo }: DayItineraryViewProp
             <Clock className="w-3 h-3" />
             <span>{activity.estimatedDuration}</span>
           </div>
-          {activity.estimatedCost !== null && activity.estimatedCost > 0 && (
+          {activity.estimatedCost != null && activity.estimatedCost > 0 && (
             <div className="flex items-center gap-1">
-              <DollarSign className="w-3 h-3" />
-              <span>${activity.estimatedCost}</span>
+              <span>{formatCost(activity.estimatedCost, activity.currency)}</span>
             </div>
           )}
           {activity.estimatedCost === 0 && (

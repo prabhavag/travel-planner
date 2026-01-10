@@ -223,6 +223,7 @@ export const SuggestedActivitySchema = z.object({
   description: z.string(),
   estimatedDuration: z.string(), // "2-3 hours"
   estimatedCost: z.number().nullable(),
+  currency: z.string().default("USD"), // Currency code (e.g., "USD", "EUR", "JPY")
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]),
   neighborhood: z.string().nullable().optional(),
   // Enriched from Places API:
@@ -230,6 +231,7 @@ export const SuggestedActivitySchema = z.object({
   rating: z.number().nullable().optional(),
   place_id: z.string().nullable().optional(),
   opening_hours: z.string().nullable().optional(),
+  photo_url: z.string().nullable().optional(),
 });
 
 export type SuggestedActivity = z.infer<typeof SuggestedActivitySchema>;

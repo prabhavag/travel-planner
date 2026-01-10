@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { getPlacesClient } from "@/lib/services/places-client";
 import type { RestaurantSuggestion, Coordinates } from "@/lib/models/travel-plan";
+import { getPriceRangeSymbol } from "@/lib/utils/currency";
 
 /**
  * Get centroid of coordinates
@@ -21,23 +22,28 @@ function getCentroid(coordinates: Coordinates[]): Coordinates {
 }
 
 /**
- * Convert price level to price range string
+ * Get currency from session activities
  */
-function getPriceRange(priceLevel: number | undefined): string {
-  switch (priceLevel) {
-    case 0:
-      return "Free";
-    case 1:
-      return "$";
-    case 2:
-      return "$$";
-    case 3:
-      return "$$$";
-    case 4:
-      return "$$$$";
-    default:
-      return "$$";
+function getCurrencyFromSession(session: ReturnType<typeof sessionStore.get>): string {
+  if (!session) return "USD";
+
+  // Try to get currency from grouped days activities
+  for (const day of session.groupedDays || []) {
+    for (const activity of day.activities || []) {
+      if (activity.currency) {
+        return activity.currency;
+      }
+    }
   }
+
+  // Fallback to suggested activities
+  for (const activity of session.suggestedActivities || []) {
+    if (activity.currency) {
+      return activity.currency;
+    }
+  }
+
+  return "USD";
 }
 
 export async function POST(request: NextRequest) {
@@ -100,6 +106,9 @@ export async function POST(request: NextRequest) {
     // Get centroid of all activities for restaurant search
     const centroid = getCentroid(allCoordinates);
 
+    // Get currency from session activities
+    const currency = getCurrencyFromSession(session);
+
     // Search for restaurants near the centroid
     const searchRadius = 3000; // 3km radius
     const places = await placesClient.searchPlaces(
@@ -109,19 +118,29 @@ export async function POST(request: NextRequest) {
       "restaurant"
     );
 
-    // Convert to RestaurantSuggestion format
-    const restaurants: RestaurantSuggestion[] = places.slice(0, 15).map((place, index) => ({
-      id: `rest${index + 1}`,
-      name: place.name,
-      cuisine: place.types.find((t) =>
-        ["italian_restaurant", "chinese_restaurant", "mexican_restaurant", "japanese_restaurant", "indian_restaurant", "thai_restaurant", "french_restaurant", "american_restaurant", "mediterranean_restaurant", "vietnamese_restaurant", "korean_restaurant", "greek_restaurant"].includes(t)
-      )?.replace("_restaurant", "").replace("_", " ") || null,
-      rating: place.rating || null,
-      priceRange: getPriceRange(place.price_level),
-      coordinates: place.location,
-      place_id: place.place_id,
-      vicinity: place.vicinity || null,
-    }));
+    // Convert to RestaurantSuggestion format with photos
+    const restaurants: RestaurantSuggestion[] = await Promise.all(
+      places.slice(0, 15).map(async (place, index) => {
+        // Fetch photo URL for each restaurant
+        let photoUrl: string | null = null;
+        if (place.place_id) {
+          photoUrl = await placesClient.getPlacePhotoUrlFromId(place.place_id, 200);
+        }
+        return {
+          id: `rest${index + 1}`,
+          name: place.name,
+          cuisine: place.types.find((t) =>
+            ["italian_restaurant", "chinese_restaurant", "mexican_restaurant", "japanese_restaurant", "indian_restaurant", "thai_restaurant", "french_restaurant", "american_restaurant", "mediterranean_restaurant", "vietnamese_restaurant", "korean_restaurant", "greek_restaurant"].includes(t)
+          )?.replace("_restaurant", "").replace("_", " ") || null,
+          rating: place.rating || null,
+          priceRange: getPriceRangeSymbol(place.price_level, currency),
+          coordinates: place.location,
+          place_id: place.place_id,
+          vicinity: place.vicinity || null,
+          photo_url: photoUrl,
+        };
+      })
+    );
 
     // Update session
     sessionStore.update(sessionId, {

@@ -4,8 +4,9 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, Clock, DollarSign, Star, MapPin } from "lucide-react";
+import { Check, Clock, Star, MapPin } from "lucide-react";
 import type { SuggestedActivity } from "@/lib/api-client";
+import { formatCost } from "@/lib/utils/currency";
 
 interface ActivitySelectionViewProps {
   activities: SuggestedActivity[];
@@ -134,10 +135,9 @@ export function ActivitySelectionView({
                     <Clock className="w-4 h-4" />
                     <span>{activity.estimatedDuration}</span>
                   </div>
-                  {activity.estimatedCost !== null && activity.estimatedCost > 0 && (
+                  {activity.estimatedCost != null && activity.estimatedCost > 0 && (
                     <div className="flex items-center gap-1">
-                      <DollarSign className="w-4 h-4" />
-                      <span>${activity.estimatedCost}</span>
+                      <span>{formatCost(activity.estimatedCost, activity.currency)}</span>
                     </div>
                   )}
                   {activity.estimatedCost === 0 && (

@@ -30,11 +30,17 @@ async function enrichSingleActivity(
 
       if (places && places.length > 0) {
         const place = places[0];
+        // Fetch photo URL if place_id is available
+        let photoUrl: string | null = null;
+        if (place.place_id) {
+          photoUrl = await placesClient.getPlacePhotoUrlFromId(place.place_id, 200);
+        }
         return {
           ...activity,
           coordinates: place.location,
           rating: place.rating || null,
           place_id: place.place_id,
+          photo_url: photoUrl,
         };
       }
     }

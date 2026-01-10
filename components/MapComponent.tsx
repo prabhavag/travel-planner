@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   GoogleMap,
   useJsApiLoader,
   Marker,
   InfoWindow,
   Polyline,
+  OverlayView,
 } from "@react-google-maps/api";
 import { getConfig } from "@/lib/api-client";
 import type { SuggestedActivity, GroupedDay } from "@/lib/api-client";
@@ -64,6 +65,7 @@ interface Location {
   desc: string;
   isSelected?: boolean;
   activityId?: string;
+  photoUrl?: string | null;
 }
 
 interface MapComponentProps {
@@ -101,90 +103,97 @@ export default function MapComponent({
     fetchConfig();
   }, []);
 
-  // Extract locations from various data sources
-  const locations: Location[] = [];
-  const selectedSet = new Set(selectedActivityIds || []);
+  // Extract locations from various data sources - memoized to prevent re-renders on hover
+  const locations = useMemo(() => {
+    const locs: Location[] = [];
+    const selectedSet = new Set(selectedActivityIds || []);
 
-  // Mode 1: Suggested activities (activity selection phase)
-  if (suggestedActivities && suggestedActivities.length > 0) {
-    suggestedActivities.forEach((activity, actIndex) => {
-      if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
-        const isSelected = selectedSet.has(activity.id);
-        locations.push({
-          name: activity.name,
-          lat: activity.coordinates.lat,
-          lng: activity.coordinates.lng,
-          slot: activity.bestTimeOfDay || "any",
-          slotIndex: 0,
-          actIndex: actIndex,
-          day: 0, // No day assigned yet
-          desc: activity.type,
-          isSelected: isSelected,
-          activityId: activity.id,
-        });
-      }
-    });
-  }
-  // Mode 2: Grouped days (day grouping and itinerary phases)
-  else if (groupedDays && groupedDays.length > 0) {
-    groupedDays.forEach((day) => {
-      day.activities.forEach((activity, actIndex) => {
+    // Mode 1: Suggested activities (activity selection phase)
+    if (suggestedActivities && suggestedActivities.length > 0) {
+      suggestedActivities.forEach((activity, actIndex) => {
         if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
-          locations.push({
+          const isSelected = selectedSet.has(activity.id);
+          locs.push({
             name: activity.name,
             lat: activity.coordinates.lat,
             lng: activity.coordinates.lng,
             slot: activity.bestTimeOfDay || "any",
-            slotIndex: actIndex,
+            slotIndex: 0,
             actIndex: actIndex,
-            day: day.dayNumber,
-            desc: `Day ${day.dayNumber} - ${activity.type}`,
+            day: 0, // No day assigned yet
+            desc: activity.type,
+            isSelected: isSelected,
             activityId: activity.id,
+            photoUrl: activity.photo_url || null,
           });
         }
       });
-      // Also add restaurants if present
-      day.restaurants.forEach((restaurant, restIndex) => {
-        if (restaurant.coordinates && restaurant.coordinates.lat && restaurant.coordinates.lng) {
-          locations.push({
-            name: restaurant.name,
-            lat: restaurant.coordinates.lat,
-            lng: restaurant.coordinates.lng,
-            slot: "restaurant",
-            slotIndex: 100 + restIndex, // Put restaurants after activities
-            actIndex: restIndex,
-            day: day.dayNumber,
-            desc: `Day ${day.dayNumber} - Restaurant`,
-          });
-        }
+    }
+    // Mode 2: Grouped days (day grouping and itinerary phases)
+    else if (groupedDays && groupedDays.length > 0) {
+      groupedDays.forEach((day) => {
+        day.activities.forEach((activity, actIndex) => {
+          if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
+            locs.push({
+              name: activity.name,
+              lat: activity.coordinates.lat,
+              lng: activity.coordinates.lng,
+              slot: activity.bestTimeOfDay || "any",
+              slotIndex: actIndex,
+              actIndex: actIndex,
+              day: day.dayNumber,
+              desc: `Day ${day.dayNumber} - ${activity.type}`,
+              activityId: activity.id,
+              photoUrl: activity.photo_url || null,
+            });
+          }
+        });
+        // Also add restaurants if present
+        day.restaurants.forEach((restaurant, restIndex) => {
+          if (restaurant.coordinates && restaurant.coordinates.lat && restaurant.coordinates.lng) {
+            locs.push({
+              name: restaurant.name,
+              lat: restaurant.coordinates.lat,
+              lng: restaurant.coordinates.lng,
+              slot: "restaurant",
+              slotIndex: 100 + restIndex, // Put restaurants after activities
+              actIndex: restIndex,
+              day: day.dayNumber,
+              desc: `Day ${day.dayNumber} - Restaurant`,
+              photoUrl: restaurant.photo_url || null,
+            });
+          }
+        });
       });
-    });
-  }
-  // Mode 3: Legacy itinerary format
-  else if (itinerary) {
-    itinerary.forEach((day, dayIndex) => {
-      const dayNumber = day.day_number || day.dayNumber || dayIndex + 1;
-      (["morning", "afternoon", "evening"] as const).forEach((slot, slotIndex) => {
-        const activities = day[slot];
-        if (activities) {
-          activities.forEach((act, actIndex) => {
-            if (act.coordinates && act.coordinates.lat && act.coordinates.lng) {
-              locations.push({
-                name: act.name,
-                lat: act.coordinates.lat,
-                lng: act.coordinates.lng,
-                slot: slot,
-                slotIndex: slotIndex,
-                actIndex: actIndex,
-                day: dayNumber,
-                desc: `Day ${dayNumber} - ${slot}`,
-              });
-            }
-          });
-        }
+    }
+    // Mode 3: Legacy itinerary format
+    else if (itinerary) {
+      itinerary.forEach((day, dayIndex) => {
+        const dayNumber = day.day_number || day.dayNumber || dayIndex + 1;
+        (["morning", "afternoon", "evening"] as const).forEach((slot, slotIndex) => {
+          const activities = day[slot];
+          if (activities) {
+            activities.forEach((act, actIndex) => {
+              if (act.coordinates && act.coordinates.lat && act.coordinates.lng) {
+                locs.push({
+                  name: act.name,
+                  lat: act.coordinates.lat,
+                  lng: act.coordinates.lng,
+                  slot: slot,
+                  slotIndex: slotIndex,
+                  actIndex: actIndex,
+                  day: dayNumber,
+                  desc: `Day ${dayNumber} - ${slot}`,
+                });
+              }
+            });
+          }
+        });
       });
-    });
-  }
+    }
+
+    return locs;
+  }, [suggestedActivities, selectedActivityIds, groupedDays, itinerary]);
 
   if (loading) {
     return (
@@ -243,6 +252,47 @@ interface GoogleMapContentProps {
   hoveredActivityId?: string | null;
 }
 
+// Hover tooltip component for showing activity/restaurant info
+function HoverTooltip({ location }: { location: Location }) {
+  return (
+    <OverlayView
+      position={{ lat: location.lat, lng: location.lng }}
+      mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+      getPixelPositionOffset={(width, height) => ({
+        x: -(width / 2),
+        y: -height - 45, // Position above the marker
+      })}
+    >
+      <div className="bg-white rounded-lg shadow-lg p-2 pointer-events-none min-w-[160px] max-w-[200px] border border-gray-200">
+        {/* Photo thumbnail */}
+        {location.photoUrl ? (
+          <div className="w-full h-24 mb-2 rounded overflow-hidden bg-gray-100">
+            <img
+              src={location.photoUrl}
+              alt={location.name}
+              className="w-full h-full object-cover"
+              loading="lazy"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
+            />
+          </div>
+        ) : (
+          <div className="w-full h-24 mb-2 rounded bg-gray-100 flex items-center justify-center">
+            <span className="text-gray-400 text-xs">No photo</span>
+          </div>
+        )}
+
+        {/* Activity/Restaurant name */}
+        <p className="font-medium text-sm text-gray-900 line-clamp-2">{location.name}</p>
+
+        {/* Type/Description */}
+        <p className="text-xs text-gray-500 mt-0.5">{location.desc}</p>
+      </div>
+    </OverlayView>
+  );
+}
+
 function GoogleMapContent({
   apiKey,
   locations,
@@ -253,8 +303,13 @@ function GoogleMapContent({
   hoveredActivityId,
 }: GoogleMapContentProps) {
   const [selectedMarker, setSelectedMarker] = useState<Location | null>(null);
+  const [hoveredMarker, setHoveredMarker] = useState<Location | null>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
   const [destinationCenter, setDestinationCenter] = useState<Coordinates | null>(null);
+
+  // Refs to prevent map from resetting position on every re-render
+  const boundsSetRef = useRef(false);
+  const prevLocationsCountRef = useRef(locations.length);
 
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: apiKey,
@@ -312,14 +367,23 @@ function GoogleMapContent({
     [locations]
   );
 
-  // Update bounds when itinerary changes
+  // Reset bounds tracking when locations count changes (new data loaded)
   useEffect(() => {
-    if (map && locations.length > 0 && window.google) {
+    if (locations.length !== prevLocationsCountRef.current) {
+      boundsSetRef.current = false;
+      prevLocationsCountRef.current = locations.length;
+    }
+  }, [locations.length]);
+
+  // Update bounds only on initial load or when locations change significantly
+  useEffect(() => {
+    if (map && locations.length > 0 && window.google && !boundsSetRef.current) {
       const bounds = new window.google.maps.LatLngBounds();
       locations.forEach((loc) => bounds.extend({ lat: loc.lat, lng: loc.lng }));
       map.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 });
+      boundsSetRef.current = true;
     }
-  }, [map, itinerary, locations]);
+  }, [map, locations]);
 
   // Get marker icon based on day or selection state
   const getMarkerIcon = (loc: Location): google.maps.Symbol => {
@@ -430,8 +494,13 @@ function GoogleMapContent({
               setSelectedMarker(loc);
             }
           }}
+          onMouseOver={() => setHoveredMarker(loc)}
+          onMouseOut={() => setHoveredMarker(null)}
         />
       ))}
+
+      {/* Hover tooltip */}
+      {hoveredMarker && <HoverTooltip location={hoveredMarker} />}
 
       {selectedMarker && (
         <InfoWindow

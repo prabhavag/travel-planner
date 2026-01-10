@@ -75,7 +75,7 @@ Line 1: {"message": "Your conversational intro presenting these activities"}
 Lines 2-11: One activity per line as a JSON object
 
 Example activity line:
-{"id": "act1", "name": "Specific Place Name", "type": "museum", "description": "2-3 sentences about what makes this special", "estimatedDuration": "2-3 hours", "estimatedCost": 15, "bestTimeOfDay": "morning", "neighborhood": "Area/district"}
+{"id": "act1", "name": "Specific Place Name", "type": "museum", "description": "2-3 sentences about what makes this special", "estimatedDuration": "2-3 hours", "estimatedCost": 1500, "currency": "JPY", "bestTimeOfDay": "morning", "neighborhood": "Area/district"}
 
 RULES:
 - Output EXACTLY 11 lines total: 1 message line + 10 activity lines
@@ -86,7 +86,9 @@ RULES:
 - type must be one of: museum|landmark|park|viewpoint|market|experience|neighborhood|beach|temple|gallery
 - NEVER suggest restaurants, cafes, or dining establishments as activities (these are handled separately)
 - bestTimeOfDay must be one of: morning|afternoon|evening|any
-- estimatedCost: number in local currency (0 for free activities)
+- estimatedCost: number in the destination's LOCAL CURRENCY (0 for free activities)
+- currency: the ISO 4217 currency code for the destination (e.g., "USD" for USA, "EUR" for Europe, "JPY" for Japan, "GBP" for UK, "THB" for Thailand, "INR" for India)
+- IMPORTANT: Always use the local currency of the destination, NOT USD
 - Ensure all activities are at the destination specified
 - STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)`,
 
