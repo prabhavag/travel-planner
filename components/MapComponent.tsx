@@ -12,29 +12,15 @@ import {
 import { getConfig } from "@/lib/api-client";
 import type { SuggestedActivity, GroupedDay } from "@/lib/api-client";
 import { Loader2 } from "lucide-react";
+import { DAY_COLORS, getDayColor, SELECTED_COLOR, UNSELECTED_COLOR } from "@/lib/constants";
 
 const containerStyle = {
   width: "100%",
   height: "100%",
 };
 
-// Color palette for different days
-const DAY_COLORS = [
-  "#E53935", // Red
-  "#1E88E5", // Blue
-  "#43A047", // Green
-  "#FB8C00", // Orange
-  "#8E24AA", // Purple
-  "#00ACC1", // Cyan
-  "#FFB300", // Amber
-  "#5E35B1", // Deep Purple
-  "#D81B60", // Pink
-  "#00897B", // Teal
-];
-
-// Unselected activity color
-const UNSELECTED_COLOR = "#9CA3AF";
-const SELECTED_COLOR = "#3B82F6";
+// Container style deleted as we are using shared ones if needed, but actually keeping local is fine if not exported.
+// Wait, I should remove the local definitions that are now in constants.ts
 
 interface Coordinates {
   lat: number;
@@ -347,12 +333,7 @@ function GoogleMapContent({
     });
   });
 
-  // Get color for a specific day
-  const getDayColor = (dayNumber: number) => {
-    const num = Number(dayNumber);
-    if (isNaN(num) || num < 1) return DAY_COLORS[0];
-    return DAY_COLORS[(num - 1) % DAY_COLORS.length];
-  };
+  // getDayColor removed as it is now imported
 
   // Fit bounds when map loads
   const onLoad = useCallback(
@@ -387,9 +368,10 @@ function GoogleMapContent({
 
   // Get marker icon based on day or selection state
   const getMarkerIcon = (loc: Location): google.maps.Symbol => {
+    const isHovered = loc.activityId === hoveredActivityId;
+
     // In activity selection mode, use pin shapes
     if (isActivitySelectionMode) {
-      const isHovered = loc.activityId === hoveredActivityId;
       return {
         path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
         fillColor: loc.isSelected ? SELECTED_COLOR : UNSELECTED_COLOR,
@@ -401,14 +383,17 @@ function GoogleMapContent({
         labelOrigin: new window.google.maps.Point(12, 8),
       };
     }
-    // Otherwise use day-based circles
+
+    // Otherwise use day-based pins (not just circles anymore, for consistency with numbers)
     return {
-      path: window.google.maps.SymbolPath.CIRCLE,
+      path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
       fillColor: getDayColor(loc.day),
       fillOpacity: 1,
-      strokeColor: "#ffffff",
-      strokeWeight: 2,
-      scale: 10,
+      strokeColor: isHovered ? "#3B82F6" : "#ffffff",
+      strokeWeight: isHovered ? 2 : 1,
+      scale: isHovered ? 1.8 : 1.5,
+      anchor: new window.google.maps.Point(12, 21),
+      labelOrigin: new window.google.maps.Point(12, 8),
     };
   };
 
@@ -478,14 +463,12 @@ function GoogleMapContent({
           position={{ lat: loc.lat, lng: loc.lng }}
           icon={getMarkerIcon(loc)}
           label={
-            isActivitySelectionMode
-              ? {
-                text: (loc.actIndex + 1).toString(),
-                color: "white",
-                fontWeight: "bold",
-                fontSize: loc.activityId === hoveredActivityId ? "14px" : "11px",
-              }
-              : undefined
+            {
+              text: (loc.actIndex + 1).toString(),
+              color: "white",
+              fontWeight: "bold",
+              fontSize: (loc.activityId === hoveredActivityId || !isActivitySelectionMode) ? "11px" : "10px",
+            }
           }
           onClick={() => {
             if (isActivitySelectionMode && onActivityClick && loc.activityId) {

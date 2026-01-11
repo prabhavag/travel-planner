@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Clock, ChevronRight, Star, MapPin } from "lucide-react";
 import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
+import { getDayBadgeColors, getDayColor } from "@/lib/constants";
 
 interface DayGroupingViewProps {
   groupedDays: GroupedDay[];
@@ -71,21 +72,24 @@ export function DayGroupingView({
   const ActivityCard = ({
     activity,
     dayNumber,
+    index,
   }: {
     activity: SuggestedActivity;
     dayNumber: number;
+    index: number;
   }) => {
     const isMoving = movingActivity?.id === activity.id;
 
     return (
       <div
-        className={`p-3 bg-white rounded-lg border ${
-          isMoving ? "ring-2 ring-primary bg-primary/5" : "hover:shadow-sm"
-        }`}
+        className={`p-3 bg-white rounded-lg border ${isMoving ? "ring-2 ring-primary bg-primary/5" : "hover:shadow-sm"
+          }`}
+        style={{ borderLeft: `4px solid ${getDayColor(dayNumber)}` }}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
+              <span className="text-gray-400 font-mono text-xs">#{index + 1}</span>
               <span className="font-medium text-sm truncate">{activity.name}</span>
               <Badge variant="secondary" className={`${getActivityTypeColor(activity.type)} text-xs`}>
                 {activity.type}
@@ -162,7 +166,7 @@ export function DayGroupingView({
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-base flex items-center gap-2">
-                    <span className="bg-primary text-white rounded-full w-7 h-7 flex items-center justify-center text-sm">
+                    <span className={`${getDayBadgeColors(day.dayNumber)} rounded-full w-7 h-7 flex items-center justify-center text-sm`}>
                       {day.dayNumber}
                     </span>
                     <span>{day.theme}</span>
@@ -181,11 +185,12 @@ export function DayGroupingView({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {day.activities.map((activity) => (
+                  {day.activities.map((activity, index) => (
                     <ActivityCard
                       key={activity.id}
                       activity={activity}
                       dayNumber={day.dayNumber}
+                      index={index}
                     />
                   ))}
                 </div>

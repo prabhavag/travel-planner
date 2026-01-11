@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { GroupedDay, SuggestedActivity, RestaurantSuggestion } from "@/lib/api-client";
 import { formatCost } from "@/lib/utils/currency";
+import { getDayBadgeColors, getDayColor } from "@/lib/constants";
 
 interface DayItineraryViewProps {
   groupedDays: GroupedDay[];
@@ -91,10 +92,14 @@ export function DayItineraryView({ groupedDays, tripInfo }: DayItineraryViewProp
     }
   };
 
-  const ActivityItem = ({ activity }: { activity: SuggestedActivity }) => (
-    <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+  const ActivityItem = ({ activity, index, dayNumber }: { activity: SuggestedActivity, index: number, dayNumber: number }) => (
+    <div
+      className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border-l-4"
+      style={{ borderLeftColor: getDayColor(dayNumber) }}
+    >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-gray-400 font-mono text-xs">#{index + 1}</span>
           <h4 className="font-medium text-sm">{activity.name}</h4>
           <Badge variant="secondary" className={`${getActivityTypeColor(activity.type)} text-xs`}>
             {activity.type}
@@ -206,7 +211,7 @@ export function DayItineraryView({ groupedDays, tripInfo }: DayItineraryViewProp
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="bg-primary text-white rounded-full w-8 h-8 flex items-center justify-center font-semibold">
+                  <div className={`${getDayBadgeColors(day.dayNumber)} rounded-full w-8 h-8 flex items-center justify-center font-semibold`}>
                     {day.dayNumber}
                   </div>
                   <div>
@@ -233,8 +238,8 @@ export function DayItineraryView({ groupedDays, tripInfo }: DayItineraryViewProp
             </CardHeader>
             {isExpanded && (
               <CardContent className="pt-0 space-y-3">
-                {day.activities.map((activity) => (
-                  <ActivityItem key={activity.id} activity={activity} />
+                {day.activities.map((activity, index) => (
+                  <ActivityItem key={activity.id} activity={activity} index={index} dayNumber={day.dayNumber} />
                 ))}
                 {day.restaurants.length > 0 && (
                   <>
