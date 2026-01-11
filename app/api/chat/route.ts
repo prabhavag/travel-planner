@@ -81,11 +81,12 @@ export async function POST(request: NextRequest) {
         sessionStore.update(sessionId, { tripInfo: result.tripInfo });
       }
 
-      // Merge new activities with existing
+      // Merge or replace activities
       if (result.newActivities && result.newActivities.length > 0) {
-        const existingActivities = session.suggestedActivities || [];
+        const existingActivities = result.replaceActivities ? [] : (session.suggestedActivities || []);
         sessionStore.update(sessionId, {
           suggestedActivities: [...existingActivities, ...result.newActivities],
+          selectedActivityIds: result.replaceActivities ? [] : (session.selectedActivityIds || []),
         });
       }
 

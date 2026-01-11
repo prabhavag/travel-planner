@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, Clock, Star, MapPin } from "lucide-react";
+import { Check, Clock, Star, MapPin, RefreshCw } from "lucide-react";
 import type { SuggestedActivity } from "@/lib/api-client";
 import { formatCost } from "@/lib/utils/currency";
 
@@ -13,6 +13,7 @@ interface ActivitySelectionViewProps {
   selectedIds: string[];
   onSelectionChange: (selectedIds: string[]) => void;
   onConfirm: () => void;
+  onRegenerate: () => void;
   onHoverActivity?: (id: string | null) => void;
   isLoading?: boolean;
 }
@@ -22,6 +23,7 @@ export function ActivitySelectionView({
   selectedIds,
   onSelectionChange,
   onConfirm,
+  onRegenerate,
   onHoverActivity,
   isLoading = false,
 }: ActivitySelectionViewProps) {
@@ -81,17 +83,29 @@ export function ActivitySelectionView({
             {localSelectedIds.size} of {activities.length} selected
           </p>
         </div>
-        <Button
-          onClick={handleConfirm}
-          disabled={localSelectedIds.size === 0 || isLoading}
-          className="bg-primary text-white"
-        >
-          {isLoading ? (
-            "Organizing..."
-          ) : (
-            `Continue with ${localSelectedIds.size} ${localSelectedIds.size === 1 ? "activity" : "activities"}`
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRegenerate}
+            disabled={isLoading}
+            className="text-gray-500"
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+            Regenerate
+          </Button>
+          <Button
+            onClick={handleConfirm}
+            disabled={localSelectedIds.size === 0 || isLoading}
+            className="bg-primary text-white"
+          >
+            {isLoading ? (
+              "Organizing..."
+            ) : (
+              `Continue with ${localSelectedIds.size} ${localSelectedIds.size === 1 ? "activity" : "activities"}`
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Activity grid */}

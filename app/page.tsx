@@ -390,6 +390,12 @@ export default function PlannerPage() {
     }
   };
 
+  const handleRegenerateActivities = async () => {
+    if (!sessionId) return;
+    setSuggestedActivities([]);
+    handleSuggestActivities();
+  };
+
   // Update preferences
   const handleUpdatePreferences = async (newPreferences: string[]) => {
     if (!sessionId || !tripInfo) return;
@@ -547,6 +553,7 @@ export default function PlannerPage() {
                       selectedIds={selectedActivityIds}
                       onSelectionChange={handleActivitySelectionChange}
                       onConfirm={handleConfirmActivitySelection}
+                      onRegenerate={handleRegenerateActivities}
                       onHoverActivity={setHoveredActivityId}
                       isLoading={loading}
                     />

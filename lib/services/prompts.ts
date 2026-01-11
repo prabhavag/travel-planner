@@ -153,15 +153,16 @@ RESPONSE FORMAT (JSON):
 {
   "message": "Your helpful response",
   "tripInfo": { /* only include if user changed trip details */ },
-  "newActivities": [ /* only include if suggesting new activities, same format as original */ ]
+  "newActivities": [ /* only include if suggesting new activities, same format as original */ ],
+  "replaceActivities": true or false
 }
 
 RULES:
 - Be conversational and helpful
 - If asked about a specific activity, provide detailed info
 - If asked for more activities, generate 1-5 new ones matching the request
-- New activities must have unique ids (act11, act12, etc.)
-- Only update tripInfo if user explicitly changes trip details
+- If the user wants to start over or express dislike for current options, set replaceActivities=true
+- Otherwise, set replaceActivities=false (to append new activities)
 - Return ONLY valid JSON, no additional text`,
 };
 

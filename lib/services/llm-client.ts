@@ -318,6 +318,7 @@ class LLMClient {
     message: string;
     tripInfo: TripInfo | null;
     newActivities: SuggestedActivity[];
+    replaceActivities: boolean;
   }> {
     const messages = buildSuggestActivitiesChatMessages({
       tripInfo,
@@ -337,11 +338,27 @@ class LLMClient {
 
       const response = this._parseJsonResponse(completion);
 
+      // Expected JSON response format:
+      // {
+      //   "message": "Your helpful response",
+      //   "tripInfo": { /* only include if user changed trip details */ },
+      //   "newActivities": [ /* only include if suggesting new activities, same format as original */ ],
+      //   "replaceActivities": true or false
+      // }
+      //
+      // RULES:
+      // - Be conversational and helpful
+      // - If asked about a specific activity, provide detailed info
+      // - If asked for more activities, generate 1-5 new ones matching the request
+      // - If the user wants to start over or express dislike for current options, set replaceActivities=true
+      // - Otherwise, set replaceActivities=false (to append new activities)
+
       return {
         success: true,
         message: response.message,
         tripInfo: response.tripInfo || null,
         newActivities: response.newActivities || [],
+        replaceActivities: response.replaceActivities || false,
       };
     } catch (error) {
       console.error("Error in chatDuringSuggestActivities:", error);
@@ -350,6 +367,7 @@ class LLMClient {
         message: "Sorry, I had trouble processing that. Please try again.",
         tripInfo: null,
         newActivities: [],
+        replaceActivities: false, // Default to false on error
       };
     }
   }

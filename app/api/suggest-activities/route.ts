@@ -88,11 +88,17 @@ export async function POST(request: NextRequest) {
   }
 
   // Validate state - should be called after INFO_GATHERING is complete
-  if (session.workflowState !== WORKFLOW_STATES.INFO_GATHERING) {
+  // Validate state - allow from INFO_GATHERING, SUGGEST_ACTIVITIES, or SELECT_ACTIVITIES
+  const allowedStates = [
+    WORKFLOW_STATES.INFO_GATHERING as string,
+    WORKFLOW_STATES.SUGGEST_ACTIVITIES as string,
+    WORKFLOW_STATES.SELECT_ACTIVITIES as string
+  ];
+  if (!allowedStates.includes(session.workflowState as string)) {
     return NextResponse.json(
       {
         success: false,
-        message: "Can only suggest activities from INFO_GATHERING state",
+        message: `Can only suggest activities from states: ${allowedStates.join(", ")}`,
       },
       { status: 400 }
     );
