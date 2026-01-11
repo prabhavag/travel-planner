@@ -42,12 +42,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate state
-    if (session.workflowState !== WORKFLOW_STATES.SELECT_ACTIVITIES) {
+    // Validate state - allow from SELECT_ACTIVITIES, or GROUP_DAYS/DAY_ITINERARY for re-org
+    const allowedStates = [
+      WORKFLOW_STATES.SELECT_ACTIVITIES as string,
+      WORKFLOW_STATES.GROUP_DAYS as string,
+      WORKFLOW_STATES.DAY_ITINERARY as string
+    ];
+    if (!allowedStates.includes(session.workflowState as string)) {
       return NextResponse.json(
         {
           success: false,
-          message: "Can only group days from SELECT_ACTIVITIES state",
+          message: `Can only group days from states: ${allowedStates.join(", ")}`,
         },
         { status: 400 }
       );

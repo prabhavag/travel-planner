@@ -28,14 +28,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate state
-    if (
-      session.workflowState !== WORKFLOW_STATES.SUGGEST_ACTIVITIES &&
-      session.workflowState !== WORKFLOW_STATES.SELECT_ACTIVITIES
-    ) {
+    const allowedStates = [
+      WORKFLOW_STATES.SUGGEST_ACTIVITIES as string,
+      WORKFLOW_STATES.SELECT_ACTIVITIES as string,
+      WORKFLOW_STATES.GROUP_DAYS as string,
+      WORKFLOW_STATES.DAY_ITINERARY as string
+    ];
+    if (!allowedStates.includes(session.workflowState as string)) {
       return NextResponse.json(
         {
           success: false,
-          message: "Can only select activities from SUGGEST_ACTIVITIES or SELECT_ACTIVITIES state",
+          message: `Can only select activities from states: ${allowedStates.join(", ")}`,
         },
         { status: 400 }
       );

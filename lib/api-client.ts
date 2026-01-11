@@ -476,3 +476,14 @@ export async function updateTripInfo(
   });
 }
 
+// Update workflow state manually (e.g. for navigation)
+export async function updateWorkflowState(
+  sessionId: string,
+  workflowState: string
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/session/${sessionId}/update-state`, {
+    method: "POST",
+    body: JSON.stringify({ workflowState }),
+  });
+}
+

@@ -23,6 +23,7 @@ import {
   getRestaurantSuggestions,
   setMealPreferences,
   updateTripInfo,
+  updateWorkflowState,
   type TripInfo,
   type SuggestedActivity,
   type GroupedDay,
@@ -30,7 +31,7 @@ import {
   type DayGroup,
 } from "@/lib/api-client";
 import { InterestsPreferencesView } from "@/components/InterestsPreferencesView";
-import { MessageSquare, Heart } from "lucide-react";
+import { MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 
 
 // Workflow states
@@ -44,6 +45,16 @@ const WORKFLOW_STATES = {
   REVIEW: "REVIEW",
   FINALIZE: "FINALIZE",
 };
+
+const WORKFLOW_ORDER = [
+  WORKFLOW_STATES.INFO_GATHERING,
+  WORKFLOW_STATES.SUGGEST_ACTIVITIES,
+  WORKFLOW_STATES.GROUP_DAYS,
+  WORKFLOW_STATES.DAY_ITINERARY,
+  WORKFLOW_STATES.MEAL_PREFERENCES,
+  WORKFLOW_STATES.REVIEW,
+  WORKFLOW_STATES.FINALIZE,
+];
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -65,6 +76,8 @@ export default function PlannerPage() {
   const [groupedDays, setGroupedDays] = useState<GroupedDay[]>([]);
   const [restaurantSuggestions, setRestaurantSuggestions] = useState<RestaurantSuggestion[]>([]);
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState<string[]>([]);
+  const [maxReachedState, setMaxReachedState] = useState(WORKFLOW_STATES.INFO_GATHERING);
+  const [lastGroupedActivityIds, setLastGroupedActivityIds] = useState<string[]>([]);
 
   // UI state
   const [loading, setLoading] = useState(false);
@@ -127,6 +140,10 @@ export default function PlannerPage() {
         if (response.tripInfo) setTripInfo(response.tripInfo);
         if (response.canProceed !== undefined) setCanProceed(response.canProceed);
         if (response.suggestedActivities) setSuggestedActivities(response.suggestedActivities);
+        if (response.workflowState) {
+          setWorkflowState(response.workflowState);
+          updateMaxReachedState(response.workflowState);
+        }
       }
     } catch (error) {
       console.error("Chat error:", error);
@@ -184,6 +201,7 @@ export default function PlannerPage() {
         (message) => {
           setChatHistory((prev) => [...prev, { role: "assistant", content: message }]);
           setLoading(false);
+          updateMaxReachedState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
         },
         (error) => {
           console.error("Suggest activities error:", error);
@@ -225,8 +243,10 @@ export default function PlannerPage() {
       const groupResponse = await groupDays(sessionId);
       if (groupResponse.success) {
         setWorkflowState(WORKFLOW_STATES.GROUP_DAYS);
+        updateMaxReachedState(WORKFLOW_STATES.GROUP_DAYS);
         setDayGroups(groupResponse.dayGroups || []);
         setGroupedDays(groupResponse.groupedDays || []);
+        setLastGroupedActivityIds([...selectedActivityIds]);
         setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
       }
     } catch (error) {
@@ -265,6 +285,7 @@ export default function PlannerPage() {
       const response = await confirmDayGrouping(sessionId);
       if (response.success) {
         setWorkflowState(WORKFLOW_STATES.DAY_ITINERARY);
+        updateMaxReachedState(WORKFLOW_STATES.DAY_ITINERARY);
         setGroupedDays(response.groupedDays || []);
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
       }
@@ -285,6 +306,7 @@ export default function PlannerPage() {
       const response = await getRestaurantSuggestions(sessionId);
       if (response.success) {
         setWorkflowState(WORKFLOW_STATES.MEAL_PREFERENCES);
+        updateMaxReachedState(WORKFLOW_STATES.MEAL_PREFERENCES);
         setRestaurantSuggestions(response.restaurantSuggestions || []);
         setSelectedRestaurantIds([]);
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
@@ -315,6 +337,7 @@ export default function PlannerPage() {
       );
       if (response.success) {
         setWorkflowState(WORKFLOW_STATES.REVIEW);
+        updateMaxReachedState(WORKFLOW_STATES.REVIEW);
         setGroupedDays(response.groupedDays || []);
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
       }
@@ -335,6 +358,7 @@ export default function PlannerPage() {
       const response = await setMealPreferences(sessionId, false);
       if (response.success) {
         setWorkflowState(WORKFLOW_STATES.REVIEW);
+        updateMaxReachedState(WORKFLOW_STATES.REVIEW);
         setGroupedDays(response.groupedDays || []);
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
       }
@@ -355,6 +379,7 @@ export default function PlannerPage() {
       const response = await finalize(sessionId);
       if (response.success) {
         setWorkflowState(WORKFLOW_STATES.FINALIZE);
+        updateMaxReachedState(WORKFLOW_STATES.FINALIZE);
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
       }
     } catch (error) {
@@ -384,6 +409,49 @@ export default function PlannerPage() {
       alert("Failed to save preferences. Please try again.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const updateMaxReachedState = (state: string) => {
+    setMaxReachedState((currentMax) => {
+      const currentIndex = WORKFLOW_ORDER.indexOf(state);
+      const maxIndex = WORKFLOW_ORDER.indexOf(currentMax);
+      return currentIndex > maxIndex ? state : currentMax;
+    });
+  };
+
+  const handleGoBack = async () => {
+    if (!sessionId) return;
+    const currentIndex = WORKFLOW_ORDER.indexOf(workflowState);
+    if (currentIndex > 0) {
+      const prevState = WORKFLOW_ORDER[currentIndex - 1];
+      setLoading(true);
+      try {
+        await updateWorkflowState(sessionId, prevState);
+        setWorkflowState(prevState);
+      } catch (error) {
+        console.error("Go back error:", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleGoForward = async () => {
+    if (!sessionId) return;
+    const currentIndex = WORKFLOW_ORDER.indexOf(workflowState);
+    const maxIndex = WORKFLOW_ORDER.indexOf(maxReachedState);
+    if (currentIndex < maxIndex) {
+      const nextState = WORKFLOW_ORDER[currentIndex + 1];
+      setLoading(true);
+      try {
+        await updateWorkflowState(sessionId, nextState);
+        setWorkflowState(nextState);
+      } catch (error) {
+        console.error("Go forward error:", error);
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -424,59 +492,108 @@ export default function PlannerPage() {
 
   // Render left panel content based on state
   const renderLeftPanelContent = () => {
-    switch (workflowState) {
-      case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
-      case WORKFLOW_STATES.SELECT_ACTIVITIES:
-        return (
-          <div className="p-4">
-            <ActivitySelectionView
-              activities={suggestedActivities}
-              selectedIds={selectedActivityIds}
-              onSelectionChange={handleActivitySelectionChange}
-              onConfirm={handleConfirmActivitySelection}
-              onHoverActivity={setHoveredActivityId}
-              isLoading={loading}
-            />
-          </div>
-        );
+    const currentIndex = WORKFLOW_ORDER.indexOf(workflowState);
+    const maxIndex = WORKFLOW_ORDER.indexOf(maxReachedState);
+    const canGoBack = currentIndex > 1; // Don't go back to info gathering via buttons
+    const canGoForward = currentIndex < maxIndex;
 
-      case WORKFLOW_STATES.GROUP_DAYS:
-        return (
-          <div className="p-4">
-            <DayGroupingView
-              groupedDays={groupedDays}
-              onMoveActivity={handleMoveActivity}
-              onConfirm={handleConfirmDayGrouping}
-              isLoading={loading}
-            />
-          </div>
-        );
+    const selectionsChanged =
+      (workflowState === WORKFLOW_STATES.GROUP_DAYS || workflowState === WORKFLOW_STATES.DAY_ITINERARY) &&
+      (selectedActivityIds.length !== lastGroupedActivityIds.length ||
+        !selectedActivityIds.every(id => lastGroupedActivityIds.includes(id)));
 
-      case WORKFLOW_STATES.MEAL_PREFERENCES:
-        return (
-          <div className="p-4">
-            <RestaurantSelectionView
-              restaurants={restaurantSuggestions}
-              selectedIds={selectedRestaurantIds}
-              onSelectionChange={handleRestaurantSelectionChange}
-              onConfirm={handleMealPreferences}
-              isLoading={loading}
-            />
+    return (
+      <div className="flex flex-col h-full bg-gray-100">
+        {/* Navigation Bar */}
+        {(canGoBack || canGoForward || selectionsChanged) && (
+          <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200 sticky top-0 z-20">
+            <div className="flex gap-2">
+              {canGoBack && (
+                <Button variant="ghost" size="sm" onClick={handleGoBack} disabled={loading} className="text-gray-500">
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                  Back
+                </Button>
+              )}
+              {canGoForward && (
+                <Button variant="ghost" size="sm" onClick={handleGoForward} disabled={loading} className="text-gray-500">
+                  Forward
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                </Button>
+              )}
+            </div>
+            {selectionsChanged && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleConfirmActivitySelection}
+                disabled={loading}
+                className="text-amber-600 border-amber-200 bg-amber-50 hover:bg-amber-100"
+              >
+                <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                Selections changed – Reorganize?
+              </Button>
+            )}
           </div>
-        );
+        )}
 
-      case WORKFLOW_STATES.DAY_ITINERARY:
-      case WORKFLOW_STATES.REVIEW:
-      case WORKFLOW_STATES.FINALIZE:
-        return (
-          <div className="p-4">
-            <DayItineraryView groupedDays={groupedDays} tripInfo={tripInfo || undefined} />
-          </div>
-        );
+        <div className="flex-1">
+          {(() => {
+            switch (workflowState) {
+              case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
+                return (
+                  <div className="p-4">
+                    <ActivitySelectionView
+                      activities={suggestedActivities}
+                      selectedIds={selectedActivityIds}
+                      onSelectionChange={handleActivitySelectionChange}
+                      onConfirm={handleConfirmActivitySelection}
+                      onHoverActivity={setHoveredActivityId}
+                      isLoading={loading}
+                    />
+                  </div>
+                );
 
-      default:
-        return null;
-    }
+              case WORKFLOW_STATES.GROUP_DAYS:
+                return (
+                  <div className="p-4">
+                    <DayGroupingView
+                      groupedDays={groupedDays}
+                      onMoveActivity={handleMoveActivity}
+                      onConfirm={handleConfirmDayGrouping}
+                      isLoading={loading}
+                    />
+                  </div>
+                );
+
+              case WORKFLOW_STATES.MEAL_PREFERENCES:
+                return (
+                  <div className="p-4">
+                    <RestaurantSelectionView
+                      restaurants={restaurantSuggestions}
+                      selectedIds={selectedRestaurantIds}
+                      onSelectionChange={handleRestaurantSelectionChange}
+                      onConfirm={handleMealPreferences}
+                      isLoading={loading}
+                    />
+                  </div>
+                );
+
+              case WORKFLOW_STATES.DAY_ITINERARY:
+              case WORKFLOW_STATES.REVIEW:
+              case WORKFLOW_STATES.FINALIZE:
+                return (
+                  <div className="p-4">
+                    <DayItineraryView groupedDays={groupedDays} tripInfo={tripInfo || undefined} />
+                  </div>
+                );
+
+              default:
+                return null;
+            }
+          })()}
+        </div>
+      </div>
+    );
   };
 
   // Render action button
