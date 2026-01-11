@@ -82,13 +82,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(result, { status: 500 });
     }
 
+    // Sanitize: Ensure each activity ID only appears once across all days
+    const seenActivityIds = new Set<string>();
+    const sanitizedDayGroups = result.dayGroups.map(group => {
+      const uniqueActivityIds = group.activityIds.filter(id => {
+        if (seenActivityIds.has(id)) {
+          console.warn(`Removing duplicate activity ${id} from Day ${group.dayNumber}`);
+          return false;
+        }
+        seenActivityIds.add(id);
+        return true;
+      });
+      return { ...group, activityIds: uniqueActivityIds };
+    });
+
     // Build grouped days with full activity data
-    const groupedDays = buildGroupedDays(result.dayGroups, selectedActivities);
+    const groupedDays = buildGroupedDays(sanitizedDayGroups, selectedActivities);
 
     // Update session
     sessionStore.update(sessionId, {
       workflowState: WORKFLOW_STATES.GROUP_DAYS,
-      dayGroups: result.dayGroups,
+      dayGroups: sanitizedDayGroups,
       groupedDays: groupedDays,
     });
 
