@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, Clock, Star, MapPin, RefreshCw } from "lucide-react";
+import { Check, Clock, Star, MapPin, RefreshCw, ExternalLink } from "lucide-react";
 import type { SuggestedActivity } from "@/lib/api-client";
 import { formatCost } from "@/lib/utils/currency";
 
@@ -73,6 +73,21 @@ export function ActivitySelectionView({
     }
   };
 
+  const openInMaps = (activity: SuggestedActivity) => {
+    if (activity.coordinates) {
+      const { lat, lng } = activity.coordinates;
+      window.open(
+        `https://www.google.com/maps/search/?api=1&query=${lat},${lng}&query_place_id=${activity.place_id || ""}`,
+        "_blank"
+      );
+    } else {
+      window.open(
+        `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(activity.name)}`,
+        "_blank"
+      );
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Header with selection count */}
@@ -127,11 +142,25 @@ export function ActivitySelectionView({
                     <span className="text-gray-400 mr-2">#{index + 1}</span>
                     {activity.name}
                   </CardTitle>
-                  {isSelected && (
-                    <div className="flex-shrink-0 w-6 h-6 bg-primary rounded-full flex items-center justify-center">
-                      <Check className="w-4 h-4 text-white" />
-                    </div>
-                  )}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openInMaps(activity);
+                      }}
+                      className="h-6 w-6 p-0 text-gray-400 hover:text-primary"
+                      title="Open in Google Maps"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </Button>
+                    {isSelected && (
+                      <div className="w-6 h-6 bg-primary rounded-full flex items-center justify-center">
+                        <Check className="w-4 h-4 text-white" />
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-1">
                   <Badge variant="secondary" className={getActivityTypeColor(activity.type)}>

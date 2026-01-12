@@ -665,9 +665,9 @@ export default function PlannerPage() {
     <div className="h-screen overflow-hidden bg-gray-100">
       <div className="flex h-full">
         {/* Left Panel: Map + Content View */}
-        <div className="w-[65%] h-full flex flex-col">
-          {/* Map - fixed at 50% height */}
-          <div className="h-[50%] flex-shrink-0 overflow-hidden">
+        <div className="w-[75%] h-full flex flex-col">
+          {/* Map - fixed at 35% height */}
+          <div className="h-[35%] flex-shrink-0 overflow-hidden">
             <MapComponent
               destination={tripInfo?.destination}
               suggestedActivities={
@@ -698,7 +698,7 @@ export default function PlannerPage() {
         </div>
 
         {/* Right Panel: Chat */}
-        <div className="w-[35%] h-full bg-white border-l border-gray-200 flex flex-col">
+        <div className="w-[25%] h-full bg-white border-l border-gray-200 flex flex-col">
           {/* Header */}
           <div className="p-4 border-b border-gray-200 text-center flex-shrink-0">
             <h1 className="text-xl font-bold text-gray-800">
