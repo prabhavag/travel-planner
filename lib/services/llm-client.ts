@@ -237,15 +237,17 @@ class LLMClient {
   async groupActivitiesIntoDays({
     tripInfo,
     activities,
+    geographicHints,
   }: {
     tripInfo: TripInfo;
     activities: SuggestedActivity[];
+    geographicHints?: Record<number, string[]>;
   }): Promise<{
     success: boolean;
     message: string;
     dayGroups: DayGroup[];
   }> {
-    const messages = buildGroupActivitiesMessages({ tripInfo, activities });
+    const messages = buildGroupActivitiesMessages({ tripInfo, activities, geographicHints });
 
     try {
       const completion = await this.openai.chat.completions.create({

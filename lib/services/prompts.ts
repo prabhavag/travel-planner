@@ -123,6 +123,7 @@ RULES:
 - Generate a descriptive, engaging theme for each day
 - Theme should capture the essence of activities in that day
 - RESPECT USER PREFERENCES when organizing (e.g., if user prefers relaxed pace, limit activities)
+- IMPORTANT: You may be provided with "Geographic Hints" which are based on distance-based clustering. Use these as a strong starting point for geographic grouping, but feel free to deviate if it makes better thematic sense or respects "Best time of day" better.
 - Return ONLY valid JSON, no additional text`,
 
   REGENERATE_DAY_THEME: `You are generating a catchy, descriptive theme for a day of activities.
@@ -273,9 +274,11 @@ Generate exactly 10 activity suggestions that match the traveler's interests.`,
 export function buildGroupActivitiesMessages({
   tripInfo,
   activities,
+  geographicHints,
 }: {
   tripInfo: TripInfo;
   activities: SuggestedActivity[];
+  geographicHints?: Record<number, string[]>;
 }) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.GROUP_ACTIVITIES_INTO_DAYS },
@@ -308,6 +311,11 @@ Group these activities into days based on:
 2. Best time of day (morning/afternoon/evening)
 3. Balanced distribution across days
 4. Logical flow within each day
+
+${geographicHints ? `GEOGRAPHIC HINTS (based on distance clustering):
+The following activities are geographically close and should ideally be grouped together where possible:
+${Object.entries(geographicHints).map(([day, ids]) => `- Cluster for potential Day ${parseInt(day) + 1}: ${ids.join(", ")}`).join("\n")}
+` : ""}
 
 Generate day groups with engaging themes for each day.`,
   });

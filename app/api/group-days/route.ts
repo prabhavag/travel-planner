@@ -4,6 +4,7 @@ import { getLLMClient } from "@/lib/services/llm-client";
 import type { SuggestedActivity, GroupedDay, DayGroup } from "@/lib/models/travel-plan";
 import { calculateDateForDay } from "@/lib/utils/date";
 import { withSession } from "@/lib/api/route-handler";
+import { clusterActivitiesIntoDays } from "@/lib/utils/clustering";
 
 /**
  * Build GroupedDay objects from DayGroups and activities
@@ -40,11 +41,16 @@ export const POST = withSession(
       session.selectedActivityIds.includes(a.id)
     );
 
-    // Use LLM to group activities into days
+    // Use geographic clustering to pre-group activities
+    const numDays = session.tripInfo.durationDays || 1;
+    const geographicHints = clusterActivitiesIntoDays(selectedActivities, numDays);
+
+    // Use LLM to group activities into days with geographic hints
     const llmClient = getLLMClient();
     const result = await llmClient.groupActivitiesIntoDays({
       tripInfo: session.tripInfo,
       activities: selectedActivities,
+      geographicHints,
     });
 
     if (!result.success) {
