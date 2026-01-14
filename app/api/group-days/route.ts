@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { getLLMClient } from "@/lib/services/llm-client";
 import type { SuggestedActivity, GroupedDay, DayGroup } from "@/lib/models/travel-plan";
+import { calculateDateForDay } from "@/lib/utils/date";
+import { withSession } from "@/lib/api/route-handler";
 
 /**
  * Build GroupedDay objects from DayGroups and activities
@@ -23,41 +25,8 @@ function buildGroupedDays(
   }));
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const { sessionId } = await request.json();
-
-    if (!sessionId) {
-      return NextResponse.json(
-        { success: false, message: "Missing sessionId" },
-        { status: 400 }
-      );
-    }
-
-    const session = sessionStore.get(sessionId);
-    if (!session) {
-      return NextResponse.json(
-        { success: false, message: "Session not found or expired" },
-        { status: 404 }
-      );
-    }
-
-    // Validate state - allow from SELECT_ACTIVITIES, or GROUP_DAYS/DAY_ITINERARY for re-org
-    const allowedStates = [
-      WORKFLOW_STATES.SELECT_ACTIVITIES as string,
-      WORKFLOW_STATES.GROUP_DAYS as string,
-      WORKFLOW_STATES.DAY_ITINERARY as string
-    ];
-    if (!allowedStates.includes(session.workflowState as string)) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: `Can only group days from states: ${allowedStates.join(", ")}`,
-        },
-        { status: 400 }
-      );
-    }
-
+export const POST = withSession(
+  async (request, { sessionId, session }) => {
     // Validate selected activities
     if (!session.selectedActivityIds || session.selectedActivityIds.length === 0) {
       return NextResponse.json(
@@ -84,8 +53,8 @@ export async function POST(request: NextRequest) {
 
     // Sanitize: Ensure each activity ID only appears once across all days
     const seenActivityIds = new Set<string>();
-    const sanitizedDayGroups = result.dayGroups.map(group => {
-      const uniqueActivityIds = group.activityIds.filter(id => {
+    const sanitizedDayGroups = result.dayGroups.map((group) => {
+      const uniqueActivityIds = group.activityIds.filter((id) => {
         if (seenActivityIds.has(id)) {
           console.warn(`Removing duplicate activity ${id} from Day ${group.dayNumber}`);
           return false;
@@ -93,7 +62,13 @@ export async function POST(request: NextRequest) {
         seenActivityIds.add(id);
         return true;
       });
-      return { ...group, activityIds: uniqueActivityIds };
+
+      // Enforce correct date based on day number and trip start date
+      const enforcedDate = session.tripInfo.startDate
+        ? calculateDateForDay(session.tripInfo.startDate, group.dayNumber)
+        : group.date;
+
+      return { ...group, activityIds: uniqueActivityIds, date: enforcedDate };
     });
 
     // Build grouped days with full activity data
@@ -116,11 +91,12 @@ export async function POST(request: NextRequest) {
       dayGroups: result.dayGroups,
       groupedDays: groupedDays,
     });
-  } catch (error) {
-    console.error("Error in groupDays:", error);
-    return NextResponse.json(
-      { success: false, message: "Failed to group activities into days", error: String(error) },
-      { status: 500 }
-    );
+  },
+  {
+    allowedStates: [
+      WORKFLOW_STATES.SELECT_ACTIVITIES,
+      WORKFLOW_STATES.GROUP_DAYS,
+      WORKFLOW_STATES.DAY_ITINERARY,
+    ],
   }
-}
+);

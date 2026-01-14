@@ -1,23 +1,17 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { getLLMClient } from "@/lib/services/llm-client";
+import { calculateDateForDay } from "@/lib/utils/date";
+import { withSession } from "@/lib/api/route-handler";
 
-export async function POST(request: NextRequest) {
-  try {
-    const { sessionId, message } = await request.json();
+export const POST = withSession(
+  async (request, { sessionId, session, body }) => {
+    const { message } = body;
 
-    if (!sessionId || !message) {
+    if (!message) {
       return NextResponse.json(
-        { success: false, message: "Missing sessionId or message" },
+        { success: false, message: "Missing message" },
         { status: 400 }
-      );
-    }
-
-    const session = sessionStore.get(sessionId);
-    if (!session) {
-      return NextResponse.json(
-        { success: false, message: "Session not found or expired" },
-        { status: 404 }
       );
     }
 
@@ -115,7 +109,14 @@ export async function POST(request: NextRequest) {
         for (const [dayNum, dayData] of Object.entries(result.modifications)) {
           const dayIndex = updatedGroupedDays.findIndex((d) => d.dayNumber === parseInt(dayNum));
           if (dayIndex !== -1) {
-            updatedGroupedDays[dayIndex] = { ...updatedGroupedDays[dayIndex], ...(dayData as object) };
+            const updatedDay = { ...updatedGroupedDays[dayIndex], ...(dayData as object) };
+
+            // Enforce correct date if date was modified or even if not, to stay consistent
+            if (session.tripInfo.startDate) {
+              updatedDay.date = calculateDateForDay(session.tripInfo.startDate, updatedDay.dayNumber);
+            }
+
+            updatedGroupedDays[dayIndex] = updatedDay;
           }
         }
         sessionStore.setGroupedDays(sessionId, updatedGroupedDays);
@@ -141,11 +142,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-  } catch (error) {
-    console.error("Error in chat:", error);
-    return NextResponse.json(
-      { success: false, message: "Failed to process message", error: String(error) },
-      { status: 500 }
-    );
+  },
+  {
+    validateBody: (body) => (!body.message ? "Missing message" : null),
   }
-}
+);
