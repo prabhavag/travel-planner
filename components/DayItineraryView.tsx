@@ -16,6 +16,7 @@ import {
 import type { GroupedDay, SuggestedActivity, RestaurantSuggestion } from "@/lib/api-client";
 import { formatCost } from "@/lib/utils/currency";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
+import { formatDisplayDate } from "@/lib/utils/date";
 
 interface DayItineraryViewProps {
   groupedDays: GroupedDay[];
@@ -43,8 +44,7 @@ export function DayItineraryView({ groupedDays, tripInfo }: DayItineraryViewProp
   };
 
   const formatDate = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString("en-US", {
+    return formatDisplayDate(dateStr, {
       weekday: "long",
       month: "long",
       day: "numeric",

@@ -21,3 +21,14 @@ export function calculateDateForDay(startDate: string, dayNumber: number): strin
 
     return `${year}-${month}-${day}`;
 }
+
+/**
+ * Formats a YYYY-MM-DD date string for display (e.g., "Sun, May 10")
+ * Ensures the date is parsed correctly in any timezone by avoiding the UTC trap.
+ */
+export function formatDisplayDate(dateStr: string, options: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric" }): string {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    // Use the month - 1 because Date constructor uses 0-indexed months
+    const date = new Date(year, month - 1, day);
+    return date.toLocaleDateString("en-US", options);
+}

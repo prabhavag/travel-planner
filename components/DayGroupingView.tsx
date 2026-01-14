@@ -14,6 +14,7 @@ import {
 import { Clock, ChevronRight, Star, MapPin } from "lucide-react";
 import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
+import { formatDisplayDate } from "@/lib/utils/date";
 
 interface DayGroupingViewProps {
   groupedDays: GroupedDay[];
@@ -49,8 +50,7 @@ export function DayGroupingView({
   };
 
   const formatDate = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    return formatDisplayDate(dateStr, { weekday: "short", month: "short", day: "numeric" });
   };
 
   const getActivityTypeColor = (type: string): string => {
