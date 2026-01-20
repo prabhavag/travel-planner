@@ -174,9 +174,9 @@ export function DayItineraryView({
             size="icon"
             onClick={prevSpot}
             disabled={currentIndex === 0}
-            className="w-16 h-16 rounded-full shadow-2xl bg-white/95 hover:bg-white border text-gray-900 transition-all scale-100 hover:scale-110 disabled:opacity-0 pointer-events-auto"
+            className="w-12 h-12 rounded-full shadow-2xl bg-white/95 hover:bg-white border text-gray-900 transition-all scale-100 hover:scale-110 disabled:opacity-0 pointer-events-auto"
           >
-            <ChevronLeft className="w-10 h-10" />
+            <ChevronLeft className="w-8 h-8" />
           </Button>
         </div>
 
@@ -186,20 +186,20 @@ export function DayItineraryView({
             size="icon"
             onClick={nextSpot}
             disabled={currentIndex === flattenedSpots.length - 1}
-            className="w-16 h-16 rounded-full shadow-2xl bg-white/95 hover:bg-white border text-gray-900 transition-all scale-100 hover:scale-110 disabled:opacity-0 pointer-events-auto"
+            className="w-12 h-12 rounded-full shadow-2xl bg-white/95 hover:bg-white border text-gray-900 transition-all scale-100 hover:scale-110 disabled:opacity-0 pointer-events-auto"
           >
-            <ChevronRight className="w-10 h-10" />
+            <ChevronRight className="w-8 h-8" />
           </Button>
         </div>
 
         {/* Scrollable Content Viewport */}
-        <div className="absolute inset-0 overflow-y-auto px-20 py-10 flex justify-center">
+        <div className="absolute inset-0 overflow-y-auto px-16 py-8 flex justify-center">
           {/* Main Immersive Card */}
-          <Card className="w-full max-w-[95%] h-fit min-h-full flex flex-col overflow-hidden border-0 shadow-[0_30px_70px_rgba(0,0,0,0.2)] transition-all duration-700 bg-white">
+          <Card className="w-full max-w-4xl h-fit min-h-full flex flex-col overflow-hidden border-0 shadow-[0_30px_70px_rgba(0,0,0,0.2)] transition-all duration-700 bg-white">
             <div className="flex flex-col md:flex-row border-b border-gray-100">
               {/* Left Column: Image (Proportional, No Stretch) */}
               {currentSpot.photo_url ? (
-                <div className="w-full md:w-[400px] h-[300px] md:h-auto overflow-hidden bg-gray-50 flex-shrink-0">
+                <div className="w-full md:w-64 h-[240px] md:h-auto overflow-hidden bg-gray-50 flex-shrink-0">
                   <img
                     src={currentSpot.photo_url}
                     alt={currentSpot.name}
@@ -207,26 +207,26 @@ export function DayItineraryView({
                   />
                 </div>
               ) : (
-                <div className="w-full md:w-[400px] h-48 md:h-auto bg-slate-100 flex items-center justify-center flex-shrink-0">
-                  <MapPin className="w-12 h-12 text-gray-300" />
+                <div className="w-full md:w-64 h-40 md:h-auto bg-slate-100 flex items-center justify-center flex-shrink-0">
+                  <MapPin className="w-10 h-10 text-gray-300" />
                 </div>
               )}
 
               {/* Right Column: Key Info (Structured, Non-stretched) */}
-              <div className="flex-1 p-8 flex flex-col justify-center bg-white">
-                <div className="flex items-center gap-3 mb-4">
-                  <Badge className={`px-3 py-1 font-bold ${isRestaurant ? "bg-amber-500 hover:bg-amber-600" : "bg-blue-600 hover:bg-blue-700"}`}>
+              <div className="flex-1 p-6 flex flex-col justify-center bg-white">
+                <div className="flex items-center gap-2 mb-3">
+                  <Badge className={`px-2 py-0.5 text-[10px] font-bold ${isRestaurant ? "bg-amber-500 hover:bg-amber-600" : "bg-blue-600 hover:bg-blue-700"}`}>
                     {isRestaurant ? "Dining" : (currentSpot as SuggestedActivity).type}
                   </Badge>
                   {currentSpot.rating && (
-                    <div className="flex items-center gap-1.5 bg-amber-50 px-3 py-1 rounded-full border border-amber-100">
-                      <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
-                      <span className="text-sm font-medium text-amber-900">{currentSpot.rating.toFixed(1)}</span>
+                    <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
+                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                      <span className="text-xs font-medium text-amber-900">{currentSpot.rating.toFixed(1)}</span>
                     </div>
                   )}
                 </div>
 
-                <h1 className="text-4xl font-bold text-gray-900 leading-tight mb-2">
+                <h1 className="text-xl font-bold text-gray-900 leading-tight mb-2">
                   {currentSpot.name}
                 </h1>
 
@@ -238,36 +238,36 @@ export function DayItineraryView({
                 </div>
               </div>
             </div>
-            <CardContent className="p-8 space-y-10">
-              <section className="space-y-4">
-                <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">About this spot</h4>
-                <p className="text-xl text-gray-600 leading-relaxed font-normal">
+            <CardContent className="p-6 space-y-6">
+              <section className="space-y-3">
+                <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400">About this spot</h4>
+                <p className="text-sm text-gray-600 leading-relaxed font-normal">
                   {isRestaurant ? (currentSpot as RestaurantSuggestion).vicinity : (currentSpot as SuggestedActivity).description}
                 </p>
               </section>
 
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-2 gap-4">
                 {!isRestaurant && (
-                  <div className="bg-blue-50/50 p-4 rounded-2xl flex items-center gap-4 border border-blue-100/50">
-                    <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center">
-                      <Clock className="w-6 h-6 text-blue-600" />
+                  <div className="bg-blue-50/50 p-3 rounded-xl flex items-center gap-3 border border-blue-100/50">
+                    <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0">
+                      <Clock className="w-5 h-5 text-blue-600" />
                     </div>
                     <div>
-                      <p className="text-xs text-blue-600 font-medium uppercase tracking-wider">Duration</p>
-                      <p className="text-lg font-semibold text-blue-900">{(currentSpot as SuggestedActivity).estimatedDuration}</p>
+                      <p className="text-[10px] text-blue-600 font-medium uppercase tracking-wider">Duration</p>
+                      <p className="text-sm font-semibold text-blue-900">{(currentSpot as SuggestedActivity).estimatedDuration}</p>
                     </div>
                   </div>
                 )}
 
-                <div className="bg-green-50/50 p-4 rounded-2xl flex items-center gap-4 border border-green-100/50">
-                  <div className="w-12 h-12 rounded-xl bg-green-100 flex items-center justify-center">
-                    <Utensils className="w-6 h-6 text-green-600" />
+                <div className="bg-green-50/50 p-3 rounded-xl flex items-center gap-3 border border-green-100/50">
+                  <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
+                    <Utensils className="w-5 h-5 text-green-600" />
                   </div>
                   <div>
-                    <p className="text-xs text-green-600 font-medium uppercase tracking-wider">
+                    <p className="text-[10px] text-green-600 font-medium uppercase tracking-wider">
                       {isRestaurant ? "Cuisine" : "Estimated Cost"}
                     </p>
-                    <p className="text-lg font-semibold text-green-900">
+                    <p className="text-sm font-semibold text-green-900">
                       {isRestaurant
                         ? ((currentSpot as RestaurantSuggestion).cuisine || "Varies")
                         : ((currentSpot as SuggestedActivity).estimatedCost === 0
@@ -279,21 +279,21 @@ export function DayItineraryView({
                 </div>
               </div>
 
-              <div className="pt-8 flex gap-4">
+              <div className="pt-4 flex gap-3">
                 <Button
-                  className="flex-1 h-16 text-lg font-medium rounded-2xl bg-gray-900 hover:bg-black transition-all gap-3"
+                  className="flex-1 h-12 text-base font-medium rounded-xl bg-gray-900 hover:bg-black transition-all gap-2"
                   onClick={() => openInMaps(currentSpot)}
                 >
-                  <MapPin className="w-6 h-6" />
-                  Navigate in Maps
+                  <MapPin className="w-5 h-5" />
+                  Navigate
                 </Button>
                 <Button
                   variant="outline"
                   size="icon"
-                  className="w-16 h-16 rounded-2xl border-2"
+                  className="w-12 h-12 rounded-xl border-2"
                   onClick={() => openInMaps(currentSpot)}
                 >
-                  <ExternalLink className="w-6 h-6" />
+                  <ExternalLink className="w-5 h-5" />
                 </Button>
               </div>
             </CardContent>

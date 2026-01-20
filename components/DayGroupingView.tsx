@@ -147,9 +147,9 @@ export function DayGroupingView({
             size="icon"
             onClick={prevActivity}
             disabled={currentIndex === 0}
-            className="w-16 h-16 rounded-full bg-white shadow-xl hover:bg-gray-50 border border-gray-100 disabled:opacity-0 transition-all pointer-events-auto"
+            className="w-12 h-12 rounded-full bg-white shadow-xl hover:bg-gray-50 border border-gray-100 disabled:opacity-0 transition-all pointer-events-auto"
           >
-            <ChevronLeft className="w-10 h-10 text-gray-800" />
+            <ChevronLeft className="w-8 h-8 text-gray-800" />
           </Button>
         </div>
 
@@ -159,20 +159,20 @@ export function DayGroupingView({
             size="icon"
             onClick={nextActivity}
             disabled={currentIndex === flattenedActivities.length - 1}
-            className="w-16 h-16 rounded-full bg-white shadow-xl hover:bg-gray-50 border border-gray-100 disabled:opacity-0 transition-all pointer-events-auto"
+            className="w-12 h-12 rounded-full bg-white shadow-xl hover:bg-gray-50 border border-gray-100 disabled:opacity-0 transition-all pointer-events-auto"
           >
-            <ChevronRight className="w-10 h-10 text-gray-800" />
+            <ChevronRight className="w-8 h-8 text-gray-800" />
           </Button>
         </div>
 
         {/* Scrollable Content Viewport */}
-        <div className="absolute inset-0 overflow-y-auto px-20 py-10 flex justify-center">
+        <div className="absolute inset-0 overflow-y-auto px-16 py-8 flex justify-center">
           {/* Large Focusing Card - Two Column Header */}
-          <Card className="w-full max-w-[95%] h-fit min-h-full overflow-hidden border-0 shadow-[0_30px_60px_rgba(0,0,0,0.12)] flex flex-col rounded-[2.5rem] bg-white">
+          <Card className="w-full max-w-4xl h-fit min-h-full overflow-hidden border-0 shadow-[0_30px_60px_rgba(0,0,0,0.12)] flex flex-col rounded-[2rem] bg-white">
             <div className="flex flex-col md:flex-row border-b border-gray-100">
               {/* Left Column: Image */}
               {currentActivity.photo_url ? (
-                <div className="w-full md:w-[400px] h-[300px] md:h-auto overflow-hidden bg-gray-50 flex-shrink-0 relative group">
+                <div className="w-full md:w-64 h-[240px] md:h-auto overflow-hidden bg-gray-50 flex-shrink-0 relative group">
                   <img
                     src={currentActivity.photo_url}
                     alt={currentActivity.name}
@@ -180,52 +180,52 @@ export function DayGroupingView({
                   />
                 </div>
               ) : (
-                <div className="w-full md:w-[400px] h-48 md:h-auto bg-slate-900 flex items-center justify-center flex-shrink-0">
-                  <MapPin className="w-12 h-12 text-slate-700" />
+                <div className="w-full md:w-64 h-40 md:h-auto bg-slate-900 flex items-center justify-center flex-shrink-0">
+                  <MapPin className="w-10 h-10 text-slate-700" />
                 </div>
               )}
 
               {/* Right Column: Title & Badge */}
-              <div className="flex-1 p-8 flex flex-col justify-center">
-                <div className="flex items-center gap-3 mb-4">
-                  <Badge className="px-3 py-1 bg-gray-900 hover:bg-black border-0 text-white font-bold uppercase tracking-widest text-[10px]">
+              <div className="flex-1 p-6 flex flex-col justify-center">
+                <div className="flex items-center gap-2 mb-3">
+                  <Badge className="px-2 py-0.5 bg-gray-900 hover:bg-black border-0 text-white font-bold uppercase tracking-widest text-[8px]">
                     {currentActivity.type}
                   </Badge>
                   {currentActivity.rating && (
-                    <div className="flex items-center gap-1.5 bg-amber-50 px-3 py-1 rounded-full border border-amber-100">
-                      <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
-                      <span className="text-sm font-medium text-amber-900">{currentActivity.rating.toFixed(1)}</span>
+                    <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
+                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                      <span className="text-xs font-medium text-amber-900">{currentActivity.rating.toFixed(1)}</span>
                     </div>
                   )}
                 </div>
-                <h1 className="text-4xl font-bold text-gray-900 leading-tight">{currentActivity.name}</h1>
+                <h1 className="text-xl font-bold text-gray-900 leading-tight">{currentActivity.name}</h1>
               </div>
             </div>
-            <CardContent className="p-8 space-y-10">
-              <section className="space-y-4">
-                <h4 className="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Activity Details</h4>
-                <p className="text-xl text-gray-600 leading-relaxed font-normal">
+            <CardContent className="p-6 space-y-6">
+              <section className="space-y-3">
+                <h4 className="text-[10px] font-medium uppercase tracking-[0.2em] text-gray-400">Activity Details</h4>
+                <p className="text-sm text-gray-600 leading-relaxed font-normal">
                   {currentActivity.description}
                 </p>
               </section>
 
-              <div className="flex flex-wrap gap-4">
-                <div className="flex items-center gap-3 px-6 py-4 bg-gray-50 rounded-2xl border border-gray-100">
-                  <Clock className="w-6 h-6 text-gray-400" />
-                  <span className="text-lg font-medium text-gray-700">{currentActivity.estimatedDuration}</span>
+              <div className="flex flex-wrap gap-3">
+                <div className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-xl border border-gray-100">
+                  <Clock className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm font-medium text-gray-700">{currentActivity.estimatedDuration}</span>
                 </div>
               </div>
 
               {/* Organization Controls - Move Activity */}
-              <div className="pt-10 border-t border-gray-100">
-                <div className="flex items-center justify-between p-8 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200">
-                  <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-white shadow-md flex items-center justify-center">
-                      <ArrowRightLeft className="w-7 h-7 text-slate-400" />
+              <div className="pt-6 border-t border-gray-100">
+                <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[1.5rem] border-2 border-dashed border-slate-200">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-white shadow-md flex items-center justify-center">
+                      <ArrowRightLeft className="w-5 h-5 text-slate-400" />
                     </div>
                     <div>
-                      <p className="text-lg font-bold text-slate-900">Move Activity</p>
-                      <p className="text-sm font-medium text-slate-400 uppercase tracking-wider">Change which day this belongs to</p>
+                      <p className="text-base font-bold text-slate-900">Move Activity</p>
+                      <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Change day</p>
                     </div>
                   </div>
 
@@ -233,17 +233,17 @@ export function DayGroupingView({
                     onValueChange={(val) => onMoveActivity(currentActivity.id, currentActivity.dayNumber, parseInt(val))}
                     value={currentActivity.dayNumber.toString()}
                   >
-                    <SelectTrigger className="w-48 h-16 text-lg font-bold rounded-2xl border-2 border-slate-200 bg-white hover:border-primary transition-all shadow-sm">
-                      <SelectValue placeholder="Move to Day" />
+                    <SelectTrigger className="w-36 h-12 text-sm font-bold rounded-xl border-2 border-slate-200 bg-white hover:border-primary transition-all shadow-sm">
+                      <SelectValue placeholder="Move" />
                     </SelectTrigger>
-                    <SelectContent className="rounded-2xl p-2 border-2">
+                    <SelectContent className="rounded-xl p-1 border-2">
                       {groupedDays.map((day) => (
                         <SelectItem
                           key={day.dayNumber}
                           value={day.dayNumber.toString()}
-                          className="text-lg font-bold py-3 rounded-xl"
+                          className="text-sm font-bold py-2 rounded-lg"
                         >
-                          Move to Day {day.dayNumber}
+                          Day {day.dayNumber}
                         </SelectItem>
                       ))}
                     </SelectContent>

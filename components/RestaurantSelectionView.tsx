@@ -126,9 +126,9 @@ export function RestaurantSelectionView({
             size="icon"
             onClick={prevRestaurant}
             disabled={currentIndex === 0}
-            className="w-16 h-16 rounded-full bg-white shadow-xl hover:bg-gray-50 border border-gray-100 disabled:opacity-0 transition-all pointer-events-auto"
+            className="w-12 h-12 rounded-full bg-white shadow-xl hover:bg-gray-50 border border-gray-100 disabled:opacity-0 transition-all pointer-events-auto"
           >
-            <ChevronLeft className="w-10 h-10 text-gray-800" />
+            <ChevronLeft className="w-8 h-8 text-gray-800" />
           </Button>
         </div>
 
@@ -138,66 +138,66 @@ export function RestaurantSelectionView({
             size="icon"
             onClick={nextRestaurant}
             disabled={currentIndex === restaurants.length - 1}
-            className="w-16 h-16 rounded-full bg-white shadow-xl hover:bg-gray-50 border border-gray-100 disabled:opacity-0 transition-all pointer-events-auto"
+            className="w-12 h-12 rounded-full bg-white shadow-xl hover:bg-gray-50 border border-gray-100 disabled:opacity-0 transition-all pointer-events-auto"
           >
-            <ChevronRight className="w-10 h-10 text-gray-800" />
+            <ChevronRight className="w-8 h-8 text-gray-800" />
           </Button>
         </div>
 
         {/* Scrollable Content Viewport */}
-        <div className="absolute inset-0 overflow-y-auto px-20 py-10 flex justify-center">
+        <div className="absolute inset-0 overflow-y-auto px-16 py-8 flex justify-center">
           {/* Large Restaurant Card - Two Column Header */}
           <Card
-            className={`w-full max-w-[95%] h-fit min-h-full overflow-hidden border-0 shadow-[0_30px_60px_rgba(0,0,0,0.12)] flex flex-col rounded-[2.5rem] transition-all duration-500 cursor-pointer bg-white ${isSelected ? "ring-8 ring-amber-500/20" : ""
+            className={`w-full max-w-4xl h-fit min-h-full overflow-hidden border-0 shadow-[0_30px_60px_rgba(0,0,0,0.12)] flex flex-col rounded-[2rem] transition-all duration-500 cursor-pointer bg-white ${isSelected ? "ring-8 ring-amber-500/20" : ""
               }`}
             onClick={() => toggleRestaurant(currentRestaurant.id)}
           >
             <div className="flex flex-col md:flex-row border-b border-gray-100">
               {/* Left Column: Image (Non-stretched) */}
               {currentRestaurant.photo_url ? (
-                <div className="w-full md:w-[400px] h-[300px] md:h-auto overflow-hidden bg-gray-50 flex-shrink-0">
+                <div className="w-full md:w-64 h-[240px] md:h-auto overflow-hidden bg-gray-50 flex-shrink-0">
                   <img
                     src={currentRestaurant.photo_url}
                     alt={currentRestaurant.name}
                     className="w-full h-full object-cover transition-transform duration-[3000ms] hover:scale-105"
                   />
                   {isSelected && (
-                    <div className="absolute top-6 left-6 w-12 h-12 bg-amber-500 rounded-full flex items-center justify-center shadow-2xl z-10">
-                      <Check className="w-8 h-8 text-white stroke-[3px]" />
+                    <div className="absolute top-4 left-4 w-10 h-10 bg-amber-500 rounded-full flex items-center justify-center shadow-2xl z-10">
+                      <Check className="w-6 h-6 text-white stroke-[3px]" />
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="w-full md:w-[400px] h-48 md:h-auto bg-amber-900 flex items-center justify-center flex-shrink-0 relative">
-                  <UtensilsCrossed className="w-12 h-12 text-amber-700" />
+                <div className="w-full md:w-64 h-40 md:h-auto bg-amber-900 flex items-center justify-center flex-shrink-0 relative">
+                  <UtensilsCrossed className="w-10 h-10 text-amber-700" />
                   {isSelected && (
-                    <div className="absolute top-6 left-6 w-12 h-12 bg-amber-500 rounded-full flex items-center justify-center shadow-2xl">
-                      <Check className="w-8 h-8 text-white stroke-[3px]" />
+                    <div className="absolute top-4 left-4 w-10 h-10 bg-amber-500 rounded-full flex items-center justify-center shadow-2xl">
+                      <Check className="w-6 h-6 text-white stroke-[3px]" />
                     </div>
                   )}
                 </div>
               )}
 
               {/* Right Column: Key Info */}
-              <div className="flex-1 p-8 flex flex-col justify-center bg-white relative">
-                <div className="flex items-center gap-3 mb-4">
-                  <Badge className="bg-amber-100 text-amber-700 border-amber-200 px-3 py-1 font-medium text-xs">
+              <div className="flex-1 p-6 flex flex-col justify-center bg-white relative">
+                <div className="flex items-center gap-2 mb-3">
+                  <Badge className="bg-amber-100 text-amber-700 border-amber-200 px-2 py-0.5 font-medium text-[10px]">
                     {currentRestaurant.cuisine || "Restaurant"}
                   </Badge>
                   {currentRestaurant.priceRange && (
-                    <div className="flex items-center gap-1 bg-green-50 px-3 py-1 rounded-full border border-green-100">
-                      <Banknote className="w-4 h-4 text-green-600" />
-                      <span className="text-sm font-medium text-green-700">{currentRestaurant.priceRange}</span>
+                    <div className="flex items-center gap-1 bg-green-50 px-2 py-0.5 rounded-full border border-green-100">
+                      <Banknote className="w-3 h-3 text-green-600" />
+                      <span className="text-xs font-medium text-green-700">{currentRestaurant.priceRange}</span>
                     </div>
                   )}
                   {currentRestaurant.rating && (
-                    <div className="flex items-center gap-1 bg-amber-50 px-3 py-1 rounded-full border border-amber-100">
-                      <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
-                      <span className="text-sm font-medium text-amber-900">{currentRestaurant.rating.toFixed(1)}</span>
+                    <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
+                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                      <span className="text-xs font-medium text-amber-900">{currentRestaurant.rating.toFixed(1)}</span>
                     </div>
                   )}
                 </div>
-                <h1 className="text-4xl font-bold text-gray-900 leading-tight mb-2">{currentRestaurant.name}</h1>
+                <h1 className="text-xl font-bold text-gray-900 leading-tight mb-2">{currentRestaurant.name}</h1>
                 <div className="flex items-center gap-2 text-gray-400 font-medium">
                   <MapPin className="w-4 h-4" />
                   <span className="text-sm">{currentRestaurant.vicinity}</span>
@@ -211,17 +211,17 @@ export function RestaurantSelectionView({
               </div>
             </div>
 
-            <CardContent className="p-8 space-y-10">
-              <section className="space-y-4">
-                <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Why pick this restaurant?</h4>
-                <p className="text-lg text-gray-600 leading-relaxed font-normal">
-                  Located in the heart of {currentRestaurant.vicinity.split(',')[0]}, this {currentRestaurant.cuisine?.toLowerCase() || 'local'} spot is perfect for a break during your trip.
+            <CardContent className="p-6 space-y-6">
+              <section className="space-y-3">
+                <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400">Why pick this restaurant?</h4>
+                <p className="text-sm text-gray-600 leading-relaxed font-normal">
+                  Located in the heart of {currentRestaurant.vicinity?.split(',')[0] || 'the area'}, this {currentRestaurant.cuisine?.toLowerCase() || 'local'} spot is perfect for a break during your trip.
                 </p>
               </section>
 
-              <div className="pt-8 border-t border-gray-100">
+              <div className="pt-4 border-t border-gray-100">
                 <Button
-                  className={`w-full h-16 text-xl font-medium rounded-2xl transition-all gap-4 ${isSelected
+                  className={`w-full h-12 text-base font-medium rounded-xl transition-all gap-3 ${isSelected
                     ? "bg-amber-500 hover:bg-amber-600 text-white shadow-xl shadow-amber-200"
                     : "bg-gray-100 hover:bg-gray-200 text-gray-500"
                     }`}
@@ -232,7 +232,7 @@ export function RestaurantSelectionView({
                 >
                   {isSelected ? (
                     <>
-                      <Check className="w-10 h-10 stroke-[3px]" />
+                      <Check className="w-6 h-6 stroke-[3px]" />
                       Selected
                     </>
                   ) : "Select This Restaurant"}
