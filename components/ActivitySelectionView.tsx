@@ -91,7 +91,7 @@ export function ActivitySelectionView({
   return (
     <div className="space-y-4">
       {/* Header with selection count */}
-      <div className="flex items-center justify-between bg-white py-2 px-4">
+      <div className="flex items-center justify-between bg-white py-2 px-4 shadow-sm sticky top-0 z-10">
         <div>
           <h2 className="text-lg font-semibold">Select Activities</h2>
           <p className="text-sm text-gray-500">

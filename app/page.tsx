@@ -551,7 +551,7 @@ export default function PlannerPage() {
           </div>
         )}
 
-        <div className="flex-1">
+        <div className="flex-1 min-h-0 flex flex-col">
           {(() => {
             switch (workflowState) {
               case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
