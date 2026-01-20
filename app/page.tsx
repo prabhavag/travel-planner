@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { ActivitySelectionView } from "@/components/ActivitySelectionView";
 import { DayGroupingView } from "@/components/DayGroupingView";
 import { RestaurantSelectionView } from "@/components/RestaurantSelectionView";
 import { DayItineraryView } from "@/components/DayItineraryView";
+import { DayTabs } from "@/components/DayTabs";
 import {
   startSession,
   chat,
@@ -87,6 +88,8 @@ export default function PlannerPage() {
   const [canProceed, setCanProceed] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "interests">("chat");
   const [hoveredActivityId, setHoveredActivityId] = useState<string | null>(null);
+  const [selectedDayNumber, setSelectedDayNumber] = useState<number>(1);
+  const [highlightedLocationId, setHighlightedLocationId] = useState<string | null>(null);
 
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -115,6 +118,10 @@ export default function PlannerPage() {
         setSessionId(response.sessionId);
         setWorkflowState(response.workflowState);
         setChatHistory([{ role: "assistant", content: response.message }]);
+        if (response.groupedDays) {
+          setGroupedDays(response.groupedDays);
+          setSelectedDayNumber(1);
+        }
       }
     } catch (error) {
       console.error("Failed to start session:", error);
@@ -125,7 +132,7 @@ export default function PlannerPage() {
   };
 
   // Handle chat messages
-  const handleChat = async () => {
+  const handleChat = useCallback(async () => {
     if (!chatInput.trim() || !sessionId) return;
 
     const userMessage = chatInput;
@@ -154,10 +161,10 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [chatInput, sessionId]);
 
   // Handle suggestion chips
-  const handleSuggestionClick = async (suggestion: string) => {
+  const handleSuggestionClick = useCallback(async (suggestion: string) => {
     if (!sessionId || loading) return;
 
     const userMessage = suggestion;
@@ -181,10 +188,10 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sessionId, loading]);
 
   // Suggest top 10 activities (streaming)
-  const handleSuggestActivities = async () => {
+  const handleSuggestActivities = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
     setWorkflowState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
@@ -220,15 +227,15 @@ export default function PlannerPage() {
       alert("Failed to suggest activities. Please try again.");
       setLoading(false);
     }
-  };
+  }, [sessionId]);
 
   // Handle activity selection change
-  const handleActivitySelectionChange = (ids: string[]) => {
+  const handleActivitySelectionChange = useCallback((ids: string[]) => {
     setSelectedActivityIds(ids);
-  };
+  }, []);
 
   // Confirm activity selection and group into days
-  const handleConfirmActivitySelection = async () => {
+  const handleConfirmActivitySelection = useCallback(async () => {
     if (!sessionId || selectedActivityIds.length === 0) return;
     setLoading(true);
 
@@ -246,6 +253,7 @@ export default function PlannerPage() {
         updateMaxReachedState(WORKFLOW_STATES.GROUP_DAYS);
         setDayGroups(groupResponse.dayGroups || []);
         setGroupedDays(groupResponse.groupedDays || []);
+        setSelectedDayNumber(1);
         setLastGroupedActivityIds([...selectedActivityIds]);
         setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
       }
@@ -255,10 +263,10 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sessionId, selectedActivityIds]);
 
   // Handle moving activity between days
-  const handleMoveActivity = async (activityId: string, fromDay: number, toDay: number) => {
+  const handleMoveActivity = useCallback(async (activityId: string, fromDay: number, toDay: number) => {
     if (!sessionId) return;
     setLoading(true);
 
@@ -274,10 +282,10 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sessionId]);
 
   // Confirm day grouping
-  const handleConfirmDayGrouping = async () => {
+  const handleConfirmDayGrouping = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
 
@@ -287,6 +295,7 @@ export default function PlannerPage() {
         setWorkflowState(WORKFLOW_STATES.DAY_ITINERARY);
         updateMaxReachedState(WORKFLOW_STATES.DAY_ITINERARY);
         setGroupedDays(response.groupedDays || []);
+        setSelectedDayNumber(1);
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
       }
     } catch (error) {
@@ -295,7 +304,7 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sessionId]);
 
   // Get restaurant suggestions
   const handleGetRestaurants = async () => {
@@ -371,7 +380,7 @@ export default function PlannerPage() {
   };
 
   // Finalize
-  const handleFinalize = async () => {
+  const handleFinalize = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
 
@@ -388,7 +397,7 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sessionId]);
 
   const handleRegenerateActivities = async () => {
     if (!sessionId) return;
@@ -463,14 +472,14 @@ export default function PlannerPage() {
 
 
   // Handle clicking activity on map
-  const handleMapActivityClick = (activityId: string) => {
+  const handleMapActivityClick = useCallback((activityId: string) => {
     if (workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES) {
       // Toggle selection
       setSelectedActivityIds((prev) =>
         prev.includes(activityId) ? prev.filter((id) => id !== activityId) : [...prev, activityId]
       );
     }
-  };
+  }, [workflowState]);
 
   // Get state label
   const getStateLabel = () => {
@@ -547,7 +556,7 @@ export default function PlannerPage() {
             switch (workflowState) {
               case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
                 return (
-                  <div className="p-4">
+                  <div className="flex-1 overflow-y-auto p-4">
                     <ActivitySelectionView
                       activities={suggestedActivities}
                       selectedIds={selectedActivityIds}
@@ -562,19 +571,19 @@ export default function PlannerPage() {
 
               case WORKFLOW_STATES.GROUP_DAYS:
                 return (
-                  <div className="p-4">
-                    <DayGroupingView
-                      groupedDays={groupedDays}
-                      onMoveActivity={handleMoveActivity}
-                      onConfirm={handleConfirmDayGrouping}
-                      isLoading={loading}
-                    />
-                  </div>
+                  <DayGroupingView
+                    groupedDays={groupedDays}
+                    onMoveActivity={handleMoveActivity}
+                    onConfirm={handleConfirmDayGrouping}
+                    isLoading={loading}
+                    selectedDayNumber={selectedDayNumber}
+                    onSelectDay={setSelectedDayNumber}
+                  />
                 );
 
               case WORKFLOW_STATES.MEAL_PREFERENCES:
                 return (
-                  <div className="p-4">
+                  <div className="flex-1 overflow-y-auto p-4">
                     <RestaurantSelectionView
                       restaurants={restaurantSuggestions}
                       selectedIds={selectedRestaurantIds}
@@ -589,9 +598,13 @@ export default function PlannerPage() {
               case WORKFLOW_STATES.REVIEW:
               case WORKFLOW_STATES.FINALIZE:
                 return (
-                  <div className="p-4">
-                    <DayItineraryView groupedDays={groupedDays} tripInfo={tripInfo || undefined} />
-                  </div>
+                  <DayItineraryView
+                    groupedDays={groupedDays}
+                    tripInfo={tripInfo || undefined}
+                    selectedDayNumber={selectedDayNumber}
+                    onHighlightLocation={setHighlightedLocationId}
+                    onSelectDay={setSelectedDayNumber}
+                  />
                 );
 
               default:
@@ -688,12 +701,36 @@ export default function PlannerPage() {
               }
               onActivityClick={handleMapActivityClick}
               hoveredActivityId={hoveredActivityId}
+              selectedDayNumber={
+                workflowState === WORKFLOW_STATES.GROUP_DAYS ||
+                  workflowState === WORKFLOW_STATES.DAY_ITINERARY ||
+                  workflowState === WORKFLOW_STATES.MEAL_PREFERENCES ||
+                  workflowState === WORKFLOW_STATES.REVIEW ||
+                  workflowState === WORKFLOW_STATES.FINALIZE
+                  ? selectedDayNumber
+                  : undefined
+              }
+              highlightedLocationId={highlightedLocationId}
             />
           </div>
 
           {/* State-specific content - scrollable */}
-          <div className="flex-1 overflow-y-auto bg-gray-100 relative z-10">
-            {renderLeftPanelContent()}
+          <div className="flex-1 flex flex-col min-h-0 bg-gray-100 relative z-10">
+            {groupedDays.length > 0 &&
+              (workflowState === WORKFLOW_STATES.GROUP_DAYS ||
+                workflowState === WORKFLOW_STATES.DAY_ITINERARY ||
+                workflowState === WORKFLOW_STATES.MEAL_PREFERENCES ||
+                workflowState === WORKFLOW_STATES.REVIEW ||
+                workflowState === WORKFLOW_STATES.FINALIZE) && (
+                <DayTabs
+                  days={groupedDays.map(d => ({ dayNumber: d.dayNumber, date: d.date }))}
+                  selectedDay={selectedDayNumber}
+                  onSelectDay={setSelectedDayNumber}
+                />
+              )}
+            <div className="flex-1 min-h-0">
+              {renderLeftPanelContent()}
+            </div>
           </div>
         </div>
 

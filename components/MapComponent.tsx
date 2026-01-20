@@ -12,15 +12,12 @@ import {
 import { getConfig } from "@/lib/api-client";
 import type { SuggestedActivity, GroupedDay } from "@/lib/api-client";
 import { Loader2 } from "lucide-react";
-import { DAY_COLORS, getDayColor, SELECTED_COLOR, UNSELECTED_COLOR } from "@/lib/constants";
+import { getDayColor, SELECTED_COLOR, UNSELECTED_COLOR } from "@/lib/constants";
 
 const containerStyle = {
   width: "100%",
   height: "100%",
 };
-
-// Container style deleted as we are using shared ones if needed, but actually keeping local is fine if not exported.
-// Wait, I should remove the local definitions that are now in constants.ts
 
 interface Coordinates {
   lat: number;
@@ -57,15 +54,16 @@ interface Location {
 interface MapComponentProps {
   itinerary?: DayItinerary[];
   destination?: string | null;
-  // New activity-first flow props
   suggestedActivities?: SuggestedActivity[];
   selectedActivityIds?: string[];
   groupedDays?: GroupedDay[];
   onActivityClick?: (activityId: string) => void;
   hoveredActivityId?: string | null;
+  selectedDayNumber?: number;
+  highlightedLocationId?: string | null;
 }
 
-const libraries: ("places")[] = ["places"];
+const libraries: "places"[] = ["places"];
 
 export default function MapComponent({
   itinerary,
@@ -75,11 +73,12 @@ export default function MapComponent({
   groupedDays,
   onActivityClick,
   hoveredActivityId,
+  selectedDayNumber,
+  highlightedLocationId,
 }: MapComponentProps) {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Fetch API key from backend
   useEffect(() => {
     const fetchConfig = async () => {
       const config = await getConfig();
@@ -89,12 +88,10 @@ export default function MapComponent({
     fetchConfig();
   }, []);
 
-  // Extract locations from various data sources - memoized to prevent re-renders on hover
   const locations = useMemo(() => {
     const locs: Location[] = [];
     const selectedSet = new Set(selectedActivityIds || []);
 
-    // Mode 1: Suggested activities (activity selection phase)
     if (suggestedActivities && suggestedActivities.length > 0) {
       suggestedActivities.forEach((activity, actIndex) => {
         if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
@@ -106,7 +103,7 @@ export default function MapComponent({
             slot: activity.bestTimeOfDay || "any",
             slotIndex: 0,
             actIndex: actIndex,
-            day: 0, // No day assigned yet
+            day: 0,
             desc: activity.type,
             isSelected: isSelected,
             activityId: activity.id,
@@ -114,9 +111,7 @@ export default function MapComponent({
           });
         }
       });
-    }
-    // Mode 2: Grouped days (day grouping and itinerary phases)
-    else if (groupedDays && groupedDays.length > 0) {
+    } else if (groupedDays && groupedDays.length > 0) {
       groupedDays.forEach((day) => {
         day.activities.forEach((activity, actIndex) => {
           if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
@@ -134,7 +129,6 @@ export default function MapComponent({
             });
           }
         });
-        // Also add restaurants if present
         day.restaurants.forEach((restaurant, restIndex) => {
           if (restaurant.coordinates && restaurant.coordinates.lat && restaurant.coordinates.lng) {
             locs.push({
@@ -142,7 +136,7 @@ export default function MapComponent({
               lat: restaurant.coordinates.lat,
               lng: restaurant.coordinates.lng,
               slot: "restaurant",
-              slotIndex: 100 + restIndex, // Put restaurants after activities
+              slotIndex: 100 + restIndex,
               actIndex: restIndex,
               day: day.dayNumber,
               desc: `Day ${day.dayNumber} - Restaurant`,
@@ -151,11 +145,9 @@ export default function MapComponent({
           }
         });
       });
-    }
-    // Mode 3: Legacy itinerary format
-    else if (itinerary) {
+    } else if (itinerary) {
       itinerary.forEach((day, dayIndex) => {
-        const dayNumber = day.day_number || day.dayNumber || dayIndex + 1;
+        const dayNum = day.day_number || day.dayNumber || dayIndex + 1;
         (["morning", "afternoon", "evening"] as const).forEach((slot, slotIndex) => {
           const activities = day[slot];
           if (activities) {
@@ -168,8 +160,8 @@ export default function MapComponent({
                   slot: slot,
                   slotIndex: slotIndex,
                   actIndex: actIndex,
-                  day: dayNumber,
-                  desc: `Day ${dayNumber} - ${slot}`,
+                  day: dayNum,
+                  desc: `Day ${dayNum} - ${slot}`,
                 });
               }
             });
@@ -180,6 +172,11 @@ export default function MapComponent({
 
     return locs;
   }, [suggestedActivities, selectedActivityIds, groupedDays, itinerary]);
+
+  const filteredLocations = useMemo(() => {
+    if (!selectedDayNumber) return locations;
+    return locations.filter((loc) => loc.day === 0 || loc.day === selectedDayNumber);
+  }, [locations, selectedDayNumber]);
 
   if (loading) {
     return (
@@ -210,19 +207,20 @@ export default function MapComponent({
     );
   }
 
-  // Determine if we're in activity selection mode
   const isActivitySelectionMode = suggestedActivities && suggestedActivities.length > 0;
 
   return (
     <div className="h-full w-full min-h-[500px] rounded-xl border border-gray-200 overflow-hidden">
       <GoogleMapContent
         apiKey={apiKey}
-        locations={locations}
+        locations={filteredLocations}
         itinerary={itinerary}
         destination={destination}
         isActivitySelectionMode={isActivitySelectionMode}
         onActivityClick={onActivityClick}
         hoveredActivityId={hoveredActivityId}
+        selectedDayNumber={selectedDayNumber}
+        highlightedLocationId={highlightedLocationId}
       />
     </div>
   );
@@ -236,9 +234,10 @@ interface GoogleMapContentProps {
   isActivitySelectionMode?: boolean;
   onActivityClick?: (activityId: string) => void;
   hoveredActivityId?: string | null;
+  selectedDayNumber?: number;
+  highlightedLocationId?: string | null;
 }
 
-// Hover tooltip component for showing activity/restaurant info
 function HoverTooltip({ location }: { location: Location }) {
   return (
     <OverlayView
@@ -246,11 +245,10 @@ function HoverTooltip({ location }: { location: Location }) {
       mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
       getPixelPositionOffset={(width, height) => ({
         x: -(width / 2),
-        y: -height - 45, // Position above the marker
+        y: -height - 45,
       })}
     >
       <div className="bg-white rounded-lg shadow-lg p-2 pointer-events-none min-w-[160px] max-w-[200px] border border-gray-200">
-        {/* Photo thumbnail */}
         {location.photoUrl ? (
           <div className="w-full h-24 mb-2 rounded overflow-hidden bg-gray-100">
             <img
@@ -268,11 +266,7 @@ function HoverTooltip({ location }: { location: Location }) {
             <span className="text-gray-400 text-xs">No photo</span>
           </div>
         )}
-
-        {/* Activity/Restaurant name */}
         <p className="font-medium text-sm text-gray-900 line-clamp-2">{location.name}</p>
-
-        {/* Type/Description */}
         <p className="text-xs text-gray-500 mt-0.5">{location.desc}</p>
       </div>
     </OverlayView>
@@ -287,22 +281,23 @@ function GoogleMapContent({
   isActivitySelectionMode,
   onActivityClick,
   hoveredActivityId,
+  selectedDayNumber,
+  highlightedLocationId,
 }: GoogleMapContentProps) {
   const [selectedMarker, setSelectedMarker] = useState<Location | null>(null);
   const [hoveredMarker, setHoveredMarker] = useState<Location | null>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
   const [destinationCenter, setDestinationCenter] = useState<Coordinates | null>(null);
 
-  // Refs to prevent map from resetting position on every re-render
   const boundsSetRef = useRef(false);
   const prevLocationsCountRef = useRef(locations.length);
+  const prevSelectedDayRef = useRef(selectedDayNumber);
 
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: apiKey,
     libraries,
   });
 
-  // Geocode destination if no locations available
   useEffect(() => {
     if (isLoaded && locations.length === 0 && destination && window.google) {
       const geocoder = new window.google.maps.Geocoder();
@@ -315,27 +310,25 @@ function GoogleMapContent({
     }
   }, [isLoaded, locations.length, destination]);
 
-  // Group locations by day for polylines
-  const locationsByDay: Record<number, Location[]> = {};
-  locations.forEach((loc) => {
-    if (loc.day == null) return;
-    if (!locationsByDay[loc.day]) {
-      locationsByDay[loc.day] = [];
-    }
-    locationsByDay[loc.day].push(loc);
-  });
-
-  // Sort locations within each day by time slot order, then by activity index
-  Object.keys(locationsByDay).forEach((day) => {
-    locationsByDay[Number(day)].sort((a, b) => {
-      if (a.slotIndex !== b.slotIndex) return a.slotIndex - b.slotIndex;
-      return a.actIndex - b.actIndex;
+  const locationsByDay = useMemo(() => {
+    const locsByDay: Record<number, Location[]> = {};
+    locations.forEach((loc) => {
+      if (loc.day == null) return;
+      if (!locsByDay[loc.day]) {
+        locsByDay[loc.day] = [];
+      }
+      locsByDay[loc.day].push(loc);
     });
-  });
 
-  // getDayColor removed as it is now imported
+    Object.keys(locsByDay).forEach((dayNum) => {
+      locsByDay[Number(dayNum)].sort((a, b) => {
+        if (a.slotIndex !== b.slotIndex) return a.slotIndex - b.slotIndex;
+        return a.actIndex - b.actIndex;
+      });
+    });
+    return locsByDay;
+  }, [locations]);
 
-  // Fit bounds when map loads
   const onLoad = useCallback(
     (mapInstance: google.maps.Map) => {
       setMap(mapInstance);
@@ -348,15 +341,14 @@ function GoogleMapContent({
     [locations]
   );
 
-  // Reset bounds tracking when locations count changes (new data loaded)
   useEffect(() => {
-    if (locations.length !== prevLocationsCountRef.current) {
+    if (locations.length !== prevLocationsCountRef.current || selectedDayNumber !== prevSelectedDayRef.current) {
       boundsSetRef.current = false;
       prevLocationsCountRef.current = locations.length;
+      prevSelectedDayRef.current = selectedDayNumber;
     }
-  }, [locations.length]);
+  }, [locations.length, selectedDayNumber]);
 
-  // Update bounds only on initial load or when locations change significantly
   useEffect(() => {
     if (map && locations.length > 0 && window.google && !boundsSetRef.current) {
       const bounds = new window.google.maps.LatLngBounds();
@@ -366,11 +358,23 @@ function GoogleMapContent({
     }
   }, [map, locations]);
 
-  // Get marker icon based on day or selection state
+  // Pan to highlighted location
+  useEffect(() => {
+    if (map && highlightedLocationId && locations.length > 0) {
+      const highlightedLoc = locations.find(l => l.activityId === highlightedLocationId);
+      if (highlightedLoc) {
+        map.panTo({ lat: highlightedLoc.lat, lng: highlightedLoc.lng });
+        if (map.getZoom()! < 14) {
+          map.setZoom(14);
+        }
+      }
+    }
+  }, [map, highlightedLocationId, locations]);
+
   const getMarkerIcon = (loc: Location): google.maps.Symbol => {
     const isHovered = loc.activityId === hoveredActivityId;
+    const isHighlighted = loc.activityId === highlightedLocationId;
 
-    // In activity selection mode, use pin shapes
     if (isActivitySelectionMode) {
       return {
         path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
@@ -384,14 +388,13 @@ function GoogleMapContent({
       };
     }
 
-    // Otherwise use day-based pins (not just circles anymore, for consistency with numbers)
     return {
       path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
       fillColor: getDayColor(loc.day),
       fillOpacity: 1,
-      strokeColor: isHovered ? "#3B82F6" : "#ffffff",
-      strokeWeight: isHovered ? 2 : 1,
-      scale: isHovered ? 1.8 : 1.5,
+      strokeColor: isHighlighted ? "#F59E0B" : (isHovered ? "#3B82F6" : "#ffffff"),
+      strokeWeight: isHighlighted || isHovered ? 3 : 1,
+      scale: isHighlighted ? 2.2 : (isHovered ? 1.8 : 1.5),
       anchor: new window.google.maps.Point(12, 21),
       labelOrigin: new window.google.maps.Point(12, 8),
     };
@@ -413,13 +416,11 @@ function GoogleMapContent({
     );
   }
 
-  // Determine map center
   const mapCenter =
     locations.length > 0
       ? { lat: locations[0].lat, lng: locations[0].lng }
-      : destinationCenter || { lat: 37.7749, lng: -122.4194 }; // Default to SF
+      : destinationCenter || { lat: 37.7749, lng: -122.4194 };
 
-  // Show loading if we're waiting for destination geocoding
   if (locations.length === 0 && destination && !destinationCenter) {
     return (
       <div className="h-full w-full flex flex-col items-center justify-center gap-2">
@@ -441,35 +442,36 @@ function GoogleMapContent({
         fullscreenControl: true,
       }}
     >
-      {/* Draw polylines connecting locations for each day - only if not in activity selection mode */}
-      {!isActivitySelectionMode && Object.entries(locationsByDay)
-        .filter(([, dayLocations]) => dayLocations.length >= 2)
-        .map(([day, dayLocations]) => (
-          <Polyline
-            key={`polyline-day-${day}`}
-            path={dayLocations.map((loc) => ({ lat: loc.lat, lng: loc.lng }))}
-            options={{
-              strokeColor: getDayColor(parseInt(day)) || "#666666",
-              strokeOpacity: 0.8,
-              strokeWeight: 4,
-            }}
-          />
-        ))}
+      {!isActivitySelectionMode &&
+        Object.entries(locationsByDay)
+          .filter(
+            ([dayNum, dayLocs]) =>
+              dayLocs.length >= 2 && (!selectedDayNumber || parseInt(dayNum) === selectedDayNumber)
+          )
+          .map(([dayNum, dayLocs]) => (
+            <Polyline
+              key={`polyline-day-${dayNum}`}
+              path={dayLocs.map((loc) => ({ lat: loc.lat, lng: loc.lng }))}
+              options={{
+                strokeColor: getDayColor(parseInt(dayNum)) || "#666666",
+                strokeOpacity: 0.8,
+                strokeWeight: 4,
+              }}
+            />
+          ))}
 
-      {/* Draw markers for each location */}
       {locations.map((loc, idx) => (
         <Marker
           key={idx}
           position={{ lat: loc.lat, lng: loc.lng }}
           icon={getMarkerIcon(loc)}
-          label={
-            {
-              text: (loc.actIndex + 1).toString(),
-              color: "white",
-              fontWeight: "bold",
-              fontSize: (loc.activityId === hoveredActivityId || !isActivitySelectionMode) ? "11px" : "10px",
-            }
-          }
+          label={{
+            text: (loc.actIndex + 1).toString(),
+            color: "white",
+            fontWeight: "bold",
+            fontSize:
+              loc.activityId === highlightedLocationId || loc.activityId === hoveredActivityId || !isActivitySelectionMode ? "11px" : "10px",
+          }}
           onClick={() => {
             if (isActivitySelectionMode && onActivityClick && loc.activityId) {
               onActivityClick(loc.activityId);
@@ -482,7 +484,6 @@ function GoogleMapContent({
         />
       ))}
 
-      {/* Hover tooltip */}
       {hoveredMarker && <HoverTooltip location={hoveredMarker} />}
 
       {selectedMarker && (
