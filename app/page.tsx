@@ -205,8 +205,11 @@ export default function PlannerPage() {
           // Add each activity as it arrives
           setSuggestedActivities((prev) => [...prev, activity]);
         },
-        (message) => {
+        (message, newSelectedIds) => {
           setChatHistory((prev) => [...prev, { role: "assistant", content: message }]);
+          if (newSelectedIds) {
+            setSelectedActivityIds(newSelectedIds);
+          }
           setLoading(false);
           updateMaxReachedState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
         },

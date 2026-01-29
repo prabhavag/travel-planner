@@ -89,11 +89,25 @@ export const POST = withSession(
 
         // Generate activities using LLM (streaming JSONL)
         const llmClient = getLLMClient();
+
+        // Get already selected activities to include them
+        const selectedActivities = (session.suggestedActivities || []).filter(a =>
+          (session.selectedActivityIds || []).includes(a.id)
+        );
+
+        // Get unselected activities to blacklist them
+        // Use dummy objects with names for blacklisting
+        const unselectedActivities = (session.unselectedActivityNames || []).map(name => ({ name } as SuggestedActivity));
+
         const activities: SuggestedActivity[] = [];
         let message = "";
 
         // Stream activities as they're parsed from LLM
-        for await (const chunk of llmClient.suggestTopActivities({ tripInfo })) {
+        for await (const chunk of llmClient.suggestTopActivities({
+          tripInfo,
+          selectedActivities,
+          unselectedActivities
+        })) {
           if (chunk.type === "message") {
             message = chunk.message;
           } else if (chunk.type === "activity") {
@@ -132,16 +146,31 @@ export const POST = withSession(
         );
 
         // Update session state
+        // Preserve selectedActivityIds if the LLM returned them with the same IDs
+        // or update them if the LLM returned the same names with new IDs
+        const newSelectedActivityIds: string[] = [];
+        const oldSelectedNames = new Set(selectedActivities.map(a => a.name));
+
+        enrichedActivities.forEach(a => {
+          if (oldSelectedNames.has(a.name)) {
+            newSelectedActivityIds.push(a.id);
+          }
+        });
+
         sessionStore.update(sessionId, {
           workflowState: WORKFLOW_STATES.SUGGEST_ACTIVITIES,
           suggestedActivities: enrichedActivities,
-          selectedActivityIds: [],
+          selectedActivityIds: newSelectedActivityIds,
         });
 
         sessionStore.addToConversation(sessionId, "assistant", message);
 
-        // Send complete event
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ type: "complete", message })}\n\n`));
+        // Send complete event with updated selections
+        await writer.write(encoder.encode(`data: ${JSON.stringify({
+          type: "complete",
+          message,
+          selectedActivityIds: newSelectedActivityIds
+        })}\n\n`));
       } catch (error) {
         console.error("Error in suggestActivities streaming:", error);
         try {

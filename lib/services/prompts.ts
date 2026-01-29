@@ -90,7 +90,11 @@ RULES:
 - currency: the ISO 4217 currency code for the destination (e.g., "USD" for USA, "EUR" for Europe, "JPY" for Japan, "GBP" for UK, "THB" for Thailand, "INR" for India)
 - IMPORTANT: Always use the local currency of the destination, NOT USD
 - Ensure all activities are at the destination specified
-- STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)`,
+- STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)
+- HISTORY RULES:
+    - If "Selected Activities" are provided, you MUST include them in your 10 suggestions.
+    - If "Unselected Activities" are provided, you MUST NOT suggest any of them again.
+    - Treat "Unselected activities" as a blacklist.`,
 
   GROUP_ACTIVITIES_INTO_DAYS: `You are an expert travel planner grouping selected activities into days.
 
@@ -162,8 +166,11 @@ RULES:
 - Be conversational and helpful
 - If asked about a specific activity, provide detailed info
 - If asked for more activities, generate 1-5 new ones matching the request
-- If the user wants to start over or express dislike for current options, set replaceActivities=true
+- If user wants to start over or express dislike for current options, set replaceActivities=true
 - Otherwise, set replaceActivities=false (to append new activities)
+- HISTORY RULES:
+    - Never suggest any activities from the "Unselected Activities" list.
+    - Always respect the "Selected Activities" as the ones the user liked.
 - Return ONLY valid JSON, no additional text`,
 };
 
@@ -248,14 +255,20 @@ User feedback: ${userMessage}`,
   return messages;
 }
 
-export function buildSuggestTopActivitiesMessages({ tripInfo }: { tripInfo: TripInfo }) {
+export function buildSuggestTopActivitiesMessages({
+  tripInfo,
+  selectedActivities = [],
+  unselectedActivities = []
+}: {
+  tripInfo: TripInfo,
+  selectedActivities?: SuggestedActivity[],
+  unselectedActivities?: SuggestedActivity[]
+}) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.SUGGEST_TOP_ACTIVITIES },
   ];
 
-  messages.push({
-    role: "user",
-    content: `Suggest 10 top activities for the following trip:
+  let content = `Suggest 10 top activities for the following trip:
 
 Destination: ${tripInfo.destination}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
@@ -265,7 +278,19 @@ Activity Level: ${tripInfo.activityLevel}
 Travelers: ${tripInfo.travelers || 1}
 ${tripInfo.budget ? `Budget: ${tripInfo.budget}` : ""}
 
-Generate exactly 10 activity suggestions that match the traveler's interests.`,
+Generate exactly 10 activity suggestions that match the traveler's interests.`;
+
+  if (selectedActivities.length > 0) {
+    content += `\n\nSELECTED ACTIVITIES (Include these in your suggestions):\n${JSON.stringify(selectedActivities.map(a => ({ name: a.name, type: a.type, description: a.description })), null, 2)}`;
+  }
+
+  if (unselectedActivities.length > 0) {
+    content += `\n\nUNSELECTED ACTIVITIES (DO NOT suggest these again - they are blacklisted):\n${JSON.stringify(unselectedActivities.map(a => ({ name: a.name })), null, 2)}`;
+  }
+
+  messages.push({
+    role: "user",
+    content,
   });
 
   return messages;
@@ -342,12 +367,14 @@ export function buildSuggestActivitiesChatMessages({
   tripInfo,
   suggestedActivities,
   selectedActivityIds,
+  unselectedActivityIds = [],
   userMessage,
   conversationHistory,
 }: {
   tripInfo: TripInfo;
   suggestedActivities: SuggestedActivity[];
   selectedActivityIds: string[];
+  unselectedActivityIds?: string[];
   userMessage: string;
   conversationHistory: ConversationMessage[];
 }) {
@@ -355,16 +382,26 @@ export function buildSuggestActivitiesChatMessages({
     { role: "system", content: SYSTEM_PROMPTS.SUGGEST_ACTIVITIES_CHAT },
   ];
 
+  // Map IDs to full activity details for context
+  const selectedActivities = suggestedActivities.filter(a => selectedActivityIds.includes(a.id));
+  const unselectedActivities = suggestedActivities.filter(a => unselectedActivityIds.includes(a.id));
+
   // Add context about current activities
-  messages.push({
-    role: "user",
-    content: `Trip to ${tripInfo.destination} (${tripInfo.durationDays} days)
+  let contextContent = `Trip to ${tripInfo.destination} (${tripInfo.durationDays} days)
 Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
 
 Current suggested activities:
 ${JSON.stringify(suggestedActivities, null, 2)}
 
-Selected so far: ${selectedActivityIds.length > 0 ? selectedActivityIds.join(", ") : "None yet"}`,
+Selected so far: ${selectedActivityIds.length > 0 ? selectedActivityIds.join(", ") : "None yet"}`;
+
+  if (unselectedActivityIds.length > 0) {
+    contextContent += `\n\nPreviously unselected (rejected) activities: ${unselectedActivityIds.join(", ")}`;
+  }
+
+  messages.push({
+    role: "user",
+    content: contextContent,
   });
 
   messages.push({

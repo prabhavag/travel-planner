@@ -20,10 +20,35 @@ export const POST = withSession(
       );
     }
 
-    // Update session with selected activities
+    // Identify unselected activities from the current batch
+    const newlyUnselected = session.suggestedActivities.filter(
+      (a) => !selectedActivityIds.includes(a.id)
+    );
+    const selectedActivities = session.suggestedActivities.filter(
+      (a) => selectedActivityIds.includes(a.id)
+    );
+
+    // Update session with selected and unselected activities
+    // 1. Add current batch of unselected to history
+    // 2. Remove any newly selected from history (in case they were previously unselected)
+    const existingUnselectedIds = new Set(session.unselectedActivityIds || []);
+    const existingUnselectedNames = new Set(session.unselectedActivityNames || []);
+
+    newlyUnselected.forEach((a) => {
+      existingUnselectedIds.add(a.id);
+      existingUnselectedNames.add(a.name);
+    });
+
+    selectedActivities.forEach((a) => {
+      existingUnselectedIds.delete(a.id);
+      existingUnselectedNames.delete(a.name);
+    });
+
     sessionStore.update(sessionId, {
       workflowState: WORKFLOW_STATES.SELECT_ACTIVITIES,
       selectedActivityIds: selectedActivityIds,
+      unselectedActivityIds: Array.from(existingUnselectedIds),
+      unselectedActivityNames: Array.from(existingUnselectedNames),
     });
 
     const selectedCount = selectedActivityIds.length;

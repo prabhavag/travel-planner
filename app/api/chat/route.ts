@@ -39,6 +39,8 @@ export const POST = withSession(
           tripInfo: result.tripInfo!,
           suggestedActivities: [],
           selectedActivityIds: [],
+          unselectedActivityIds: [],
+          unselectedActivityNames: [],
           dayGroups: [],
           groupedDays: [],
           restaurantSuggestions: [],
@@ -66,6 +68,7 @@ export const POST = withSession(
         tripInfo: session.tripInfo,
         suggestedActivities: session.suggestedActivities || [],
         selectedActivityIds: session.selectedActivityIds || [],
+        unselectedActivityIds: session.unselectedActivityIds || [],
         userMessage: message,
         conversationHistory: session.conversationHistory,
       });
@@ -78,6 +81,20 @@ export const POST = withSession(
       // Merge or replace activities
       if (result.newActivities && result.newActivities.length > 0) {
         const existingActivities = result.replaceActivities ? [] : (session.suggestedActivities || []);
+
+        // If replacing, add unselected ones to blacklist
+        if (result.replaceActivities && session.suggestedActivities) {
+          const newlyUnselected = session.suggestedActivities.filter(
+            a => !session.selectedActivityIds.includes(a.id)
+          );
+          const existingUnselectedNames = new Set(session.unselectedActivityNames || []);
+          newlyUnselected.forEach(a => existingUnselectedNames.add(a.name));
+
+          sessionStore.update(sessionId, {
+            unselectedActivityNames: Array.from(existingUnselectedNames)
+          });
+        }
+
         sessionStore.update(sessionId, {
           suggestedActivities: [...existingActivities, ...result.newActivities],
           selectedActivityIds: result.replaceActivities ? [] : (session.selectedActivityIds || []),

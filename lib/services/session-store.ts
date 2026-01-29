@@ -38,6 +38,8 @@ export interface Session {
   // Activity-first flow fields
   suggestedActivities: SuggestedActivity[];
   selectedActivityIds: string[];
+  unselectedActivityIds: string[];
+  unselectedActivityNames: string[];
   dayGroups: DayGroup[];
   groupedDays: GroupedDay[];
   restaurantSuggestions: RestaurantSuggestion[];
@@ -80,6 +82,8 @@ class SessionStore {
       // Activity-first flow fields
       suggestedActivities: [],
       selectedActivityIds: [],
+      unselectedActivityIds: [],
+      unselectedActivityNames: [],
       dayGroups: [],
       groupedDays: [],
       restaurantSuggestions: [],

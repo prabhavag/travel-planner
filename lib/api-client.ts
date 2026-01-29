@@ -341,7 +341,7 @@ export interface GroupedDay {
 export async function suggestTopActivities(
   sessionId: string,
   onActivity: (activity: SuggestedActivity) => void,
-  onComplete: (message: string) => void,
+  onComplete: (message: string, selectedActivityIds?: string[]) => void,
   onError?: (error: string) => void,
   onEnrichment?: (activity: SuggestedActivity) => void
 ): Promise<void> {
@@ -375,7 +375,7 @@ export async function suggestTopActivities(
         } else if (data.type === "enrichment") {
           if (onEnrichment) onEnrichment(data.activity);
         } else if (data.type === "complete") {
-          onComplete(data.message);
+          onComplete(data.message, data.selectedActivityIds);
         } else if (data.type === "error") {
           if (onError) onError(data.message);
         }

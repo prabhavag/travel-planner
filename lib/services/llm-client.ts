@@ -165,13 +165,25 @@ class LLMClient {
     }
   }
 
-  async *suggestTopActivities({ tripInfo }: { tripInfo: TripInfo }): AsyncGenerator<
+  async *suggestTopActivities({
+    tripInfo,
+    selectedActivities = [],
+    unselectedActivities = []
+  }: {
+    tripInfo: TripInfo;
+    selectedActivities?: SuggestedActivity[];
+    unselectedActivities?: SuggestedActivity[];
+  }): AsyncGenerator<
     | { type: "message"; message: string }
     | { type: "activity"; activity: SuggestedActivity }
     | { type: "complete" }
     | { type: "error"; message: string }
   > {
-    const messages = buildSuggestTopActivitiesMessages({ tripInfo });
+    const messages = buildSuggestTopActivitiesMessages({
+      tripInfo,
+      selectedActivities,
+      unselectedActivities
+    });
     console.log("Suggesting top activities with messages:", messages);
 
     try {
@@ -307,12 +319,14 @@ class LLMClient {
     tripInfo,
     suggestedActivities,
     selectedActivityIds,
+    unselectedActivityIds = [],
     userMessage,
     conversationHistory,
   }: {
     tripInfo: TripInfo;
     suggestedActivities: SuggestedActivity[];
     selectedActivityIds: string[];
+    unselectedActivityIds?: string[];
     userMessage: string;
     conversationHistory: ConversationMessage[];
   }): Promise<{
@@ -326,6 +340,7 @@ class LLMClient {
       tripInfo,
       suggestedActivities,
       selectedActivityIds,
+      unselectedActivityIds,
       userMessage,
       conversationHistory,
     });
