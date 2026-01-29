@@ -208,9 +208,24 @@ class LLMClient {
           const line = buffer.slice(0, newlineIndex).trim();
           buffer = buffer.slice(newlineIndex + 1);
 
+          // Skip empty lines or markdown code block markers
+          if (!line || line.startsWith("```")) {
+            continue;
+          }
+
           if (line) {
+            // Extract JSON object if it's not the entire line (e.g., if prefixed with "Line 1:")
+            let cleanLine = line;
+            if (!line.startsWith("{")) {
+              const startIdx = line.indexOf("{");
+              const endIdx = line.lastIndexOf("}");
+              if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+                cleanLine = line.slice(startIdx, endIdx + 1);
+              }
+            }
+
             try {
-              const parsed = JSON.parse(line);
+              const parsed = JSON.parse(cleanLine);
               if (!messageYielded && parsed.message && !parsed.id) {
                 // First line is the message
                 yield { type: "message", message: parsed.message };
@@ -221,7 +236,7 @@ class LLMClient {
               }
             } catch {
               // Not valid JSON yet, might be partial - skip this line
-              console.warn("Skipping invalid JSON line:", line);
+              console.warn("Skipping invalid JSON line:", cleanLine);
             }
           }
         }

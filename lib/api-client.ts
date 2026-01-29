@@ -303,6 +303,8 @@ export interface SuggestedActivity {
   currency?: string;
   bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
   neighborhood?: string | null;
+  suggestionReason?: string;
+  categoryTag?: string;
   coordinates?: { lat: number; lng: number } | null;
   rating?: number | null;
   place_id?: string | null;

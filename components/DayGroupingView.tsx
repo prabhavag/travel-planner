@@ -188,9 +188,16 @@ export function DayGroupingView({
               {/* Right Column: Title & Badge */}
               <div className="flex-1 p-6 flex flex-col justify-center">
                 <div className="flex items-center gap-2 mb-3">
-                  <Badge className="px-2 py-0.5 bg-gray-900 hover:bg-black border-0 text-white font-bold uppercase tracking-widest text-[8px]">
-                    {currentActivity.type}
-                  </Badge>
+                  {currentActivity.categoryTag && (
+                    <Badge className={`px-2 py-0.5 border-0 text-white font-bold uppercase tracking-widest text-[8px] ${currentActivity.categoryTag === "Popular Choice"
+                        ? "bg-blue-600 hover:bg-blue-700"
+                        : currentActivity.categoryTag.startsWith("Interest:")
+                          ? "bg-green-600 hover:bg-green-700"
+                          : "bg-purple-600 hover:bg-purple-700"
+                      }`}>
+                      {currentActivity.categoryTag}
+                    </Badge>
+                  )}
                   {currentActivity.rating && (
                     <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
                       <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
@@ -207,6 +214,14 @@ export function DayGroupingView({
                 <p className="text-sm text-gray-600 leading-relaxed font-normal">
                   {currentActivity.description}
                 </p>
+                {currentActivity.suggestionReason && (
+                  <div className="mt-4 p-4 bg-blue-50/50 rounded-2xl border border-blue-100/50">
+                    <p className="text-xs font-bold text-blue-900 mb-1 uppercase tracking-wider">Why we suggested this:</p>
+                    <p className="text-sm text-blue-800 leading-relaxed italic">
+                      "{currentActivity.suggestionReason}"
+                    </p>
+                  </div>
+                )}
               </section>
 
               <div className="flex flex-wrap gap-3">

@@ -63,19 +63,23 @@ RULES:
 
   SUGGEST_TOP_ACTIVITIES: `You are an expert travel planner suggesting the TOP 10 activities for a trip.
 
-For the given destination and user interests, suggest exactly 10 activities that:
-1. Match the user's interests and activity level
+For the given destination and user interests, suggest EXACTLY 10 activities that:
+1. Match the user's interests and activity level (STRICT ALIGNMENT: Only tag interests the user explicitly specified).
 2. Are real, specific places (not generic descriptions)
 3. Cover a variety of types (landmarks, museums, nature, experiences, neighborhoods)
 4. Include both popular attractions and hidden gems
 5. Can realistically be done during the trip duration
 
-RESPONSE FORMAT (JSONL - one JSON object per line, NO markdown code blocks):
-Line 1: {"message": "Your conversational intro presenting these activities"}
-Lines 2-11: One activity per line as a JSON object
+RESPONSE FORMAT (STRICT JSONL - one JSON object per line, NO markdown code blocks, NO text between JSON objects):
+- The first line must be a JSON object containing a conversational "message" property.
+- Each subsequent line must be a JSON object representing one activity (10 total).
+- Do NOT prefix lines with "Line 1:", "Line 2:", etc.
 
-Example activity line:
-{"id": "act1", "name": "Specific Place Name", "type": "museum", "description": "2-3 sentences about what makes this special", "estimatedDuration": "2-3 hours", "estimatedCost": 1500, "currency": "JPY", "bestTimeOfDay": "morning", "neighborhood": "Area/district"}
+Example Output:
+{"message": "Your conversational intro..."}
+{"id": "act1", "name": "Place 1", ...}
+{"id": "act2", "name": "Place 2", ...}
+...and so on for 10 activities.
 
 RULES:
 - Output EXACTLY 11 lines total: 1 message line + 10 activity lines
@@ -90,7 +94,9 @@ RULES:
 - currency: the ISO 4217 currency code for the destination (e.g., "USD" for USA, "EUR" for Europe, "JPY" for Japan, "GBP" for UK, "THB" for Thailand, "INR" for India)
 - IMPORTANT: Always use the local currency of the destination, NOT USD
 - Ensure all activities are at the destination specified
-- STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)
+- suggestionReason: A brief (1-2 sentence) explanation of why this activity is being suggested. Connect it to the user's specific interests if applicable, or explain why it's a "must-do".
+- categoryTag: A clear, short tag (1-3 words). Use "Popular Choice" for famous defaults. For suggestions tied to interests, use a specific tag like "Interest: Hiking", "Interest: Local Food", etc. IMPORTANT: The interest part (e.g., "Hiking") MUST BE STATED OR STRONGLY IMPLIED by the user's provided "Preferences". If no matching interest is found in the preferences, use "Popular Choice". DO NOT hallucinate new interests.
+- BALANCE & QUANTITY: You MUST generate EXACTLY 10 activities. Ensure a mix of about 60% "Popular Choice" (must-dos) and 40% "Interest: [X]" (strictly tied to preferences).
 - HISTORY RULES:
     - If "Selected Activities" are provided, you MUST include them in your 10 suggestions.
     - If "Unselected Activities" are provided, you MUST NOT suggest any of them again.

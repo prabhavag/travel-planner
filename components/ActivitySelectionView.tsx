@@ -44,33 +44,10 @@ export function ActivitySelectionView({
     onConfirm();
   };
 
-  const getActivityTypeColor = (type: string): string => {
-    const colors: Record<string, string> = {
-      museum: "bg-purple-100 text-purple-800",
-      landmark: "bg-blue-100 text-blue-800",
-      park: "bg-green-100 text-green-800",
-      viewpoint: "bg-cyan-100 text-cyan-800",
-      market: "bg-orange-100 text-orange-800",
-      experience: "bg-pink-100 text-pink-800",
-      neighborhood: "bg-yellow-100 text-yellow-800",
-      beach: "bg-teal-100 text-teal-800",
-      temple: "bg-red-100 text-red-800",
-      gallery: "bg-indigo-100 text-indigo-800",
-    };
-    return colors[type.toLowerCase()] || "bg-gray-100 text-gray-800";
-  };
-
-  const getBestTimeColor = (time: string): string => {
-    switch (time) {
-      case "morning":
-        return "bg-amber-100 text-amber-800";
-      case "afternoon":
-        return "bg-orange-100 text-orange-800";
-      case "evening":
-        return "bg-indigo-100 text-indigo-800";
-      default:
-        return "bg-gray-100 text-gray-800";
-    }
+  const getTagColor = (tag: string): string => {
+    if (tag === "Popular Choice") return "bg-blue-100 text-blue-800 border-blue-200";
+    if (tag.startsWith("Interest:")) return "bg-green-100 text-green-800 border-green-200";
+    return "bg-purple-100 text-purple-800 border-purple-200";
   };
 
   const openInMaps = (activity: SuggestedActivity) => {
@@ -163,16 +140,20 @@ export function ActivitySelectionView({
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-1">
-                  <Badge variant="secondary" className={getActivityTypeColor(activity.type)}>
-                    {activity.type}
-                  </Badge>
-                  <Badge variant="secondary" className={getBestTimeColor(activity.bestTimeOfDay)}>
-                    {activity.bestTimeOfDay}
-                  </Badge>
+                  {activity.categoryTag && (
+                    <Badge variant="outline" className={`font-bold uppercase tracking-widest text-[8px] ${getTagColor(activity.categoryTag)}`}>
+                      {activity.categoryTag}
+                    </Badge>
+                  )}
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
-                <p className="text-sm text-gray-600 line-clamp-3 mb-3">{activity.description}</p>
+                <p className="text-sm text-gray-600 line-clamp-3 mb-2">{activity.description}</p>
+                {activity.suggestionReason && (
+                  <p className="text-[11px] text-blue-700 bg-blue-50/50 p-2 rounded-lg italic mb-3 border border-blue-100/50">
+                    "{activity.suggestionReason}"
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-3 text-sm text-gray-500">
                   <div className="flex items-center gap-1">
                     <Clock className="w-4 h-4" />

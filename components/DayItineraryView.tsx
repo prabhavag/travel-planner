@@ -106,20 +106,10 @@ export function DayItineraryView({
     });
   };
 
-  const getActivityTypeColor = (type: string): string => {
-    const colors: Record<string, string> = {
-      museum: "bg-purple-100 text-purple-800",
-      landmark: "bg-blue-100 text-blue-800",
-      park: "bg-green-100 text-green-800",
-      viewpoint: "bg-cyan-100 text-cyan-800",
-      market: "bg-orange-100 text-orange-800",
-      experience: "bg-pink-100 text-pink-800",
-      neighborhood: "bg-yellow-100 text-yellow-800",
-      beach: "bg-teal-100 text-teal-800",
-      temple: "bg-red-100 text-red-800",
-      gallery: "bg-indigo-100 text-indigo-800",
-    };
-    return colors[type.toLowerCase()] || "bg-gray-100 text-gray-800";
+  const getTagColor = (tag: string): string => {
+    if (tag === "Popular Choice") return "bg-blue-600 hover:bg-blue-700";
+    if (tag.startsWith("Interest:")) return "bg-green-600 hover:bg-green-700";
+    return "bg-purple-600 hover:bg-purple-700";
   };
 
   const openInMaps = (spot: SuggestedActivity | RestaurantSuggestion) => {
@@ -215,8 +205,11 @@ export function DayItineraryView({
               {/* Right Column: Key Info (Structured, Non-stretched) */}
               <div className="flex-1 p-6 flex flex-col justify-center bg-white">
                 <div className="flex items-center gap-2 mb-3">
-                  <Badge className={`px-2 py-0.5 text-[10px] font-bold ${isRestaurant ? "bg-amber-500 hover:bg-amber-600" : "bg-blue-600 hover:bg-blue-700"}`}>
-                    {isRestaurant ? "Dining" : (currentSpot as SuggestedActivity).type}
+                  <Badge className={`px-2 py-0.5 text-[10px] font-bold ${isRestaurant
+                    ? "bg-amber-500 hover:bg-amber-600"
+                    : getTagColor((currentSpot as SuggestedActivity).categoryTag || "Based on interests")
+                    }`}>
+                    {isRestaurant ? "Dining" : (currentSpot as SuggestedActivity).categoryTag || "Based on interests"}
                   </Badge>
                   {currentSpot.rating && (
                     <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
@@ -244,6 +237,14 @@ export function DayItineraryView({
                 <p className="text-sm text-gray-600 leading-relaxed font-normal">
                   {isRestaurant ? (currentSpot as RestaurantSuggestion).vicinity : (currentSpot as SuggestedActivity).description}
                 </p>
+                {!isRestaurant && (currentSpot as SuggestedActivity).suggestionReason && (
+                  <div className="mt-4 p-4 bg-blue-50/50 rounded-2xl border border-blue-100/50">
+                    <p className="text-[10px] font-bold text-blue-900 mb-1 uppercase tracking-wider">Why we suggested this:</p>
+                    <p className="text-sm text-blue-800 leading-relaxed italic">
+                      "{(currentSpot as SuggestedActivity).suggestionReason}"
+                    </p>
+                  </div>
+                )}
               </section>
 
               <div className="grid grid-cols-2 gap-4">

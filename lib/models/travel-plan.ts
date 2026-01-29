@@ -226,6 +226,8 @@ export const SuggestedActivitySchema = z.object({
   currency: z.string().default("USD"), // Currency code (e.g., "USD", "EUR", "JPY")
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]),
   neighborhood: z.string().nullable().optional(),
+  suggestionReason: z.string().optional(),
+  categoryTag: z.string().optional(),
   // Enriched from Places API:
   coordinates: CoordinatesSchema.nullable().optional(),
   rating: z.number().nullable().optional(),
