@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working style
+
+- Always propose a plan before making changes
+- Never modify files or run commands without explicit approval
+- Ask clarifying questions if requirements are ambiguous
+
 ## Commands
 
 ### Running the Application

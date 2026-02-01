@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Send, MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw, ChevronUp, ChevronDown } from "lucide-react";
 import MapComponent from "@/components/MapComponent";
 import { ActivitySelectionView } from "@/components/ActivitySelectionView";
 import { DayGroupingView } from "@/components/DayGroupingView";
@@ -31,8 +31,6 @@ import {
   type DayGroup,
 } from "@/lib/api-client";
 import { InterestsPreferencesView } from "@/components/InterestsPreferencesView";
-import { MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
-
 
 // Workflow states
 const WORKFLOW_STATES = {
@@ -87,21 +85,29 @@ export default function PlannerPage() {
   const [canProceed, setCanProceed] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "interests">("chat");
   const [hoveredActivityId, setHoveredActivityId] = useState<string | null>(null);
+  const [isChatMinimized, setIsChatMinimized] = useState(false);
 
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll chat
   useEffect(() => {
-    if (chatScrollRef.current) {
-      setTimeout(() => {
-        chatScrollRef.current?.scrollTo({
-          top: chatScrollRef.current.scrollHeight,
-          behavior: "smooth",
-        });
-      }, 100);
-    }
-  }, [chatHistory]);
+    if (!chatScrollRef.current || activeTab !== "chat" || isChatMinimized) return;
+
+    const container = chatScrollRef.current;
+    const viewport = container.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
+    const scrollTarget = viewport || container;
+
+    const scrollToBottom = () => {
+      scrollTarget.scrollTo({
+        top: scrollTarget.scrollHeight,
+        behavior: "smooth",
+      });
+    };
+
+    const timeoutId = window.setTimeout(scrollToBottom, 50);
+    return () => window.clearTimeout(timeoutId);
+  }, [chatHistory, activeTab, isChatMinimized]);
 
   // Initialize session on mount
   useEffect(() => {
@@ -663,11 +669,17 @@ export default function PlannerPage() {
 
   return (
     <div className="h-screen overflow-hidden bg-gray-100">
-      <div className="flex h-full">
-        {/* Left Panel: Map + Content View */}
-        <div className="w-[75%] h-full flex flex-col">
-          {/* Map - fixed at 35% height */}
-          <div className="h-[35%] flex-shrink-0 overflow-hidden">
+      <div className="flex h-full flex-col lg:flex-row">
+        {/* Left Panel: Itinerary / Workflow Content */}
+        <div className="w-full lg:w-[55%] h-full flex flex-col bg-gray-100">
+          <div className="flex-1 overflow-y-auto bg-gray-100">
+            {renderLeftPanelContent()}
+          </div>
+        </div>
+
+        {/* Right Panel: Map with AI Companion overlay */}
+        <div className="w-full lg:w-[45%] h-full relative bg-gray-100 border-l border-gray-200">
+          <div className="absolute inset-0">
             <MapComponent
               destination={tripInfo?.destination}
               suggestedActivities={
@@ -691,128 +703,131 @@ export default function PlannerPage() {
             />
           </div>
 
-          {/* State-specific content - scrollable */}
-          <div className="flex-1 overflow-y-auto bg-gray-100 relative z-10">
-            {renderLeftPanelContent()}
-          </div>
-        </div>
-
-        {/* Right Panel: Chat */}
-        <div className="w-[25%] h-full bg-white border-l border-gray-200 flex flex-col">
-          {/* Header */}
-          <div className="p-4 border-b border-gray-200 text-center flex-shrink-0">
-            <h1 className="text-xl font-bold text-gray-800">
-              {tripInfo?.destination || "Planning Your Trip"}
-            </h1>
-            {tripInfo?.startDate && tripInfo?.endDate && (
-              <p className="text-sm text-gray-500">
-                {tripInfo.startDate} - {tripInfo.endDate}
-              </p>
-            )}
-            <Badge className="mt-2 bg-blue-500">{getStateLabel()}</Badge>
-          </div>
-
-          {/* Tab Switcher */}
-          <div className="flex border-b border-gray-200">
-            <button
-              onClick={() => setActiveTab("chat")}
-              className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "chat"
-                ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-                }`}
-            >
-              <MessageSquare className="w-4 h-4" />
-              Chat
-            </button>
-            <button
-              onClick={() => setActiveTab("interests")}
-              className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "interests"
-                ? "text-rose-600 border-b-2 border-rose-600 bg-rose-50/50"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-                }`}
-            >
-              <Heart className="w-4 h-4" />
-              Interests & preferences
-              {tripInfo?.preferences && tripInfo.preferences.length > 0 && (
-                <Badge className="ml-1 px-1.5 py-0 min-w-[18px] h-[18px] bg-rose-100 text-rose-700 hover:bg-rose-100">
-                  {tripInfo.preferences.length}
-                </Badge>
-              )}
-            </button>
-          </div>
-
-          {activeTab === "chat" ? (
-            <>
-              {/* Chat Messages */}
-              <ScrollArea className="flex-1 p-4" ref={chatScrollRef}>
-                <div className="space-y-3">
-                  {chatHistory.map((msg, idx) => (
-                    <div
-                      key={idx}
-                      className={`p-3 rounded-2xl max-w-[85%] ${msg.role === "user" ? "bg-blue-500 text-white ml-auto" : "bg-gray-200 text-gray-800"
-                        }`}
-                    >
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
-                    </div>
-                  ))}
-                  {loading && (
-                    <div className="flex justify-center">
-                      <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
-                    </div>
-                  )}
-                </div>
-
-                {/* Suggestion Chips */}
-                {workflowState === WORKFLOW_STATES.INFO_GATHERING &&
-                  chatHistory.length === 1 &&
-                  !loading && (
-                    <div className="mt-4 flex flex-wrap gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                      <button
-                        onClick={() => handleSuggestionClick("Plan a 4-day moderate trip to Maui from May 10th to May 14th 2026. I'm interested in snorkeling, hiking, and local seafood.")}
-                        className="px-4 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100 transition-colors shadow-sm"
-                      >
-                        🌴 Maui: 4-day adventure
-                      </button>
-                      <button
-                        onClick={() => handleSuggestionClick("Plan a 4-day relaxed trip to Switzerland from June 15th to June 19th 2026. I'm interested in scenic trains, chocolate, and mountain views.")}
-                        className="px-4 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100 transition-colors shadow-sm"
-                      >
-                        🏔️ Switzerland: 4-day escape
-                      </button>
-                    </div>
-                  )}
-
-                {/* Action Button */}
-                {renderActionButton()}
-              </ScrollArea>
-
-              {/* Chat Input */}
-              <div className="p-4 border-t border-gray-200 flex gap-2 flex-shrink-0">
-                <Input
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  placeholder={
-                    workflowState === WORKFLOW_STATES.INFO_GATHERING
-                      ? "Tell me about your trip..."
-                      : "Ask questions or request changes..."
-                  }
-                  onKeyDown={(e) => e.key === "Enter" && handleChat()}
-                  disabled={loading || isFinalized}
-                  className="flex-1"
-                />
-                <Button onClick={handleChat} disabled={loading || !chatInput.trim() || isFinalized} size="icon">
-                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          {/* AI Travel Companion */}
+          <div
+            className={`absolute bottom-4 left-4 right-4 lg:left-auto lg:right-4 lg:w-[380px] ${isChatMinimized ? "h-[56px]" : "h-[40%] min-h-[260px] max-h-[420px]"
+              } bg-white/95 backdrop-blur border border-gray-200 shadow-xl rounded-2xl flex flex-col overflow-hidden transition-all duration-300`}
+          >
+            <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-gray-400">AI Travel Companion</p>
+                <h1 className="text-sm font-semibold text-gray-800">
+                  {tripInfo?.destination || "Planning Your Trip"}
+                </h1>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge className="bg-blue-500">{getStateLabel()}</Badge>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsChatMinimized((prev) => !prev)}
+                  className="h-7 w-7 text-gray-400 hover:text-gray-700"
+                  title={isChatMinimized ? "Expand" : "Minimize"}
+                >
+                  {isChatMinimized ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </Button>
               </div>
-            </>
-          ) : (
-            <InterestsPreferencesView
-              preferences={tripInfo?.preferences || []}
-              onUpdatePreferences={handleUpdatePreferences}
-              isLoading={loading}
-            />
-          )}
+            </div>
 
+            {/* Tab Switcher */}
+            <div className={`flex border-b border-gray-100 ${isChatMinimized ? "hidden" : ""}`}>
+              <button
+                onClick={() => setActiveTab("chat")}
+                className={`flex-1 py-2 px-3 text-xs font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "chat"
+                  ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                Chat
+              </button>
+              <button
+                onClick={() => setActiveTab("interests")}
+                className={`flex-1 py-2 px-3 text-xs font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === "interests"
+                  ? "text-rose-600 border-b-2 border-rose-600 bg-rose-50/50"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+              >
+                <Heart className="w-3.5 h-3.5" />
+                Interests
+                {tripInfo?.preferences && tripInfo.preferences.length > 0 && (
+                  <Badge className="ml-1 px-1.5 py-0 min-w-[18px] h-[18px] bg-rose-100 text-rose-700 hover:bg-rose-100">
+                    {tripInfo.preferences.length}
+                  </Badge>
+                )}
+              </button>
+            </div>
+
+            {!isChatMinimized && activeTab === "chat" ? (
+              <>
+                <ScrollArea className="flex-1 p-3" ref={chatScrollRef}>
+                  <div className="space-y-3">
+                    {chatHistory.map((msg, idx) => (
+                      <div
+                        key={idx}
+                        className={`p-3 rounded-2xl max-w-[85%] text-sm ${msg.role === "user" ? "bg-blue-500 text-white ml-auto" : "bg-gray-200 text-gray-800"
+                          }`}
+                      >
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                      </div>
+                    ))}
+                    {loading && (
+                      <div className="flex justify-center">
+                        <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                      </div>
+                    )}
+                  </div>
+
+                  {workflowState === WORKFLOW_STATES.INFO_GATHERING &&
+                    chatHistory.length === 1 &&
+                    !loading && (
+                      <div className="mt-4 flex flex-wrap gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                        <button
+                          onClick={() => handleSuggestionClick("Plan a 4-day moderate trip to Maui from May 10th to May 14th 2026. I'm interested in snorkeling, hiking, and local seafood.")}
+                          className="px-3 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+                        >
+                          🌴 Maui: 4-day adventure
+                        </button>
+                        <button
+                          onClick={() => handleSuggestionClick("Plan a 4-day relaxed trip to Switzerland from June 15th to June 19th 2026. I'm interested in scenic trains, chocolate, and mountain views.")}
+                          className="px-3 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+                        >
+                          🏔️ Switzerland: 4-day escape
+                        </button>
+                      </div>
+                    )}
+
+                  {renderActionButton()}
+                </ScrollArea>
+
+                <div className="p-3 border-t border-gray-100 flex gap-2 flex-shrink-0">
+                  <Input
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder={
+                      workflowState === WORKFLOW_STATES.INFO_GATHERING
+                        ? "Tell me about your trip..."
+                        : "Ask questions or request changes..."
+                    }
+                    onKeyDown={(e) => e.key === "Enter" && handleChat()}
+                    disabled={loading || isFinalized}
+                    className="flex-1 h-9 text-sm"
+                  />
+                  <Button onClick={handleChat} disabled={loading || !chatInput.trim() || isFinalized} size="icon" className="h-9 w-9">
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  </Button>
+                </div>
+              </>
+            ) : null}
+
+            {!isChatMinimized && activeTab === "interests" ? (
+              <InterestsPreferencesView
+                preferences={tripInfo?.preferences || []}
+                onUpdatePreferences={handleUpdatePreferences}
+                isLoading={loading}
+              />
+            ) : null}
+          </div>
         </div>
       </div>
     </div>
