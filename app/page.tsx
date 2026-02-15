@@ -515,7 +515,7 @@ export default function PlannerPage() {
         !selectedActivityIds.every(id => lastGroupedActivityIds.includes(id)));
 
     return (
-      <div className="flex flex-col h-full bg-gray-100">
+      <div className="flex h-full min-h-0 flex-col bg-gray-100">
         {/* Navigation Bar */}
         {(canGoBack || canGoForward || selectionsChanged) && (
           <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200 sticky top-0 z-20">
@@ -548,7 +548,7 @@ export default function PlannerPage() {
           </div>
         )}
 
-        <div className="flex-1 overflow-hidden min-w-0">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {(() => {
             switch (workflowState) {
               case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
@@ -678,8 +678,8 @@ export default function PlannerPage() {
     <div className="h-screen overflow-hidden bg-gray-100">
       <div className="flex h-full flex-col lg:flex-row">
         {/* Left Panel: Itinerary / Workflow Content */}
-        <div className="w-full lg:w-[55%] h-full flex flex-col bg-gray-100">
-          <div className="flex-1 overflow-y-auto bg-gray-100">
+        <div className="w-full lg:w-[55%] h-full min-h-0 flex flex-col bg-gray-100">
+          <div className="flex-1 min-h-0 bg-gray-100">
             {renderLeftPanelContent()}
           </div>
         </div>
