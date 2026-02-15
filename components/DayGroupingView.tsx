@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Clock, ChevronRight, Star, MapPin } from "lucide-react";
+import { Clock, ChevronLeft, ChevronRight, Star, MapPin, ListChecks } from "lucide-react";
 import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
 
@@ -28,10 +28,31 @@ export function DayGroupingView({
   onConfirm,
   isLoading = false,
 }: DayGroupingViewProps) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [movingActivity, setMovingActivity] = useState<{
     id: string;
     fromDay: number;
   } | null>(null);
+
+  // Flatten all activities into a single list with metadata
+  const carouselItems = groupedDays.flatMap(day =>
+    day.activities.map(activity => ({
+      data: activity,
+      dayNumber: day.dayNumber,
+      dayTheme: day.theme
+    }))
+  );
+
+  const scroll = (direction: "left" | "right") => {
+    if (scrollContainerRef.current) {
+      const scrollAmount = scrollContainerRef.current.clientWidth;
+      const currentScroll = scrollContainerRef.current.scrollLeft;
+      scrollContainerRef.current.scrollTo({
+        left: direction === "left" ? currentScroll - scrollAmount : currentScroll + scrollAmount,
+        behavior: "smooth",
+      });
+    }
+  };
 
   const handleMoveStart = (activityId: string, fromDay: number) => {
     setMovingActivity({ id: activityId, fromDay });
@@ -46,11 +67,6 @@ export function DayGroupingView({
 
   const handleMoveCancel = () => {
     setMovingActivity(null);
-  };
-
-  const formatDate = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   };
 
   const getActivityTypeColor = (type: string): string => {
@@ -72,48 +88,52 @@ export function DayGroupingView({
   const ActivityCard = ({
     activity,
     dayNumber,
-    index,
   }: {
     activity: SuggestedActivity;
     dayNumber: number;
-    index: number;
   }) => {
     const isMoving = movingActivity?.id === activity.id;
 
     return (
-      <div
-        className={`p-3 bg-white rounded-lg border ${isMoving ? "ring-2 ring-primary bg-primary/5" : "hover:shadow-sm"
-          }`}
-        style={{ borderLeft: `4px solid ${getDayColor(dayNumber)}` }}
+      <Card
+        className={`w-full min-w-full flex-shrink-0 snap-center transition-all duration-200 border-t-4 hover:shadow-md ${isMoving ? "ring-2 ring-primary bg-blue-50/30" : ""}`}
+        style={{ borderTopColor: getDayColor(dayNumber) }}
       >
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-gray-400 font-mono text-xs">#{index + 1}</span>
-              <span className="font-medium text-sm truncate">{activity.name}</span>
-              <Badge variant="secondary" className={`${getActivityTypeColor(activity.type)} text-xs`}>
-                {activity.type}
-              </Badge>
-            </div>
-            <div className="flex items-center gap-3 text-xs text-gray-500">
-              <div className="flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                <span>{activity.estimatedDuration}</span>
+        <CardHeader className="pb-2">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <Badge className={`${getDayBadgeColors(dayNumber)} h-5 px-1.5`}>Day {dayNumber}</Badge>
+                <Badge variant="secondary" className={`${getActivityTypeColor(activity.type)} text-[10px] h-5`}>
+                  {activity.type}
+                </Badge>
               </div>
-              {activity.rating && (
-                <div className="flex items-center gap-1">
-                  <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                  <span>{activity.rating.toFixed(1)}</span>
-                </div>
-              )}
+              <CardTitle className="text-base line-clamp-1">{activity.name}</CardTitle>
             </div>
           </div>
-          <div className="flex-shrink-0">
-            {isMoving ? (
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-gray-600 line-clamp-2 min-h-[40px]">{activity.description}</p>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500 pt-1">
+            <div className="flex items-center gap-1.5 font-medium text-gray-700">
+              <Clock className="w-3.5 h-3.5 text-primary" />
+              <span>{activity.estimatedDuration}</span>
+            </div>
+            {activity.rating && (
               <div className="flex items-center gap-1">
+                <Star className="w-3.5 h-3.5 fill-yellow-400 text-yellow-400" />
+                <span className="font-medium text-gray-700">{activity.rating.toFixed(1)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-2 border-t">
+            {isMoving ? (
+              <div className="flex items-center gap-2">
                 <Select onValueChange={(val) => handleMoveConfirm(parseInt(val))}>
-                  <SelectTrigger className="w-24 h-8 text-xs">
-                    <SelectValue placeholder="Move to" />
+                  <SelectTrigger className="flex-1 h-9 text-xs">
+                    <SelectValue placeholder="Move to day..." />
                   </SelectTrigger>
                   <SelectContent>
                     {groupedDays.map((day) => (
@@ -123,81 +143,79 @@ export function DayGroupingView({
                     ))}
                   </SelectContent>
                 </Select>
-                <Button variant="ghost" size="sm" onClick={handleMoveCancel} className="h-8 px-2">
-                  ✕
+                <Button variant="outline" size="sm" onClick={handleMoveCancel} className="h-9 px-3">
+                  Cancel
                 </Button>
               </div>
             ) : (
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 onClick={() => handleMoveStart(activity.id, dayNumber)}
-                className="h-8 px-2 text-xs text-gray-500 hover:text-gray-700"
+                className="w-full h-9 text-xs font-medium text-gray-600 hover:text-primary hover:border-primary transition-colors"
               >
-                Move
+                Change Day
               </Button>
             )}
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     );
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between sticky top-0 bg-white z-10 py-2">
+      <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex items-center justify-between sticky top-0 z-10">
         <div>
-          <h2 className="text-lg font-semibold">Organize Your Days</h2>
-          <p className="text-sm text-gray-500">
-            Review the grouping or move activities between days
+          <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+            <ListChecks className="w-6 h-6 text-primary" />
+            Organize Your Days
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Review the daily flow or shuffle activities to perfect your trip
           </p>
         </div>
-        <Button onClick={onConfirm} disabled={isLoading} className="bg-primary text-white">
+        <Button onClick={onConfirm} disabled={isLoading} className="bg-primary hover:bg-primary/90 text-white font-semibold px-6 h-11">
           {isLoading ? "Confirming..." : "Confirm Grouping"}
         </Button>
       </div>
 
-      {/* Days grid */}
-      <div className="space-y-4">
-        {groupedDays.map((day) => (
-          <Card key={day.dayNumber} className="overflow-hidden">
-            <CardHeader className="pb-2 bg-gray-50">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <span className={`${getDayBadgeColors(day.dayNumber)} rounded-full w-7 h-7 flex items-center justify-center text-sm`}>
-                      {day.dayNumber}
-                    </span>
-                    <span>{day.theme}</span>
-                  </CardTitle>
-                  <p className="text-sm text-gray-500 mt-1">{formatDate(day.date)}</p>
-                </div>
-                <Badge variant="secondary" className="text-xs">
-                  {day.activities.length} {day.activities.length === 1 ? "activity" : "activities"}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-3">
-              {day.activities.length === 0 ? (
-                <div className="text-center py-4 text-gray-400 text-sm">
-                  No activities - move some here
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {day.activities.map((activity, index) => (
-                    <ActivityCard
-                      key={activity.id}
-                      activity={activity}
-                      dayNumber={day.dayNumber}
-                      index={index}
-                    />
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
+      <div className="relative group overflow-hidden">
+        {/* Navigation buttons */}
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest px-1">Planned Highlights</h3>
+          <div className="flex gap-2">
+            <Button variant="outline" size="icon" onClick={() => scroll("left")} className="rounded-full h-8 w-8 hover:bg-primary hover:text-white transition-all shadow-sm">
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            <Button variant="outline" size="icon" onClick={() => scroll("right")} className="rounded-full h-8 w-8 hover:bg-primary hover:text-white transition-all shadow-sm">
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Flat activity carousel */}
+        <div
+          ref={scrollContainerRef}
+          className="flex overflow-x-auto pb-6 snap-x snap-mandatory scrollbar-none"
+          style={{ scrollBehavior: 'smooth' }}
+        >
+          {carouselItems.map((item, idx) => (
+            <div key={`${item.data.id}-${idx}`} className="w-full flex-shrink-0 snap-center">
+              <ActivityCard
+                activity={item.data}
+                dayNumber={item.dayNumber}
+              />
+            </div>
+          ))}
+          {carouselItems.length === 0 && (
+            <div className="w-full py-12 flex flex-col items-center justify-center text-gray-400 bg-gray-50 rounded-xl border border-dashed">
+              <MapPin className="w-8 h-8 mb-2 opacity-20" />
+              <p>No activities planned yet</p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

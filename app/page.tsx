@@ -548,7 +548,7 @@ export default function PlannerPage() {
           </div>
         )}
 
-        <div className="flex-1">
+        <div className="flex-1 overflow-hidden min-w-0">
           {(() => {
             switch (workflowState) {
               case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
@@ -568,7 +568,7 @@ export default function PlannerPage() {
 
               case WORKFLOW_STATES.GROUP_DAYS:
                 return (
-                  <div className="p-4">
+                  <div className="p-4 overflow-hidden">
                     <DayGroupingView
                       groupedDays={groupedDays}
                       onMoveActivity={handleMoveActivity}
@@ -595,8 +595,13 @@ export default function PlannerPage() {
               case WORKFLOW_STATES.REVIEW:
               case WORKFLOW_STATES.FINALIZE:
                 return (
-                  <div className="p-4">
-                    <DayItineraryView groupedDays={groupedDays} tripInfo={tripInfo || undefined} />
+                  <div className="p-4 overflow-hidden">
+                    <DayItineraryView
+                      groupedDays={groupedDays}
+                      tripInfo={tripInfo || undefined}
+                      onActivityHover={setHoveredActivityId}
+                      onMoveActivity={handleMoveActivity}
+                    />
                   </div>
                 );
 
