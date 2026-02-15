@@ -17,6 +17,7 @@ import { getDayBadgeColors, getDayColor } from "@/lib/constants";
 
 interface DayGroupingViewProps {
   groupedDays: GroupedDay[];
+  userPreferences?: string[];
   onMoveActivity: (activityId: string, fromDay: number, toDay: number) => void;
   onConfirm: () => void;
   isLoading?: boolean;
@@ -24,6 +25,7 @@ interface DayGroupingViewProps {
 
 export function DayGroupingView({
   groupedDays,
+  userPreferences = [],
   onMoveActivity,
   onConfirm,
   isLoading = false,
@@ -69,6 +71,26 @@ export function DayGroupingView({
     setMovingActivity(null);
   };
 
+  const normalize = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const preferenceTerms = userPreferences.map(normalize).filter(Boolean);
+
+  const isInterestTagMatch = (tag: string): boolean => {
+    const normalizedTag = normalize(tag);
+    if (!normalizedTag || normalizedTag === "general interest match" || preferenceTerms.length === 0) {
+      return false;
+    }
+
+    return preferenceTerms.some(
+      (pref) => pref === normalizedTag || pref.includes(normalizedTag) || normalizedTag.includes(pref)
+    );
+  };
+
   const getActivityTypeColor = (type: string): string => {
     const colors: Record<string, string> = {
       museum: "bg-purple-100 text-purple-800",
@@ -109,6 +131,25 @@ export function DayGroupingView({
                 </Badge>
               </div>
               <CardTitle className="text-base line-clamp-1">{activity.name}</CardTitle>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {(activity.interestTags && activity.interestTags.length > 0
+                  ? activity.interestTags
+                  : ["general interest match"]).map((tag) => {
+                  const isMatch = isInterestTagMatch(tag);
+                  return (
+                    <Badge
+                      key={`${activity.id}-${tag}`}
+                      variant="secondary"
+                      className={`max-w-[150px] truncate ${isMatch
+                        ? "border border-rose-200 bg-rose-50 text-rose-800"
+                        : "border border-sky-200 bg-sky-50 text-sky-800"
+                        }`}
+                    >
+                      {tag}
+                    </Badge>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </CardHeader>

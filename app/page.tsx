@@ -557,6 +557,7 @@ export default function PlannerPage() {
                     <ActivitySelectionView
                       activities={suggestedActivities}
                       selectedIds={selectedActivityIds}
+                      userPreferences={tripInfo?.preferences || []}
                       onSelectionChange={handleActivitySelectionChange}
                       onConfirm={handleConfirmActivitySelection}
                       onRegenerate={handleRegenerateActivities}
@@ -571,6 +572,7 @@ export default function PlannerPage() {
                   <div className="p-4 overflow-hidden">
                     <DayGroupingView
                       groupedDays={groupedDays}
+                      userPreferences={tripInfo?.preferences || []}
                       onMoveActivity={handleMoveActivity}
                       onConfirm={handleConfirmDayGrouping}
                       isLoading={loading}

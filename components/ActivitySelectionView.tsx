@@ -11,6 +11,7 @@ import { formatCost } from "@/lib/utils/currency";
 interface ActivitySelectionViewProps {
   activities: SuggestedActivity[];
   selectedIds: string[];
+  userPreferences?: string[];
   onSelectionChange: (selectedIds: string[]) => void;
   onConfirm: () => void;
   onRegenerate: () => void;
@@ -21,6 +22,7 @@ interface ActivitySelectionViewProps {
 export function ActivitySelectionView({
   activities,
   selectedIds,
+  userPreferences = [],
   onSelectionChange,
   onConfirm,
   onRegenerate,
@@ -28,6 +30,26 @@ export function ActivitySelectionView({
   isLoading = false,
 }: ActivitySelectionViewProps) {
   const [localSelectedIds, setLocalSelectedIds] = useState<Set<string>>(new Set(selectedIds));
+
+  const normalize = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const preferenceTerms = userPreferences.map(normalize).filter(Boolean);
+
+  const isInterestTagMatch = (tag: string): boolean => {
+    const normalizedTag = normalize(tag);
+    if (!normalizedTag || normalizedTag === "general interest match" || preferenceTerms.length === 0) {
+      return false;
+    }
+
+    return preferenceTerms.some(
+      (pref) => pref === normalizedTag || pref.includes(normalizedTag) || normalizedTag.includes(pref)
+    );
+  };
 
   const toggleActivity = (id: string) => {
     const newSelected = new Set(localSelectedIds);
@@ -137,16 +159,22 @@ export function ActivitySelectionView({
                 <div className="flex flex-wrap gap-1.5 mt-1">
                   {(activity.interestTags && activity.interestTags.length > 0
                     ? activity.interestTags
-                    : ["general interest match"]).map((tag) => (
-                    <Badge
-                      key={activity.id + "-" + tag}
-                      variant="secondary"
-                      title={tag}
-                      className="max-w-[150px] truncate border border-sky-200 bg-sky-50 text-sky-800"
-                    >
-                      {tag}
-                    </Badge>
-                  ))}
+                    : ["general interest match"]).map((tag) => {
+                    const isMatch = isInterestTagMatch(tag);
+                    return (
+                      <Badge
+                        key={activity.id + "-" + tag}
+                        variant="secondary"
+                        title={tag}
+                        className={`max-w-[150px] truncate ${isMatch
+                          ? "border border-rose-200 bg-rose-50 text-rose-800"
+                          : "border border-sky-200 bg-sky-50 text-sky-800"
+                          }`}
+                      >
+                        {tag}
+                      </Badge>
+                    );
+                  })}
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
