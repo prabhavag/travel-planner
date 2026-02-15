@@ -63,6 +63,7 @@ interface MapComponentProps {
   groupedDays?: GroupedDay[];
   onActivityClick?: (activityId: string) => void;
   hoveredActivityId?: string | null;
+  highlightedDay?: number | null;
 }
 
 const libraries: ("places")[] = ["places"];
@@ -75,6 +76,7 @@ export default function MapComponent({
   groupedDays,
   onActivityClick,
   hoveredActivityId,
+  highlightedDay,
 }: MapComponentProps) {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -223,6 +225,7 @@ export default function MapComponent({
         isActivitySelectionMode={isActivitySelectionMode}
         onActivityClick={onActivityClick}
         hoveredActivityId={hoveredActivityId}
+        highlightedDay={highlightedDay}
       />
     </div>
   );
@@ -236,6 +239,7 @@ interface GoogleMapContentProps {
   isActivitySelectionMode?: boolean;
   onActivityClick?: (activityId: string) => void;
   hoveredActivityId?: string | null;
+  highlightedDay?: number | null;
 }
 
 // Hover tooltip component for showing activity/restaurant info
@@ -287,6 +291,7 @@ function GoogleMapContent({
   isActivitySelectionMode,
   onActivityClick,
   hoveredActivityId,
+  highlightedDay,
 }: GoogleMapContentProps) {
   const [selectedMarker, setSelectedMarker] = useState<Location | null>(null);
   const [hoveredMarker, setHoveredMarker] = useState<Location | null>(null);
@@ -385,13 +390,14 @@ function GoogleMapContent({
     }
 
     // Otherwise use day-based pins (not just circles anymore, for consistency with numbers)
+    const isHighlighted = loc.day === highlightedDay;
     return {
       path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
       fillColor: getDayColor(loc.day),
-      fillOpacity: 1,
-      strokeColor: isHovered ? "#3B82F6" : "#ffffff",
-      strokeWeight: isHovered ? 2 : 1,
-      scale: isHovered ? 1.8 : 1.5,
+      fillOpacity: isHighlighted || isHighlighted === null ? 1 : 0.4,
+      strokeColor: isHovered ? "#3B82F6" : (isHighlighted ? "#000000" : "#ffffff"),
+      strokeWeight: isHovered || isHighlighted ? 2 : 1,
+      scale: isHovered ? 1.8 : (isHighlighted ? 1.7 : 1.3),
       anchor: new window.google.maps.Point(12, 21),
       labelOrigin: new window.google.maps.Point(12, 8),
     };
@@ -450,8 +456,8 @@ function GoogleMapContent({
             path={dayLocations.map((loc) => ({ lat: loc.lat, lng: loc.lng }))}
             options={{
               strokeColor: getDayColor(parseInt(day)) || "#666666",
-              strokeOpacity: 0.8,
-              strokeWeight: 4,
+              strokeOpacity: highlightedDay === parseInt(day) || highlightedDay === null ? 0.9 : 0.2,
+              strokeWeight: highlightedDay === parseInt(day) ? 6 : 3,
             }}
           />
         ))}

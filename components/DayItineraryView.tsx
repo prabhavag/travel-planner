@@ -1,7 +1,5 @@
-"use client";
-
-import { useState, useRef } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import type { GroupedDay, SuggestedActivity, RestaurantSuggestion } from "@/lib/api-client";
 import { formatCost } from "@/lib/utils/currency";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
@@ -36,15 +35,38 @@ interface DayItineraryViewProps {
   };
 }
 
-export function DayItineraryView({ groupedDays, tripInfo, onActivityHover, onMoveActivity }: DayItineraryViewProps & { onActivityHover?: (id: string | null) => void, onMoveActivity?: (activityId: string, fromDay: number, toDay: number) => void }) {
+export function DayItineraryView({
+  groupedDays,
+  tripInfo,
+  onActivityHover,
+  onMoveActivity,
+  onDayChange,
+}: DayItineraryViewProps & {
+  onActivityHover?: (id: string | null) => void;
+  onMoveActivity?: (activityId: string, fromDay: number, toDay: number) => void;
+  onDayChange?: (dayNumber: number) => void;
+}) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [movingActivity, setMovingActivity] = useState<{ id: string; fromDay: number } | null>(null);
 
-  // Flatten all activities and restaurants into a single list with metadata
-  const carouselItems = groupedDays.flatMap(day => [
-    ...day.activities.map(activity => ({ type: 'activity' as const, data: activity, dayNumber: day.dayNumber, dayTheme: day.theme })),
-    ...day.restaurants.map(restaurant => ({ type: 'restaurant' as const, data: restaurant, dayNumber: day.dayNumber, dayTheme: day.theme }))
-  ]);
+  const handleScroll = useCallback(() => {
+    if (scrollContainerRef.current && onDayChange) {
+      const container = scrollContainerRef.current;
+      const index = Math.round(container.scrollLeft / container.clientWidth);
+      const activeDay = groupedDays[index]?.dayNumber;
+      if (activeDay) {
+        onDayChange(activeDay);
+      }
+    }
+  }, [groupedDays, onDayChange]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.addEventListener("scroll", handleScroll);
+      return () => container.removeEventListener("scroll", handleScroll);
+    }
+  }, [handleScroll]);
 
   const scroll = (direction: "left" | "right") => {
     if (scrollContainerRef.current) {
@@ -122,161 +144,158 @@ export function DayItineraryView({ groupedDays, tripInfo, onActivityHover, onMov
     setMovingActivity(null);
   };
 
-  const ActivityCard = ({ activity, dayNumber, dayTheme }: { activity: SuggestedActivity, dayNumber: number, dayTheme: string }) => {
+  const ActivityItem = ({
+    activity,
+    dayNumber,
+  }: {
+    activity: SuggestedActivity;
+    dayNumber: number;
+  }) => {
     const isMoving = movingActivity?.id === activity.id;
     return (
-      <Card
-        className={`w-full min-w-full flex-shrink-0 snap-center transition-all duration-200 border-t-4 hover:shadow-md ${isMoving ? "ring-2 ring-primary bg-blue-50/30" : ""}`}
-        style={{ borderTopColor: getDayColor(dayNumber) }}
+      <div
+        className={`p-4 rounded-xl border transition-all duration-200 hover:shadow-sm bg-white mb-3 ${isMoving ? "ring-2 ring-primary bg-blue-50/30 shadow-md scale-[1.02]" : "border-gray-100"
+          }`}
         onMouseEnter={() => onActivityHover?.(activity.id)}
         onMouseLeave={() => onActivityHover?.(null)}
       >
-        <CardHeader className="pb-2">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <Badge className={`${getDayBadgeColors(dayNumber)} h-5 px-1.5`}>Day {dayNumber}</Badge>
-                <Badge variant="secondary" className={`${getActivityTypeColor(activity.type)} text-[10px] h-5`}>
-                  {activity.type}
-                </Badge>
-              </div>
-              <CardTitle className="text-base line-clamp-1">{activity.name}</CardTitle>
-            </div>
-            <div className="flex gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => openInMaps(activity)}
-                className="h-8 w-8 text-gray-400 hover:text-primary"
-                title="Open in Maps"
-              >
-                <ExternalLink className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-gray-600 line-clamp-3 min-h-[60px]">{activity.description}</p>
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500 pt-1">
-            <div className="flex items-center gap-1.5 font-medium text-gray-700">
-              <Clock className="w-3.5 h-3.5 text-primary" />
-              <span>{activity.estimatedDuration}</span>
-            </div>
-            {activity.rating && (
-              <div className="flex items-center gap-1">
-                <Star className="w-3.5 h-3.5 fill-yellow-400 text-yellow-400" />
-                <span className="font-medium text-gray-700">{activity.rating.toFixed(1)}</span>
-              </div>
-            )}
-            {activity.estimatedCost != null && (
-              <div className="bg-green-50 text-green-700 px-2 py-0.5 rounded-full">
-                {activity.estimatedCost === 0 ? "Free" : formatCost(activity.estimatedCost, activity.currency)}
-              </div>
-            )}
-          </div>
-
-          <div className="pt-2 border-t">
-            {isMoving ? (
-              <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                <Select onValueChange={(val) => handleMoveConfirm(parseInt(val))}>
-                  <SelectTrigger className="flex-1 h-9 text-xs">
-                    <SelectValue placeholder="Move to day..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {groupedDays.map((day) => (
-                      <SelectItem key={day.dayNumber} value={day.dayNumber.toString()}>
-                        Day {day.dayNumber}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button variant="outline" size="sm" onClick={handleMoveCancel} className="h-9 px-3">
-                  Cancel
-                </Button>
-              </div>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleMoveStart(activity.id, dayNumber);
-                }}
-                className="w-full h-9 text-xs font-medium text-gray-600 hover:text-primary hover:border-primary transition-colors"
-                title="Move this activity to another day"
-              >
-                Change Day
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-    );
-  };
-
-  const RestaurantCard = ({ restaurant, dayNumber }: { restaurant: RestaurantSuggestion, dayNumber: number }) => (
-    <Card
-      className="w-full min-w-full flex-shrink-0 snap-center border-t-4 border-amber-400 bg-amber-50/20"
-      onMouseEnter={() => onActivityHover?.(restaurant.id)}
-      onMouseLeave={() => onActivityHover?.(null)}
-    >
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <Badge className={`${getDayBadgeColors(dayNumber)} h-5 px-1.5`}>Day {dayNumber}</Badge>
-              <Badge variant="secondary" className="bg-amber-100 text-amber-800 text-[10px] h-5">
-                Restaurant
+              <Badge
+                variant="secondary"
+                className={`${getActivityTypeColor(activity.type)} text-[10px] h-5`}
+              >
+                {activity.type}
               </Badge>
             </div>
-            <CardTitle className="text-base line-clamp-1 flex items-center gap-2">
-              <Utensils className="w-4 h-4 text-amber-600" />
-              {restaurant.name}
-            </CardTitle>
+            <h4 className="text-sm font-bold text-gray-900 line-clamp-1">{activity.name}</h4>
           </div>
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => openRestaurantInMaps(restaurant)}
-            className="h-8 w-8 text-gray-400 hover:text-amber-600"
+            onClick={() => openInMaps(activity)}
+            className="h-7 w-7 text-gray-400 hover:text-primary shrink-0"
           >
-            <ExternalLink className="w-4 h-4" />
+            <ExternalLink className="w-3.5 h-3.5" />
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {restaurant.cuisine && (
-            <Badge variant="outline" className="text-[10px] h-5">{restaurant.cuisine}</Badge>
+
+        <p className="text-xs text-gray-600 line-clamp-2 mb-3 leading-relaxed">
+          {activity.description}
+        </p>
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-gray-500 pb-3">
+          <div className="flex items-center gap-1 font-medium text-gray-700">
+            <Clock className="w-3 h-3 text-primary" />
+            <span>{activity.estimatedDuration}</span>
+          </div>
+          {activity.rating && (
+            <div className="flex items-center gap-0.5">
+              <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+              <span className="font-medium text-gray-700">{activity.rating.toFixed(1)}</span>
+            </div>
           )}
-          {restaurant.priceRange && (
-            <Badge variant="outline" className="text-[10px] h-5 text-green-700 border-green-200 bg-green-50">{restaurant.priceRange}</Badge>
+          {activity.estimatedCost != null && (
+            <div className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full font-medium">
+              {activity.estimatedCost === 0
+                ? "Free"
+                : formatCost(activity.estimatedCost, activity.currency)}
+            </div>
           )}
         </div>
 
-        {restaurant.vicinity && (
-          <div className="flex items-start gap-2 text-xs text-gray-500">
-            <MapPin className="w-3.5 h-3.5 text-gray-400 mt-0.5" />
-            <span className="line-clamp-2">{restaurant.vicinity}</span>
-          </div>
-        )}
+        <div className="pt-3 border-t border-gray-50">
+          {isMoving ? (
+            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+              <Select onValueChange={(val) => handleMoveConfirm(parseInt(val))}>
+                <SelectTrigger className="flex-1 h-8 text-[10px]">
+                  <SelectValue placeholder="Move to day..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {groupedDays.map((day) => (
+                    <SelectItem key={day.dayNumber} value={day.dayNumber.toString()}>
+                      Day {day.dayNumber}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button variant="outline" size="sm" onClick={handleMoveCancel} className="h-8 px-2 text-[10px]">
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleMoveStart(activity.id, dayNumber);
+              }}
+              className="w-full h-8 text-[10px] font-medium text-gray-500 hover:text-primary hover:border-primary transition-colors"
+            >
+              Change Day
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  };
 
-        {restaurant.rating && (
-          <div className="flex items-center gap-1 pt-1">
-            <Star className="w-3.5 h-3.5 fill-yellow-400 text-yellow-400" />
-            <span className="text-xs font-medium text-gray-700">{restaurant.rating.toFixed(1)} rating</span>
+  const RestaurantItem = ({ restaurant }: { restaurant: RestaurantSuggestion }) => (
+    <div className="p-4 rounded-xl border border-amber-100 bg-amber-50/20 mb-3 hover:shadow-sm transition-all">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <Badge variant="secondary" className="bg-amber-100 text-amber-800 text-[10px] h-5">
+              Restaurant
+            </Badge>
           </div>
+          <h4 className="text-sm font-bold text-gray-900 line-clamp-1 flex items-center gap-2">
+            <Utensils className="w-3.5 h-3.5 text-amber-600" />
+            {restaurant.name}
+          </h4>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => openRestaurantInMaps(restaurant)}
+          className="h-7 w-7 text-gray-400 hover:text-amber-600 shrink-0"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {restaurant.cuisine && (
+          <Badge variant="outline" className="text-[9px] h-4 py-0">
+            {restaurant.cuisine}
+          </Badge>
         )}
-      </CardContent>
-    </Card>
+        {restaurant.priceRange && (
+          <Badge
+            variant="outline"
+            className="text-[9px] h-4 py-0 text-green-700 border-green-200 bg-green-50"
+          >
+            {restaurant.priceRange}
+          </Badge>
+        )}
+      </div>
+
+      {restaurant.vicinity && (
+        <div className="flex items-start gap-1.5 text-[10px] text-gray-500">
+          <MapPin className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" />
+          <span className="line-clamp-1">{restaurant.vicinity}</span>
+        </div>
+      )}
+    </div>
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 h-full flex flex-col">
       {/* Trip summary header */}
       {tripInfo && tripInfo.destination && (
-        <div className="bg-primary/5 rounded-2xl p-6 border border-primary/20">
+        <div className="bg-primary/5 rounded-2xl p-6 border border-primary/20 shrink-0">
           <h2 className="text-2xl font-bold text-gray-900">{tripInfo.destination}</h2>
           {tripInfo.startDate && tripInfo.endDate && (
             <p className="text-sm font-medium text-gray-600 mt-1 uppercase tracking-wider">
@@ -288,43 +307,82 @@ export function DayItineraryView({ groupedDays, tripInfo, onActivityHover, onMov
               {groupedDays.length} Days
             </Badge>
             <Badge variant="secondary" className="bg-white text-primary border-primary/20">
-              {carouselItems.length} Stops
+              {groupedDays.reduce((acc, day) => acc + day.activities.length + day.restaurants.length, 0)} Stops
             </Badge>
           </div>
         </div>
       )}
 
-      <div className="relative group overflow-hidden">
+      <div className="flex-1 flex flex-col min-h-0">
         {/* Navigation buttons */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 shrink-0 px-2">
           <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Plan Highlights</h3>
           <div className="flex gap-2">
-            <Button variant="outline" size="icon" onClick={() => scroll("left")} className="rounded-full h-8 w-8 hover:bg-primary hover:text-white transition-all shadow-sm">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => scroll("left")}
+              className="rounded-full h-8 w-8 hover:bg-primary hover:text-white transition-all shadow-sm"
+            >
               <ChevronLeft className="w-4 h-4" />
             </Button>
-            <Button variant="outline" size="icon" onClick={() => scroll("right")} className="rounded-full h-8 w-8 hover:bg-primary hover:text-white transition-all shadow-sm">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => scroll("right")}
+              className="rounded-full h-8 w-8 hover:bg-primary hover:text-white transition-all shadow-sm"
+            >
               <ChevronRight className="w-4 h-4" />
             </Button>
           </div>
         </div>
 
-        {/* Flat activity carousel */}
+        {/* Day-based horizontal carousel */}
         <div
           ref={scrollContainerRef}
-          className="flex overflow-x-auto pb-6 snap-x snap-mandatory scrollbar-none"
-          style={{ scrollBehavior: 'smooth' }}
+          className="flex-1 flex overflow-x-auto snap-x snap-mandatory scrollbar-none"
+          style={{ scrollBehavior: "smooth" }}
         >
-          {carouselItems.map((item, idx) => (
-            <div key={`${item.type}-${item.data.id}-${idx}`} className="w-full flex-shrink-0 snap-center">
-              {item.type === 'activity' ? (
-                <ActivityCard activity={item.data} dayNumber={item.dayNumber} dayTheme={item.dayTheme} />
-              ) : (
-                <RestaurantCard restaurant={item.data} dayNumber={item.dayNumber} />
-              )}
+          {groupedDays.map((day) => (
+            <div key={day.dayNumber} className="w-full flex-shrink-0 snap-center px-2">
+              <Card className="h-full border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
+                <CardHeader className="pb-3 shrink-0">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Badge className={`${getDayBadgeColors(day.dayNumber)} h-6 px-2`}>
+                          Day {day.dayNumber}
+                        </Badge>
+                        <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">
+                          {day.activities.length} Activities
+                        </span>
+                      </div>
+                      <CardTitle className="text-xl">{day.theme}</CardTitle>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="flex-1 overflow-hidden p-0">
+                  <ScrollArea className="h-full px-4 pb-6">
+                    <div className="space-y-1">
+                      {day.activities.map((activity) => (
+                        <ActivityItem
+                          key={activity.id}
+                          activity={activity}
+                          dayNumber={day.dayNumber}
+                        />
+                      ))}
+                      {day.restaurants.map((restaurant) => (
+                        <RestaurantItem key={restaurant.id} restaurant={restaurant} />
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
             </div>
           ))}
-          {carouselItems.length === 0 && (
-            <div className="w-full py-12 flex flex-col items-center justify-center text-gray-400 bg-gray-50 rounded-xl border border-dashed">
+
+          {groupedDays.length === 0 && (
+            <div className="w-full py-12 flex flex-col items-center justify-center text-gray-400 bg-gray-50 rounded-xl border border-dashed mx-2">
               <MapPin className="w-8 h-8 mb-2 opacity-20" />
               <p>No activities planned yet</p>
             </div>
@@ -334,3 +392,4 @@ export function DayItineraryView({ groupedDays, tripInfo, onActivityHover, onMov
     </div>
   );
 }
+

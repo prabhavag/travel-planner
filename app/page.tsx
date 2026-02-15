@@ -85,6 +85,7 @@ export default function PlannerPage() {
   const [canProceed, setCanProceed] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "interests">("chat");
   const [hoveredActivityId, setHoveredActivityId] = useState<string | null>(null);
+  const [activeDay, setActiveDay] = useState<number | null>(1);
   const [isChatMinimized, setIsChatMinimized] = useState(false);
 
 
@@ -575,6 +576,7 @@ export default function PlannerPage() {
                       userPreferences={tripInfo?.preferences || []}
                       onMoveActivity={handleMoveActivity}
                       onConfirm={handleConfirmDayGrouping}
+                      onDayChange={setActiveDay}
                       isLoading={loading}
                     />
                   </div>
@@ -603,6 +605,7 @@ export default function PlannerPage() {
                       tripInfo={tripInfo || undefined}
                       onActivityHover={setHoveredActivityId}
                       onMoveActivity={handleMoveActivity}
+                      onDayChange={setActiveDay}
                     />
                   </div>
                 );
@@ -707,6 +710,7 @@ export default function PlannerPage() {
               }
               onActivityClick={handleMapActivityClick}
               hoveredActivityId={hoveredActivityId}
+              highlightedDay={activeDay}
             />
           </div>
 
