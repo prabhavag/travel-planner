@@ -57,6 +57,50 @@ class LLMClient {
     }
   }
 
+  private _normalizeInterestTags(rawTags: unknown): string[] {
+    if (!Array.isArray(rawTags)) {
+      return [];
+    }
+
+    const forbiddenTags = new Set([
+      "museum",
+      "landmark",
+      "park",
+      "viewpoint",
+      "market",
+      "experience",
+      "neighborhood",
+      "beach",
+      "temple",
+      "gallery",
+      "morning",
+      "afternoon",
+      "evening",
+      "any",
+    ]);
+
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+
+    for (const tag of rawTags) {
+      if (typeof tag !== "string") continue;
+      const value = tag.trim().toLowerCase().replace(/\s+/g, " ");
+      if (!value || forbiddenTags.has(value) || seen.has(value)) continue;
+      seen.add(value);
+      normalized.push(value);
+      if (normalized.length === 3) break;
+    }
+
+    return normalized;
+  }
+
+  private _normalizeSuggestedActivity(activity: SuggestedActivity): SuggestedActivity {
+    return {
+      ...activity,
+      interestTags: this._normalizeInterestTags((activity as SuggestedActivity & { interestTags?: unknown }).interestTags),
+    };
+  }
+
   async gatherInfo({
     tripInfo,
     userMessage,
@@ -205,7 +249,7 @@ class LLMClient {
                 messageYielded = true;
               } else if (parsed.id) {
                 // Activity line
-                yield { type: "activity", activity: parsed as SuggestedActivity };
+                yield { type: "activity", activity: this._normalizeSuggestedActivity(parsed as SuggestedActivity) };
               }
             } catch {
               // Not valid JSON yet, might be partial - skip this line
@@ -220,7 +264,7 @@ class LLMClient {
         try {
           const parsed = JSON.parse(buffer.trim());
           if (parsed.id) {
-            yield { type: "activity", activity: parsed as SuggestedActivity };
+            yield { type: "activity", activity: this._normalizeSuggestedActivity(parsed as SuggestedActivity) };
           }
         } catch {
           console.warn("Skipping final invalid JSON:", buffer);
@@ -357,7 +401,9 @@ class LLMClient {
         success: true,
         message: response.message,
         tripInfo: response.tripInfo || null,
-        newActivities: response.newActivities || [],
+        newActivities: Array.isArray(response.newActivities)
+          ? response.newActivities.map((activity: SuggestedActivity) => this._normalizeSuggestedActivity(activity))
+          : [],
         replaceActivities: response.replaceActivities || false,
       };
     } catch (error) {

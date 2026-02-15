@@ -44,34 +44,6 @@ export function ActivitySelectionView({
     onConfirm();
   };
 
-  const getActivityTypeColor = (type: string): string => {
-    const colors: Record<string, string> = {
-      museum: "bg-purple-100 text-purple-800",
-      landmark: "bg-blue-100 text-blue-800",
-      park: "bg-green-100 text-green-800",
-      viewpoint: "bg-cyan-100 text-cyan-800",
-      market: "bg-orange-100 text-orange-800",
-      experience: "bg-pink-100 text-pink-800",
-      neighborhood: "bg-yellow-100 text-yellow-800",
-      beach: "bg-teal-100 text-teal-800",
-      temple: "bg-red-100 text-red-800",
-      gallery: "bg-indigo-100 text-indigo-800",
-    };
-    return colors[type.toLowerCase()] || "bg-gray-100 text-gray-800";
-  };
-
-  const getBestTimeColor = (time: string): string => {
-    switch (time) {
-      case "morning":
-        return "bg-amber-100 text-amber-800";
-      case "afternoon":
-        return "bg-orange-100 text-orange-800";
-      case "evening":
-        return "bg-indigo-100 text-indigo-800";
-      default:
-        return "bg-gray-100 text-gray-800";
-    }
-  };
 
   const openInMaps = (activity: SuggestedActivity) => {
     if (activity.coordinates) {
@@ -163,12 +135,18 @@ export function ActivitySelectionView({
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-1">
-                  <Badge variant="secondary" className={getActivityTypeColor(activity.type)}>
-                    {activity.type}
-                  </Badge>
-                  <Badge variant="secondary" className={getBestTimeColor(activity.bestTimeOfDay)}>
-                    {activity.bestTimeOfDay}
-                  </Badge>
+                  {(activity.interestTags && activity.interestTags.length > 0
+                    ? activity.interestTags
+                    : ["general interest match"]).map((tag) => (
+                    <Badge
+                      key={activity.id + "-" + tag}
+                      variant="secondary"
+                      title={tag}
+                      className="max-w-[150px] truncate border border-sky-200 bg-sky-50 text-sky-800"
+                    >
+                      {tag}
+                    </Badge>
+                  ))}
                 </div>
               </CardHeader>
               <CardContent className="pt-0">

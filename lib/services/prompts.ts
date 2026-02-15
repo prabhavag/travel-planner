@@ -75,7 +75,7 @@ Line 1: {"message": "Your conversational intro presenting these activities"}
 Lines 2-11: One activity per line as a JSON object
 
 Example activity line:
-{"id": "act1", "name": "Specific Place Name", "type": "museum", "description": "2-3 sentences about what makes this special", "estimatedDuration": "2-3 hours", "estimatedCost": 1500, "currency": "JPY", "bestTimeOfDay": "morning", "neighborhood": "Area/district"}
+{"id": "act1", "name": "Specific Place Name", "type": "museum", "interestTags": ["local culture", "history"], "description": "2-3 sentences about what makes this special", "estimatedDuration": "2-3 hours", "estimatedCost": 1500, "currency": "JPY", "bestTimeOfDay": "morning", "neighborhood": "Area/district"}
 
 RULES:
 - Output EXACTLY 11 lines total: 1 message line + 10 activity lines
@@ -84,6 +84,8 @@ RULES:
 - Use REAL, specific place names that exist in the destination
 - Activity IDs must be: act1, act2, act3, ... act10
 - type must be one of: museum|landmark|park|viewpoint|market|experience|neighborhood|beach|temple|gallery
+- interestTags must be 1-3 short tags directly tied to the traveler's interests or preferences
+- interestTags must NOT be generic taxonomy labels like museum|park|morning|afternoon
 - NEVER suggest restaurants, cafes, or dining establishments as activities (these are handled separately)
 - bestTimeOfDay must be one of: morning|afternoon|evening|any
 - estimatedCost: number in the destination's LOCAL CURRENCY (0 for free activities)
@@ -161,6 +163,7 @@ RULES:
 - Be conversational and helpful
 - If asked about a specific activity, provide detailed info
 - If asked for more activities, generate 1-5 new ones matching the request
+- Each new activity must include interestTags (1-3) aligned to user interests/preferences
 - If the user wants to start over or express dislike for current options, set replaceActivities=true
 - Otherwise, set replaceActivities=false (to append new activities)
 - Return ONLY valid JSON, no additional text`,

@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Plus, X, Heart, Loader2 } from "lucide-react";
 
@@ -34,21 +33,6 @@ export function InterestsPreferencesView({
 
     return (
         <div className="flex flex-col h-full flex-1 min-h-0 bg-white">
-            <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 bg-rose-100 rounded-lg">
-                        <Heart className="w-4 h-4 text-rose-600" />
-                    </div>
-                    <div>
-                        <h2 className="text-sm font-semibold text-gray-900">Interests & preferences</h2>
-                        <p className="text-xs text-gray-500">The AI will respect these settings</p>
-                    </div>
-                </div>
-                <Badge variant="outline" className="text-gray-500 bg-white">
-                    {preferences.length} total
-                </Badge>
-            </div>
-
             <ScrollArea className="flex-1 p-4">
                 {preferences.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -60,20 +44,20 @@ export function InterestsPreferencesView({
                         </p>
                     </div>
                 ) : (
-                    <div className="space-y-2">
+                    <div className="flex flex-wrap gap-2">
                         {preferences.map((preference, index) => (
                             <div
                                 key={index}
-                                className="group flex items-start gap-3 p-3 rounded-xl border border-gray-100 bg-white hover:border-rose-200 hover:bg-rose-50/30 transition-all duration-200"
+                                className="group inline-flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full border border-rose-200 bg-rose-50/60 text-sm text-rose-800"
                             >
-                                <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-rose-400 flex-shrink-0" />
-                                <span className="text-sm text-gray-700 flex-1 leading-relaxed">
+                                <span className="max-w-[220px] truncate">
                                     {preference}
                                 </span>
                                 <button
                                     onClick={() => handleRemovePreference(index)}
-                                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-all"
+                                    className="p-0.5 text-rose-400 hover:text-red-500 hover:bg-white/80 rounded-full transition-all"
                                     disabled={isLoading}
+                                    title="Remove preference"
                                 >
                                     <X className="w-3.5 h-3.5" />
                                 </button>

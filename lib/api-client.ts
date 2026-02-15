@@ -297,6 +297,7 @@ export interface SuggestedActivity {
   id: string;
   name: string;
   type: string;
+  interestTags?: string[];
   description: string;
   estimatedDuration: string;
   estimatedCost: number | null;

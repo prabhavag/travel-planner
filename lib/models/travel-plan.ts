@@ -220,6 +220,7 @@ export const SuggestedActivitySchema = z.object({
   id: z.string(),
   name: z.string(),
   type: z.string(), // museum, landmark, park, viewpoint, market, experience, neighborhood
+  interestTags: z.array(z.string()).max(3).default([]), // user-interest aligned tags
   description: z.string(),
   estimatedDuration: z.string(), // "2-3 hours"
   estimatedCost: z.number().nullable(),
