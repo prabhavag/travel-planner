@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2, Send, MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw, ChevronUp, ChevronDown } from "lucide-react";
 import MapComponent from "@/components/MapComponent";
 import { ActivitySelectionView } from "@/components/ActivitySelectionView";
+import { InitialResearchView } from "@/components/InitialResearchView";
 import { DayGroupingView } from "@/components/DayGroupingView";
 import { RestaurantSelectionView } from "@/components/RestaurantSelectionView";
 import { DayItineraryView } from "@/components/DayItineraryView";
@@ -15,6 +16,8 @@ import {
   startSession,
   chat,
   finalize,
+  generateResearchBrief,
+  confirmResearchBrief,
   suggestTopActivities,
   selectActivities,
   groupDays,
@@ -27,14 +30,17 @@ import {
   type TripInfo,
   type SuggestedActivity,
   type GroupedDay,
+  type ResearchOptionPreference,
   type RestaurantSuggestion,
   type DayGroup,
+  type TripResearchBrief,
 } from "@/lib/api-client";
 import { InterestsPreferencesView } from "@/components/InterestsPreferencesView";
 
 // Workflow states
 const WORKFLOW_STATES = {
   INFO_GATHERING: "INFO_GATHERING",
+  INITIAL_RESEARCH: "INITIAL_RESEARCH",
   SUGGEST_ACTIVITIES: "SUGGEST_ACTIVITIES",
   SELECT_ACTIVITIES: "SELECT_ACTIVITIES",
   GROUP_DAYS: "GROUP_DAYS",
@@ -46,6 +52,7 @@ const WORKFLOW_STATES = {
 
 const WORKFLOW_ORDER = [
   WORKFLOW_STATES.INFO_GATHERING,
+  WORKFLOW_STATES.INITIAL_RESEARCH,
   WORKFLOW_STATES.SUGGEST_ACTIVITIES,
   WORKFLOW_STATES.GROUP_DAYS,
   WORKFLOW_STATES.DAY_ITINERARY,
@@ -66,6 +73,8 @@ export default function PlannerPage() {
 
   // Trip data
   const [tripInfo, setTripInfo] = useState<TripInfo | null>(null);
+  const [tripResearchBrief, setTripResearchBrief] = useState<TripResearchBrief | null>(null);
+  const [researchOptionSelections, setResearchOptionSelections] = useState<Record<string, ResearchOptionPreference>>({});
 
   // New activity-first flow state
   const [suggestedActivities, setSuggestedActivities] = useState<SuggestedActivity[]>([]);
@@ -115,6 +124,21 @@ export default function PlannerPage() {
     initializeSession();
   }, []);
 
+  useEffect(() => {
+    if (!tripResearchBrief) {
+      setResearchOptionSelections({});
+      return;
+    }
+
+    setResearchOptionSelections((prev) => {
+      const next: Record<string, ResearchOptionPreference> = {};
+      for (const option of tripResearchBrief.popularOptions) {
+        next[option.id] = prev[option.id] || "maybe";
+      }
+      return next;
+    });
+  }, [tripResearchBrief]);
+
   const initializeSession = async () => {
     try {
       const response = await startSession();
@@ -145,6 +169,8 @@ export default function PlannerPage() {
       if (response.success) {
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
         if (response.tripInfo) setTripInfo(response.tripInfo);
+        if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
+        if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
         if (response.canProceed !== undefined) setCanProceed(response.canProceed);
         if (response.suggestedActivities) setSuggestedActivities(response.suggestedActivities);
         if (response.workflowState) {
@@ -177,6 +203,8 @@ export default function PlannerPage() {
       if (response.success) {
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
         if (response.tripInfo) setTripInfo(response.tripInfo);
+        if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
+        if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
         if (response.canProceed !== undefined) setCanProceed(response.canProceed);
       }
     } catch (error) {
@@ -188,6 +216,55 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Suggest top 10 activities (streaming)
+  const handleGenerateResearchBrief = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+
+    try {
+      const response = await generateResearchBrief(sessionId);
+      if (response.success) {
+        if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
+        if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
+        if (response.workflowState) {
+          setWorkflowState(response.workflowState);
+          updateMaxReachedState(response.workflowState);
+        }
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      }
+    } catch (error) {
+      console.error("Generate research brief error:", error);
+      const errorMessage = error instanceof Error ? error.message : "Failed to generate research brief. Please try again.";
+      alert(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleProceedFromResearch = async () => {
+    if (!sessionId || hasUnresolvedAssumptionConflicts) return;
+    setLoading(true);
+    try {
+      const response = await confirmResearchBrief(sessionId, researchOptionSelections);
+      if (!response.success) {
+        throw new Error(response.message);
+      }
+      if (response.workflowState) {
+        setWorkflowState(response.workflowState);
+        updateMaxReachedState(response.workflowState);
+      }
+      setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+    } catch (error) {
+      console.error("Confirm research brief error:", error);
+      const errorMessage = error instanceof Error ? error.message : "Failed to confirm research brief. Please try again.";
+      alert(errorMessage);
+      setLoading(false);
+      return;
+    }
+    setLoading(false);
+    await handleSuggestActivities();
   };
 
   // Suggest top 10 activities (streaming)
@@ -225,6 +302,63 @@ export default function PlannerPage() {
     } catch (error) {
       console.error("Suggest activities error:", error);
       alert("Failed to suggest activities. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const handleResearchSelectionChange = (optionId: string, preference: ResearchOptionPreference) => {
+    setResearchOptionSelections((prev) => ({
+      ...prev,
+      [optionId]: preference,
+    }));
+  };
+
+  const getDerivedDurationFromDates = (info: TripInfo | null): number | null => {
+    if (!info?.startDate || !info?.endDate) return null;
+    const start = new Date(info.startDate);
+    const end = new Date(info.endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+    return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  };
+
+  const derivedDuration = getDerivedDurationFromDates(tripInfo);
+  const hasDurationConflict =
+    derivedDuration != null &&
+    tripInfo?.durationDays != null &&
+    derivedDuration > 0 &&
+    tripInfo.durationDays > 0 &&
+    derivedDuration !== tripInfo.durationDays;
+  const hasUnresolvedAssumptionConflicts = workflowState === WORKFLOW_STATES.INITIAL_RESEARCH && hasDurationConflict;
+
+  const handleResolveDurationConflict = async (mode: "use_date_range" | "keep_requested_duration") => {
+    if (!sessionId || !tripInfo) return;
+    const requestedDuration = tripInfo.durationDays;
+    const derived = getDerivedDurationFromDates(tripInfo);
+    const updates: Partial<TripInfo> = {};
+
+    if (mode === "use_date_range") {
+      if (!derived) return;
+      updates.durationDays = derived;
+    } else {
+      if (!tripInfo.startDate || !requestedDuration || requestedDuration < 1) return;
+      const start = new Date(tripInfo.startDate);
+      if (Number.isNaN(start.getTime())) return;
+      const end = new Date(start);
+      end.setDate(start.getDate() + requestedDuration - 1);
+      updates.endDate = end.toISOString().slice(0, 10);
+      updates.durationDays = requestedDuration;
+    }
+
+    setLoading(true);
+    try {
+      const response = await updateTripInfo(sessionId, updates);
+      if (response.success && response.tripInfo) {
+        setTripInfo(response.tripInfo);
+      }
+    } catch (error) {
+      console.error("Resolve duration conflict error:", error);
+      alert("Failed to update duration. Please try again.");
+    } finally {
       setLoading(false);
     }
   };
@@ -484,6 +618,8 @@ export default function PlannerPage() {
     switch (workflowState) {
       case WORKFLOW_STATES.INFO_GATHERING:
         return "Gathering Info";
+      case WORKFLOW_STATES.INITIAL_RESEARCH:
+        return "Initial Research";
       case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
         return "Select Activities";
       case WORKFLOW_STATES.SELECT_ACTIVITIES:
@@ -552,6 +688,21 @@ export default function PlannerPage() {
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {(() => {
             switch (workflowState) {
+              case WORKFLOW_STATES.INITIAL_RESEARCH:
+                return (
+                  <InitialResearchView
+                    tripInfo={tripInfo}
+                    researchBrief={tripResearchBrief}
+                    researchOptionSelections={researchOptionSelections}
+                    onSelectionChange={handleResearchSelectionChange}
+                    onResolveDurationConflict={handleResolveDurationConflict}
+                    hasUnresolvedAssumptionConflicts={hasUnresolvedAssumptionConflicts}
+                    onRegenerate={handleGenerateResearchBrief}
+                    onProceed={handleProceedFromResearch}
+                    isLoading={loading}
+                  />
+                );
+
               case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
                 return (
                   <div className="p-4">
@@ -624,11 +775,23 @@ export default function PlannerPage() {
     switch (workflowState) {
       case WORKFLOW_STATES.INFO_GATHERING:
         return canProceed ? (
-          <Button onClick={handleSuggestActivities} disabled={loading} className="w-full mt-4">
+          <Button onClick={handleGenerateResearchBrief} disabled={loading} className="w-full mt-4">
             {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Find Top Activities
+            Create Initial Research Brief
           </Button>
         ) : null;
+
+      case WORKFLOW_STATES.INITIAL_RESEARCH:
+        return (
+          <Button
+            onClick={handleProceedFromResearch}
+            disabled={loading || hasUnresolvedAssumptionConflicts}
+            className="w-full mt-4"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            {hasUnresolvedAssumptionConflicts ? "Resolve Assumptions to Continue" : "Generate Top Activities"}
+          </Button>
+        );
 
       case WORKFLOW_STATES.DAY_ITINERARY:
         return (
@@ -672,10 +835,6 @@ export default function PlannerPage() {
   }
 
   const isFinalized = workflowState === WORKFLOW_STATES.FINALIZE;
-  const showMap =
-    workflowState === WORKFLOW_STATES.INFO_GATHERING ||
-    suggestedActivities.length > 0 ||
-    groupedDays.length > 0;
 
   return (
     <div className="h-screen overflow-hidden bg-gray-100">

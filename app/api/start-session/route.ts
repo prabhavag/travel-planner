@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { sessionStore } from "@/lib/services/session-store";
 
 function getSessionWelcomeMessage(): string {
-  return "Hello! I'm your AI travel assistant. Let's plan your perfect trip together!\n\nTo get started, could you tell me:\n1. Where would you like to go?\n2. When are you planning to travel? (dates)\n\nFeel free to share any other preferences like interests, activity level, or budget!";
+  return "Hello! I'm your AI travel assistant. Let's plan your perfect trip together.\n\nTo get started, could you tell me:\n1. Where would you like to go?\n2. When are you planning to travel? (dates)\n\nAfter that, I'll create an initial research brief with date-aware options and sources before generating activities.\n\nFeel free to share preferences like interests, activity level, dietary needs, or budget.";
 }
 
 export async function POST() {

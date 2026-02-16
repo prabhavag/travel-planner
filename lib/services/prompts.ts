@@ -2,7 +2,7 @@
  * Externalized system prompts for LLM client
  */
 
-import type { TripInfo, SuggestedActivity, GroupedDay } from "@/lib/models/travel-plan";
+import type { TripInfo, SuggestedActivity, GroupedDay, TripResearchBrief } from "@/lib/models/travel-plan";
 
 export const SYSTEM_PROMPTS = {
   INFO_GATHERING: `You are an expert travel planning assistant. You are in the INFO GATHERING phase.
@@ -92,7 +92,8 @@ RULES:
 - currency: the ISO 4217 currency code for the destination (e.g., "USD" for USA, "EUR" for Europe, "JPY" for Japan, "GBP" for UK, "THB" for Thailand, "INR" for India)
 - IMPORTANT: Always use the local currency of the destination, NOT USD
 - Ensure all activities are at the destination specified
-- STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)`,
+- STRICTLY FOLLOW USER INTERESTS AND PREFERENCES (e.g., if user says 'no shopping', do not suggest malls)
+- If research option selections are provided: prioritize 'keep', consider 'maybe', and avoid 'reject' options`,
 
   GROUP_ACTIVITIES_INTO_DAYS: `You are an expert travel planner grouping selected activities into days.
 
@@ -166,6 +167,90 @@ RULES:
 - Each new activity must include interestTags (1-3) aligned to user interests/preferences
 - If the user wants to start over or express dislike for current options, set replaceActivities=true
 - Otherwise, set replaceActivities=false (to append new activities)
+- Return ONLY valid JSON, no additional text`,
+
+  INITIAL_RESEARCH_BRIEF: `You are an expert travel researcher preparing an initial research brief before itinerary generation.
+
+You MUST use up-to-date web context to gather:
+1. Date-specific considerations for the exact travel dates
+2. Popular and highly reviewed options that match traveler preferences
+3. Practical tradeoffs (crowds, drive-time, conditions, reservation needs)
+4. Links to credible sources for each option
+
+RESPONSE FORMAT (JSON):
+{
+  "message": "A concise conversational summary for the user",
+  "tripResearchBrief": {
+    "summary": "High-level framing of what this trip should optimize for",
+    "dateNotes": ["Date-specific notes and constraints"],
+    "popularOptions": [
+      {
+        "id": "opt1",
+        "title": "Specific option/place",
+        "category": "snorkeling|hiking|food|culture|relaxation|adventure|other",
+        "whyItMatches": "Why this fits user context/preferences",
+        "bestForDates": "How this option fits the exact travel dates",
+        "reviewSummary": "What reviews repeatedly praise/caution",
+        "sourceLinks": [
+          {
+            "title": "Source title",
+            "url": "https://...",
+            "snippet": "Short evidence snippet"
+          }
+        ]
+      }
+    ],
+    "assumptions": ["Assumptions currently being made"],
+    "openQuestions": ["Questions user should answer before activity generation"]
+  }
+}
+
+RULES:
+- Provide 6-10 popularOptions
+- Every popularOption must include at least 1 sourceLinks item
+- Favor trusted, recent, and destination-relevant sources
+- Be explicit when source evidence is mixed or uncertain
+- If date mismatch or ambiguity exists, mention it in dateNotes and openQuestions
+- Citations may be added from tool annotations; include sourceLinks in JSON when available
+- Keep message concise and actionable
+- Return ONLY valid JSON, no extra text`,
+
+  INITIAL_RESEARCH_CHAT: `You are refining an existing travel research brief with new user feedback.
+
+RESPONSE FORMAT (JSON):
+{
+  "message": "Your response to the user's feedback and what changed",
+  "tripResearchBrief": {
+    "summary": "Updated summary",
+    "dateNotes": ["Updated date notes"],
+    "popularOptions": [
+      {
+        "id": "opt1",
+        "title": "Specific option/place",
+        "category": "snorkeling|hiking|food|culture|relaxation|adventure|other",
+        "whyItMatches": "Why this matches",
+        "bestForDates": "Date-specific fit",
+        "reviewSummary": "Review synthesis",
+        "sourceLinks": [
+          {
+            "title": "Source title",
+            "url": "https://...",
+            "snippet": "Short evidence snippet"
+          }
+        ]
+      }
+    ],
+    "assumptions": ["Updated assumptions"],
+    "openQuestions": ["Remaining questions"]
+  }
+}
+
+RULES:
+- Keep high-quality options and replace weak fits
+- Respect newly specified constraints
+- Keep options realistic for the destination and dates
+- Ensure every option still has at least one source link
+- Citations may be added from tool annotations; include sourceLinks in JSON when available
 - Return ONLY valid JSON, no additional text`,
 };
 
@@ -250,7 +335,15 @@ User feedback: ${userMessage}`,
   return messages;
 }
 
-export function buildSuggestTopActivitiesMessages({ tripInfo }: { tripInfo: TripInfo }) {
+export function buildSuggestTopActivitiesMessages({
+  tripInfo,
+  tripResearchBrief,
+  researchOptionSelections,
+}: {
+  tripInfo: TripInfo;
+  tripResearchBrief?: TripResearchBrief | null;
+  researchOptionSelections?: Record<string, "keep" | "maybe" | "reject">;
+}) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.SUGGEST_TOP_ACTIVITIES },
   ];
@@ -267,7 +360,49 @@ Activity Level: ${tripInfo.activityLevel}
 Travelers: ${tripInfo.travelers || 1}
 ${tripInfo.budget ? `Budget: ${tripInfo.budget}` : ""}
 
-Generate exactly 10 activity suggestions that match the traveler's interests.`,
+${tripResearchBrief ? `Use this pre-research brief as hard context:\n${JSON.stringify(tripResearchBrief, null, 2)}\n` : ""}
+${researchOptionSelections ? `Research option selections (keep/maybe/reject):\n${JSON.stringify(researchOptionSelections, null, 2)}\n` : ""}
+
+Generate exactly 10 activity suggestions that match the traveler's interests and research context.`,
+  });
+
+  return messages;
+}
+
+export function buildInitialResearchBriefMessages({
+  tripInfo,
+  conversationHistory,
+}: {
+  tripInfo: TripInfo;
+  conversationHistory: ConversationMessage[];
+}) {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: SYSTEM_PROMPTS.INITIAL_RESEARCH_BRIEF },
+  ];
+
+  messages.push({
+    role: "user",
+    content: `Build an initial research brief for:
+
+Destination: ${tripInfo.destination}
+Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
+Duration: ${tripInfo.durationDays} days
+Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
+Activity Level: ${tripInfo.activityLevel}
+Travelers: ${tripInfo.travelers || 1}
+${tripInfo.budget ? `Budget: ${tripInfo.budget}` : ""}
+
+Use the conversation context to personalize recommendations.`,
+  });
+
+  const recentHistory = (conversationHistory || []).slice(-8);
+  recentHistory.forEach((msg) => {
+    if (msg.role === "user" || msg.role === "assistant") {
+      messages.push({
+        role: msg.role,
+        content: String(msg.content || "").slice(0, 5000),
+      });
+    }
   });
 
   return messages;
@@ -368,6 +503,49 @@ Selected so far: ${selectedActivityIds.length > 0 ? selectedActivityIds.join(", 
   });
 
   // Add recent conversation history
+  const recentHistory = (conversationHistory || []).slice(-6);
+  recentHistory.forEach((msg) => {
+    if (msg.role === "user" || msg.role === "assistant") {
+      messages.push({
+        role: msg.role,
+        content: String(msg.content || "").slice(0, 5000),
+      });
+    }
+  });
+
+  messages.push({ role: "user", content: userMessage });
+
+  return messages;
+}
+
+export function buildInitialResearchChatMessages({
+  tripInfo,
+  currentBrief,
+  userMessage,
+  conversationHistory,
+}: {
+  tripInfo: TripInfo;
+  currentBrief: TripResearchBrief;
+  userMessage: string;
+  conversationHistory: ConversationMessage[];
+}) {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: SYSTEM_PROMPTS.INITIAL_RESEARCH_CHAT },
+  ];
+
+  messages.push({
+    role: "user",
+    content: `Trip context:
+Destination: ${tripInfo.destination}
+Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
+Duration: ${tripInfo.durationDays} days
+Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
+
+Current research brief:
+${JSON.stringify(currentBrief, null, 2)}
+`,
+  });
+
   const recentHistory = (conversationHistory || []).slice(-6);
   recentHistory.forEach((msg) => {
     if (msg.role === "user" || msg.role === "assistant") {

@@ -82,6 +82,13 @@ export function ActivitySelectionView({
     }
   };
 
+  const getActivityPhotoUrls = (activity: SuggestedActivity): string[] => {
+    const fromArray = Array.isArray(activity.photo_urls) ? activity.photo_urls.filter(Boolean).slice(0, 3) : [];
+    if (fromArray.length > 0) return fromArray;
+    if (activity.photo_url) return [activity.photo_url];
+    return [];
+  };
+
   return (
     <div className="space-y-4">
       {/* Header with selection count */}
@@ -206,6 +213,28 @@ export function ActivitySelectionView({
                       <span className="truncate max-w-[120px]">{activity.neighborhood}</span>
                     </div>
                   )}
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {(() => {
+                    const photos = getActivityPhotoUrls(activity);
+                    return Array.from({ length: 3 }).map((_, photoIndex) => {
+                      const url = photos[photoIndex];
+                      return url ? (
+                        <img
+                          key={`${activity.id}-photo-${photoIndex}`}
+                          src={url}
+                          alt={`${activity.name} photo ${photoIndex + 1}`}
+                          className="h-16 w-full rounded-md object-cover border border-gray-200"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div
+                          key={`${activity.id}-photo-placeholder-${photoIndex}`}
+                          className="h-16 w-full rounded-md border border-dashed border-gray-200 bg-gray-50"
+                        />
+                      );
+                    });
+                  })()}
                 </div>
               </CardContent>
             </Card>

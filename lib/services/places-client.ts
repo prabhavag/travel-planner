@@ -173,15 +173,28 @@ class PlacesClient {
     return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=${maxWidth}&photo_reference=${photoReference}&key=${this.apiKey}`;
   }
 
+  async getPlacePhotoUrlsFromId(placeId: string | null, maxWidth: number = 400): Promise<string[]> {
+    if (!placeId) return [];
+    try {
+      const details = await this.getPlaceDetails(placeId);
+      if (!details || !details.photos || details.photos.length === 0) {
+        return [];
+      }
+
+      return details.photos
+        .slice(0, 3)
+        .map((photo) => this.getPlacePhotoUrl(photo.photo_reference, maxWidth))
+        .filter((url): url is string => Boolean(url));
+    } catch {
+      return [];
+    }
+  }
+
   async getPlacePhotoUrlFromId(placeId: string | null, maxWidth: number = 400): Promise<string | null> {
     if (!placeId) return null;
     try {
-      const details = await this.getPlaceDetails(placeId);
-      if (details && details.photos && details.photos.length > 0) {
-        const photoRef = details.photos[0].photo_reference;
-        return this.getPlacePhotoUrl(photoRef, maxWidth);
-      }
-      return null;
+      const urls = await this.getPlacePhotoUrlsFromId(placeId, maxWidth);
+      return urls.length > 0 ? urls[0] : null;
     } catch {
       return null;
     }

@@ -6,10 +6,13 @@ import type {
   DayGroup,
   GroupedDay,
   RestaurantSuggestion,
+  TripResearchBrief,
+  ResearchOptionPreference,
 } from "@/lib/models/travel-plan";
 
 export const WORKFLOW_STATES = {
   INFO_GATHERING: "INFO_GATHERING",
+  INITIAL_RESEARCH: "INITIAL_RESEARCH",
   SUGGEST_ACTIVITIES: "SUGGEST_ACTIVITIES",
   SELECT_ACTIVITIES: "SELECT_ACTIVITIES",
   GROUP_DAYS: "GROUP_DAYS",
@@ -34,6 +37,8 @@ export interface Session {
   tripInfo: TripInfo;
   conversationHistory: ConversationMessage[];
   finalPlan: TravelPlan | null;
+  tripResearchBrief: TripResearchBrief | null;
+  researchOptionSelections: Record<string, ResearchOptionPreference>;
 
   // Activity-first flow fields
   suggestedActivities: SuggestedActivity[];
@@ -76,6 +81,8 @@ class SessionStore {
       },
       conversationHistory: [],
       finalPlan: null,
+      tripResearchBrief: null,
+      researchOptionSelections: {},
 
       // Activity-first flow fields
       suggestedActivities: [],
@@ -143,6 +150,25 @@ class SessionStore {
     const session = this.get(sessionId);
     if (!session) return null;
     session.suggestedActivities = activities;
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  setTripResearchBrief(sessionId: string, tripResearchBrief: TripResearchBrief | null): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    session.tripResearchBrief = tripResearchBrief;
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  setResearchOptionSelections(
+    sessionId: string,
+    researchOptionSelections: Record<string, ResearchOptionPreference>
+  ): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    session.researchOptionSelections = { ...researchOptionSelections };
     session.lastAccessed = Date.now();
     return session;
   }

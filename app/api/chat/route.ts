@@ -43,6 +43,8 @@ export async function POST(request: NextRequest) {
         // Reset activity-related data when destination changes
         sessionStore.update(sessionId, {
           tripInfo: result.tripInfo!,
+          tripResearchBrief: null,
+          researchOptionSelections: {},
           suggestedActivities: [],
           selectedActivityIds: [],
           dayGroups: [],
@@ -64,8 +66,46 @@ export async function POST(request: NextRequest) {
         workflowState: updatedSession?.workflowState,
         message: result.message,
         tripInfo: result.tripInfo,
+        tripResearchBrief: updatedSession?.tripResearchBrief,
         canProceed: result.isComplete,
         missingInfo: result.missingInfo,
+      });
+    } else if (session.workflowState === WORKFLOW_STATES.INITIAL_RESEARCH) {
+      if (!session.tripResearchBrief) {
+        return NextResponse.json(
+          { success: false, message: "Research brief not found. Generate it first." },
+          { status: 400 }
+        );
+      }
+
+      const result = await llmClient.refineInitialResearchBrief({
+        tripInfo: session.tripInfo,
+        currentBrief: session.tripResearchBrief,
+        userMessage: message,
+        conversationHistory: session.conversationHistory,
+      });
+
+      if (!result.success) {
+        return NextResponse.json(
+          { success: false, message: result.message },
+          { status: 500 }
+        );
+      }
+
+      if (result.tripResearchBrief) {
+        sessionStore.update(sessionId, { tripResearchBrief: result.tripResearchBrief });
+      }
+
+      sessionStore.addToConversation(sessionId, "assistant", result.message);
+      const updatedSession = sessionStore.get(sessionId);
+
+      return NextResponse.json({
+        success: true,
+        sessionId,
+        workflowState: updatedSession?.workflowState,
+        message: result.message,
+        tripInfo: updatedSession?.tripInfo,
+        tripResearchBrief: updatedSession?.tripResearchBrief,
       });
     } else if (session.workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES) {
       const result = await llmClient.chatDuringSuggestActivities({
@@ -99,6 +139,7 @@ export async function POST(request: NextRequest) {
         workflowState: updatedSession?.workflowState,
         message: result.message,
         tripInfo: updatedSession?.tripInfo,
+        tripResearchBrief: updatedSession?.tripResearchBrief,
         suggestedActivities: updatedSession?.suggestedActivities,
       });
     } else if (session.workflowState === WORKFLOW_STATES.REVIEW) {
@@ -129,6 +170,7 @@ export async function POST(request: NextRequest) {
         sessionId,
         workflowState: session.workflowState,
         message: result.message,
+        tripResearchBrief: updatedSession?.tripResearchBrief,
         groupedDays: updatedSession?.groupedDays,
         readyToFinalize: result.readyToFinalize,
       });

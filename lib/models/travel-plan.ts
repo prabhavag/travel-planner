@@ -3,6 +3,7 @@ import { z } from "zod";
 // Workflow state enum
 export const WorkflowStateSchema = z.enum([
   "INFO_GATHERING",
+  "INITIAL_RESEARCH",
   "SUGGEST_ACTIVITIES",
   "SELECT_ACTIVITIES",
   "GROUP_DAYS",
@@ -215,6 +216,40 @@ export type TravelRequest = z.infer<typeof TravelRequestSchema>;
 // Activity-First Planning Schemas
 // ============================================
 
+export const ResearchSourceSchema = z.object({
+  title: z.string(),
+  url: z.string().url(),
+  snippet: z.string().optional().nullable(),
+});
+
+export type ResearchSource = z.infer<typeof ResearchSourceSchema>;
+
+export const ResearchOptionPreferenceSchema = z.enum(["keep", "maybe", "reject"]);
+export type ResearchOptionPreference = z.infer<typeof ResearchOptionPreferenceSchema>;
+
+export const ResearchOptionSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  category: z.enum(["snorkeling", "hiking", "food", "culture", "relaxation", "adventure", "other"]),
+  whyItMatches: z.string(),
+  bestForDates: z.string(),
+  reviewSummary: z.string(),
+  sourceLinks: z.array(ResearchSourceSchema).default([]),
+  photoUrls: z.array(z.string()).max(3).default([]),
+});
+
+export type ResearchOption = z.infer<typeof ResearchOptionSchema>;
+
+export const TripResearchBriefSchema = z.object({
+  summary: z.string(),
+  dateNotes: z.array(z.string()).default([]),
+  popularOptions: z.array(ResearchOptionSchema).default([]),
+  assumptions: z.array(z.string()).default([]),
+  openQuestions: z.array(z.string()).default([]),
+});
+
+export type TripResearchBrief = z.infer<typeof TripResearchBriefSchema>;
+
 // Suggested activity from LLM (top 15)
 export const SuggestedActivitySchema = z.object({
   id: z.string(),
@@ -233,6 +268,7 @@ export const SuggestedActivitySchema = z.object({
   place_id: z.string().nullable().optional(),
   opening_hours: z.string().nullable().optional(),
   photo_url: z.string().nullable().optional(),
+  photo_urls: z.array(z.string()).max(3).optional(),
 });
 
 export type SuggestedActivity = z.infer<typeof SuggestedActivitySchema>;

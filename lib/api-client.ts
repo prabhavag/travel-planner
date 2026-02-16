@@ -66,6 +66,8 @@ export interface SessionResponse {
   expandedDay?: ExpandedDay;
   allExpandedDays?: Record<number, ExpandedDay>;
   suggestModifications?: boolean;
+  tripResearchBrief?: TripResearchBrief | null;
+  researchOptionSelections?: Record<string, ResearchOptionPreference>;
   // New activity-first flow fields
   suggestedActivities?: SuggestedActivity[];
   selectedActivityIds?: string[];
@@ -86,6 +88,33 @@ export interface TripInfo {
   activityLevel: string;
   travelers: number;
   budget: string | null;
+}
+
+export interface ResearchSource {
+  title: string;
+  url: string;
+  snippet?: string | null;
+}
+
+export interface ResearchOption {
+  id: string;
+  title: string;
+  category: "snorkeling" | "hiking" | "food" | "culture" | "relaxation" | "adventure" | "other";
+  whyItMatches: string;
+  bestForDates: string;
+  reviewSummary: string;
+  sourceLinks: ResearchSource[];
+  photoUrls?: string[];
+}
+
+export type ResearchOptionPreference = "keep" | "maybe" | "reject";
+
+export interface TripResearchBrief {
+  summary: string;
+  dateNotes: string[];
+  popularOptions: ResearchOption[];
+  assumptions: string[];
+  openQuestions: string[];
 }
 
 export interface SkeletonDay {
@@ -192,7 +221,7 @@ export async function startSession(): Promise<SessionResponse> {
   });
 }
 
-// Chat with the assistant (INFO_GATHERING and REVIEW states)
+// Chat with the assistant (INFO_GATHERING, INITIAL_RESEARCH, SUGGEST_ACTIVITIES, REVIEW)
 export async function chat(sessionId: string, message: string): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/chat`, {
     method: "POST",
@@ -291,6 +320,23 @@ export async function suggestMealsNearby(
   });
 }
 
+export async function generateResearchBrief(sessionId: string): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/generate-research-brief`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+export async function confirmResearchBrief(
+  sessionId: string,
+  researchOptionSelections: Record<string, ResearchOptionPreference>
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/confirm-research-brief`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, researchOptionSelections }),
+  });
+}
+
 // ==================== NEW ACTIVITY-FIRST FLOW API ====================
 
 export interface SuggestedActivity {
@@ -309,6 +355,7 @@ export interface SuggestedActivity {
   place_id?: string | null;
   opening_hours?: string | null;
   photo_url?: string | null;
+  photo_urls?: string[];
 }
 
 export interface DayGroup {
@@ -487,4 +534,3 @@ export async function updateWorkflowState(
     body: JSON.stringify({ workflowState }),
   });
 }
-

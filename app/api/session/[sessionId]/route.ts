@@ -28,6 +28,8 @@ export async function GET(
       sessionId: session.sessionId,
       workflowState: session.workflowState,
       tripInfo: session.tripInfo,
+      tripResearchBrief: session.tripResearchBrief,
+      researchOptionSelections: session.researchOptionSelections,
       suggestedActivities: session.suggestedActivities,
       selectedActivityIds: session.selectedActivityIds,
       dayGroups: session.dayGroups,

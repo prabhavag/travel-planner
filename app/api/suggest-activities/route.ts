@@ -32,8 +32,10 @@ async function enrichSingleActivity(
         const place = places[0];
         // Fetch photo URL if place_id is available
         let photoUrl: string | null = null;
+        let photoUrls: string[] = [];
         if (place.place_id) {
-          photoUrl = await placesClient.getPlacePhotoUrlFromId(place.place_id, 200);
+          photoUrls = await placesClient.getPlacePhotoUrlsFromId(place.place_id, 320);
+          photoUrl = photoUrls.length > 0 ? photoUrls[0] : null;
         }
         return {
           ...activity,
@@ -41,6 +43,7 @@ async function enrichSingleActivity(
           rating: place.rating || null,
           place_id: place.place_id,
           photo_url: photoUrl,
+          photo_urls: photoUrls,
         };
       }
     }
@@ -88,9 +91,10 @@ export async function POST(request: NextRequest) {
   }
 
   // Validate state - should be called after INFO_GATHERING is complete
-  // Validate state - allow from INFO_GATHERING, SUGGEST_ACTIVITIES, or SELECT_ACTIVITIES
+  // Validate state - allow from INFO_GATHERING, INITIAL_RESEARCH, SUGGEST_ACTIVITIES, or SELECT_ACTIVITIES
   const allowedStates = [
     WORKFLOW_STATES.INFO_GATHERING as string,
+    WORKFLOW_STATES.INITIAL_RESEARCH as string,
     WORKFLOW_STATES.SUGGEST_ACTIVITIES as string,
     WORKFLOW_STATES.SELECT_ACTIVITIES as string
   ];
@@ -135,7 +139,11 @@ export async function POST(request: NextRequest) {
       let message = "";
 
       // Stream activities as they're parsed from LLM
-      for await (const chunk of llmClient.suggestTopActivities({ tripInfo })) {
+      for await (const chunk of llmClient.suggestTopActivities({
+        tripInfo,
+        tripResearchBrief: session.tripResearchBrief,
+        researchOptionSelections: session.researchOptionSelections,
+      })) {
         if (chunk.type === "message") {
           message = chunk.message;
         } else if (chunk.type === "activity") {
