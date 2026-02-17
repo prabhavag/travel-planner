@@ -180,8 +180,9 @@ You MUST use up-to-date web context to gather:
 
 RESPONSE FORMAT (JSON):
 {
-  "message": "A concise conversational summary for the user. Include a clear explanation that their initial selections (keep/maybe/reject) below will help you refine further recommendations and create a better personalized itinerary.",
+  "message": "A concise conversational update for the user.",
   "tripResearchBrief": {
+    "summary": "A concise 1-2 sentence explanation of the recommendations that directly references the user's constraints (e.g., 'Considering you have a short 3-day trip...') and interests (e.g., 'and prefer outdoor activities...'). Do not use generic openers.",
     "popularOptions": [
       {
         "id": "opt1",
@@ -220,8 +221,9 @@ RULES:
 
 RESPONSE FORMAT (JSON):
 {
-  "message": "Your response to the user's feedback and what changed. Remind the user if needed that their selections help refine further recommendations.",
+  "message": "A concise conversational update for the user.",
   "tripResearchBrief": {
+    "summary": "A concise 1-2 sentence explanation of the updated recommendations that directly references the user's constraints and interests. Do not use generic openers.",
     "popularOptions": [
       {
         "id": "opt1",

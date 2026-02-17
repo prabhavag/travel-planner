@@ -33,8 +33,9 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
     tripResearchBrief: {
       type: "object",
       additionalProperties: false,
-      required: ["popularOptions", "assumptions", "openQuestions"],
+      required: ["summary", "popularOptions", "assumptions", "openQuestions"],
       properties: {
+        summary: { type: "string" },
         popularOptions: {
           type: "array",
           items: {

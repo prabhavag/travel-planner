@@ -85,6 +85,7 @@ export function InitialResearchView({
   const dietaryHints = allPreferences.filter((item) =>
     /vegetarian|vegan|no meat|no seafood|halal|kosher|gluten/i.test(item)
   );
+  const nonDietaryInterests = allPreferences.filter((item) => !dietaryHints.includes(item));
   const [activeStatus, setActiveStatus] = useState<string>("Inbox");
   const [activeInterest, setActiveInterest] = useState<string>("All");
   const [hasInitializedTab, setHasInitializedTab] = useState(false);
@@ -222,7 +223,7 @@ export function InitialResearchView({
 
       <Card className={hasUnresolvedAssumptionConflicts ? "border-amber-300 bg-amber-50/50" : ""}>
         <CardHeader>
-          <CardTitle className="text-base">Trip Assumptions Check</CardTitle>
+          <CardTitle className="text-base">Trip Overview</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-gray-700">
           <p>
@@ -270,66 +271,77 @@ export function InitialResearchView({
         </CardContent>
       </Card>
 
-      {(researchBrief.assumptions.length > 0 || researchBrief.openQuestions.length > 0) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {researchBrief.assumptions.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Assumptions</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {researchBrief.assumptions.map((item, idx) => (
-                  <p key={`${item}-${idx}`} className="text-sm text-gray-700">
-                    • {item}
-                  </p>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-          {researchBrief.openQuestions.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Let’s Clarify These</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {researchBrief.openQuestions.map((question, idx) => (
-                  <div key={`${question}-${idx}`} className="space-y-2">
-                    <p className="text-sm font-medium text-gray-700">{question}</p>
-                    <div className="flex gap-2">
-                      <textarea
-                        className="flex-1 rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        rows={2}
-                        placeholder="Type your answer here..."
-                        value={answers[question] || ""}
-                        onChange={(e) => handleAnswerChange(question, e.target.value)}
-                        disabled={isLoading}
-                      />
-                      <Button
-                        size="icon"
-                        className="h-[52px] w-[52px] shrink-0"
-                        onClick={() => {
-                          const answer = answers[question];
-                          if (answer?.trim()) {
-                            onAnswerQuestions({ [question]: answer.trim() });
-                            // Optionally clear local answer, though the parent should ideally filter the question out
-                            setAnswers(prev => {
-                              const newAns = { ...prev };
-                              delete newAns[question];
-                              return newAns;
-                            });
-                          }
-                        }}
-                        disabled={isLoading || !answers[question]?.trim()}
-                      >
-                        <Send className="h-4 h-4" />
-                      </Button>
-                    </div>
+      {(researchBrief.summary || researchBrief.assumptions.length > 0) && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Research Summary</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {researchBrief.summary && (
+              <p className="text-sm text-gray-700 leading-relaxed">
+                {researchBrief.summary}
+              </p>
+            )}
+            {researchBrief.assumptions.length > 0 && (
+              <div className="pt-2">
+                <p className="text-xs font-medium text-gray-500 mb-1.5">What we considered</p>
+                <ul className="space-y-1">
+                  {researchBrief.assumptions.map((item, idx) => (
+                    <li key={`${item}-${idx}`} className="text-sm text-gray-600 flex gap-1.5">
+                      <span className="text-gray-400 shrink-0">•</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {researchBrief.openQuestions.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Let's Clarify These</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="max-h-[240px] overflow-y-auto space-y-4 pr-1">
+              {researchBrief.openQuestions.map((question, idx) => (
+                <div key={`${question}-${idx}`} className="space-y-2">
+                  <p className="text-sm font-medium text-gray-700">{question}</p>
+                  <div className="flex gap-2">
+                    <textarea
+                      className="flex-1 rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      rows={2}
+                      placeholder="Type your answer here..."
+                      value={answers[question] || ""}
+                      onChange={(e) => handleAnswerChange(question, e.target.value)}
+                      disabled={isLoading}
+                    />
+                    <Button
+                      size="icon"
+                      className="h-[52px] w-[52px] shrink-0"
+                      onClick={() => {
+                        const answer = answers[question];
+                        if (answer?.trim()) {
+                          onAnswerQuestions({ [question]: answer.trim() });
+                          setAnswers(prev => {
+                            const newAns = { ...prev };
+                            delete newAns[question];
+                            return newAns;
+                          });
+                        }
+                      }}
+                      disabled={isLoading || !answers[question]?.trim()}
+                    >
+                      <Send className="h-4 w-4" />
+                    </Button>
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-        </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
