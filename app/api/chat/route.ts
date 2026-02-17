@@ -29,7 +29,6 @@ export async function POST(request: NextRequest) {
       const result = await llmClient.gatherInfo({
         tripInfo: session.tripInfo,
         userMessage: message,
-        conversationHistory: session.conversationHistory,
       });
 
       const oldDestination = session.tripInfo.destination;
@@ -82,7 +81,6 @@ export async function POST(request: NextRequest) {
         tripInfo: session.tripInfo,
         currentBrief: session.tripResearchBrief,
         userMessage: message,
-        conversationHistory: session.conversationHistory,
       });
 
       if (!result.success) {
@@ -113,7 +111,6 @@ export async function POST(request: NextRequest) {
         suggestedActivities: session.suggestedActivities || [],
         selectedActivityIds: session.selectedActivityIds || [],
         userMessage: message,
-        conversationHistory: session.conversationHistory,
       });
 
       // Update trip info if changed
@@ -147,7 +144,6 @@ export async function POST(request: NextRequest) {
         tripInfo: session.tripInfo,
         groupedDays: session.groupedDays,
         userMessage: message,
-        conversationHistory: session.conversationHistory,
       });
 
       // Handle modifications to groupedDays

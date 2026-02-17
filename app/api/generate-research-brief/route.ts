@@ -34,7 +34,6 @@ export async function POST(request: NextRequest) {
     const llmClient = getLLMClient();
     const result = await llmClient.generateInitialResearchBrief({
       tripInfo: session.tripInfo,
-      conversationHistory: session.conversationHistory,
     });
 
     if (!result.success || !result.tripResearchBrief) {

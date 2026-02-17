@@ -86,10 +86,7 @@ interface LLMClientOptions {
   temperature?: number;
 }
 
-interface ConversationMessage {
-  role: "user" | "assistant";
-  content: string;
-}
+
 
 class LLMClient {
   private openai: OpenAI;
@@ -476,43 +473,43 @@ class LLMClient {
 
     const popularOptions = Array.isArray(raw.popularOptions)
       ? raw.popularOptions
-          .map((option, index) => {
-            const opt = (option || {}) as Record<string, unknown>;
-            const sourceLinksRaw = Array.isArray(opt.sourceLinks) ? opt.sourceLinks : [];
-            const sourceLinks = sourceLinksRaw
-              .map((source) => {
-                const s = (source || {}) as Record<string, unknown>;
-                if (typeof s.url !== "string" || !s.url.trim()) return null;
-                return {
-                  title: typeof s.title === "string" && s.title.trim() ? s.title.trim() : "Source",
-                  url: s.url.trim(),
-                  snippet: typeof s.snippet === "string" ? s.snippet.trim() : null,
-                };
-              })
-              .filter((value): value is { title: string; url: string; snippet: string | null } => Boolean(value));
-            const photoUrls = Array.isArray(opt.photoUrls)
-              ? opt.photoUrls
-                  .filter((url): url is string => typeof url === "string" && url.trim().length > 0)
-                  .map((url) => url.trim())
-                  .slice(0, 3)
-              : [];
+        .map((option, index) => {
+          const opt = (option || {}) as Record<string, unknown>;
+          const sourceLinksRaw = Array.isArray(opt.sourceLinks) ? opt.sourceLinks : [];
+          const sourceLinks = sourceLinksRaw
+            .map((source) => {
+              const s = (source || {}) as Record<string, unknown>;
+              if (typeof s.url !== "string" || !s.url.trim()) return null;
+              return {
+                title: typeof s.title === "string" && s.title.trim() ? s.title.trim() : "Source",
+                url: s.url.trim(),
+                snippet: typeof s.snippet === "string" ? s.snippet.trim() : null,
+              };
+            })
+            .filter((value): value is { title: string; url: string; snippet: string | null } => Boolean(value));
+          const photoUrls = Array.isArray(opt.photoUrls)
+            ? opt.photoUrls
+              .filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+              .map((url) => url.trim())
+              .slice(0, 3)
+            : [];
 
-            return {
-              id: typeof opt.id === "string" && opt.id.trim() ? opt.id.trim() : `opt${index + 1}`,
-              title: typeof opt.title === "string" && opt.title.trim() ? opt.title.trim() : `Option ${index + 1}`,
-              category:
-                typeof opt.category === "string" &&
+          return {
+            id: typeof opt.id === "string" && opt.id.trim() ? opt.id.trim() : `opt${index + 1}`,
+            title: typeof opt.title === "string" && opt.title.trim() ? opt.title.trim() : `Option ${index + 1}`,
+            category:
+              typeof opt.category === "string" &&
                 RESEARCH_CATEGORIES.includes(opt.category as (typeof RESEARCH_CATEGORIES)[number])
-                  ? (opt.category as (typeof RESEARCH_CATEGORIES)[number])
-                  : "other",
-              whyItMatches: typeof opt.whyItMatches === "string" ? opt.whyItMatches : "",
-              bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
-              reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
-              sourceLinks,
-              photoUrls,
-            };
-          })
-          .filter((option) => option.title.length > 0)
+                ? (opt.category as (typeof RESEARCH_CATEGORIES)[number])
+                : "other",
+            whyItMatches: typeof opt.whyItMatches === "string" ? opt.whyItMatches : "",
+            bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
+            reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
+            sourceLinks,
+            photoUrls,
+          };
+        })
+        .filter((option) => option.title.length > 0)
       : [];
 
     return {
@@ -527,16 +524,13 @@ class LLMClient {
   async gatherInfo({
     tripInfo,
     userMessage,
-    conversationHistory,
   }: {
     tripInfo: TripInfo | null;
     userMessage: string;
-    conversationHistory: ConversationMessage[];
   }) {
     const messages = buildInfoGatheringMessages({
       tripInfo,
       userMessage,
-      conversationHistory,
     });
 
     try {
@@ -591,18 +585,15 @@ class LLMClient {
     tripInfo,
     groupedDays,
     userMessage,
-    conversationHistory,
   }: {
     tripInfo: TripInfo;
     groupedDays: GroupedDay[];
     userMessage: string;
-    conversationHistory?: ConversationMessage[];
   }) {
     const messages = buildReviewMessages({
       tripInfo,
       groupedDays,
       userMessage,
-      conversationHistory,
     });
 
     try {
@@ -634,10 +625,8 @@ class LLMClient {
 
   async generateInitialResearchBrief({
     tripInfo,
-    conversationHistory,
   }: {
     tripInfo: TripInfo;
-    conversationHistory: ConversationMessage[];
   }): Promise<{
     success: boolean;
     message: string;
@@ -645,7 +634,6 @@ class LLMClient {
   }> {
     const messages = buildInitialResearchBriefMessages({
       tripInfo,
-      conversationHistory,
     });
 
     try {
@@ -687,12 +675,10 @@ class LLMClient {
     tripInfo,
     currentBrief,
     userMessage,
-    conversationHistory,
   }: {
     tripInfo: TripInfo;
     currentBrief: TripResearchBrief;
     userMessage: string;
-    conversationHistory: ConversationMessage[];
   }): Promise<{
     success: boolean;
     message: string;
@@ -702,7 +688,6 @@ class LLMClient {
       tripInfo,
       currentBrief,
       userMessage,
-      conversationHistory,
     });
 
     try {
@@ -888,13 +873,11 @@ class LLMClient {
     suggestedActivities,
     selectedActivityIds,
     userMessage,
-    conversationHistory,
   }: {
     tripInfo: TripInfo;
     suggestedActivities: SuggestedActivity[];
     selectedActivityIds: string[];
     userMessage: string;
-    conversationHistory: ConversationMessage[];
   }): Promise<{
     success: boolean;
     message: string;
@@ -907,7 +890,6 @@ class LLMClient {
       suggestedActivities,
       selectedActivityIds,
       userMessage,
-      conversationHistory,
     });
 
     try {

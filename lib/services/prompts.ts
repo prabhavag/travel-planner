@@ -256,19 +256,14 @@ RULES:
 - Return ONLY valid JSON, no additional text`,
 };
 
-interface ConversationMessage {
-  role: "user" | "assistant";
-  content: string;
-}
+
 
 export function buildInfoGatheringMessages({
   tripInfo,
   userMessage,
-  conversationHistory,
 }: {
   tripInfo: TripInfo | null;
   userMessage: string;
-  conversationHistory: ConversationMessage[];
 }) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.INFO_GATHERING },
@@ -285,16 +280,6 @@ export function buildInfoGatheringMessages({
     });
   }
 
-  const recentHistory = (conversationHistory || []).slice(-6);
-  recentHistory.forEach((msg) => {
-    if (msg.role === "user" || msg.role === "assistant") {
-      messages.push({
-        role: msg.role,
-        content: String(msg.content || "").slice(0, 5000),
-      });
-    }
-  });
-
   messages.push({ role: "user", content: userMessage });
 
   return messages;
@@ -308,7 +293,6 @@ export function buildReviewMessages({
   tripInfo: TripInfo;
   groupedDays: GroupedDay[];
   userMessage: string;
-  conversationHistory?: ConversationMessage[];
 }) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.REVIEW },
@@ -373,10 +357,8 @@ Generate exactly 10 activity suggestions that match the traveler's interests and
 
 export function buildInitialResearchBriefMessages({
   tripInfo,
-  conversationHistory,
 }: {
   tripInfo: TripInfo;
-  conversationHistory: ConversationMessage[];
 }) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.INITIAL_RESEARCH_BRIEF },
@@ -394,17 +376,7 @@ Activity Level: ${tripInfo.activityLevel}
 Travelers: ${tripInfo.travelers || 1}
 ${tripInfo.budget ? `Budget: ${tripInfo.budget}` : ""}
 
-Use the conversation context to personalize recommendations.`,
-  });
-
-  const recentHistory = (conversationHistory || []).slice(-8);
-  recentHistory.forEach((msg) => {
-    if (msg.role === "user" || msg.role === "assistant") {
-      messages.push({
-        role: msg.role,
-        content: String(msg.content || "").slice(0, 5000),
-      });
-    }
+Use the current trip info and preferences to personalize recommendations.`,
   });
 
   return messages;
@@ -475,13 +447,11 @@ export function buildSuggestActivitiesChatMessages({
   suggestedActivities,
   selectedActivityIds,
   userMessage,
-  conversationHistory,
 }: {
   tripInfo: TripInfo;
   suggestedActivities: SuggestedActivity[];
   selectedActivityIds: string[];
   userMessage: string;
-  conversationHistory: ConversationMessage[];
 }) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.SUGGEST_ACTIVITIES_CHAT },
@@ -504,17 +474,6 @@ Selected so far: ${selectedActivityIds.length > 0 ? selectedActivityIds.join(", 
     content: "I have the activity list ready. How can I help?",
   });
 
-  // Add recent conversation history
-  const recentHistory = (conversationHistory || []).slice(-6);
-  recentHistory.forEach((msg) => {
-    if (msg.role === "user" || msg.role === "assistant") {
-      messages.push({
-        role: msg.role,
-        content: String(msg.content || "").slice(0, 5000),
-      });
-    }
-  });
-
   messages.push({ role: "user", content: userMessage });
 
   return messages;
@@ -524,12 +483,10 @@ export function buildInitialResearchChatMessages({
   tripInfo,
   currentBrief,
   userMessage,
-  conversationHistory,
 }: {
   tripInfo: TripInfo;
   currentBrief: TripResearchBrief;
   userMessage: string;
-  conversationHistory: ConversationMessage[];
 }) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.INITIAL_RESEARCH_CHAT },
@@ -546,16 +503,6 @@ Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
 Current research brief:
 ${JSON.stringify(currentBrief, null, 2)}
 `,
-  });
-
-  const recentHistory = (conversationHistory || []).slice(-6);
-  recentHistory.forEach((msg) => {
-    if (msg.role === "user" || msg.role === "assistant") {
-      messages.push({
-        role: msg.role,
-        content: String(msg.content || "").slice(0, 5000),
-      });
-    }
   });
 
   messages.push({ role: "user", content: userMessage });
