@@ -86,7 +86,7 @@ export function InitialResearchView({
     /vegetarian|vegan|no meat|no seafood|halal|kosher|gluten/i.test(item)
   );
   const nonDietaryInterests = allPreferences.filter((item) => !dietaryHints.includes(item));
-  const [activeStatus, setActiveStatus] = useState<string>("Inbox");
+  const [activeStatus, setActiveStatus] = useState<string>("Postponed");
   const [activeInterest, setActiveInterest] = useState<string>("All");
   const [hasInitializedTab, setHasInitializedTab] = useState(false);
 
