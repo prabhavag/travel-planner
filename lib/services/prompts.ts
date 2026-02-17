@@ -182,8 +182,6 @@ RESPONSE FORMAT (JSON):
 {
   "message": "A concise conversational summary for the user. Include a clear explanation that their initial selections (keep/maybe/reject) below will help you refine further recommendations and create a better personalized itinerary.",
   "tripResearchBrief": {
-    "summary": "High-level framing of what this trip should optimize for, based on traveler interests and preferences",
-    "dateNotes": ["Date-specific notes and constraints"],
     "popularOptions": [
       {
         "id": "opt1",
@@ -212,10 +210,10 @@ RULES:
 - Every popularOption must include at least 1 sourceLinks item
 - Favor trusted, recent, and destination-relevant sources
 - Be explicit when source evidence is mixed or uncertain
-- If date mismatch or ambiguity exists, mention it in dateNotes and openQuestions
+- Remove any obvious assumptions already stated in the interests and preferences.
+- If date mismatch or ambiguity exists, mention it in openQuestions
 - Citations may be added from tool annotations; include sourceLinks in JSON when available
 - Keep message concise and actionable
-- NOTE: Treat the first and last days of the trip as partial days due to arrival/departure constraints; reflect this in your summary and notes
 - Return ONLY valid JSON, no extra text`,
 
   INITIAL_RESEARCH_CHAT: `You are refining an existing travel research brief with new user feedback.
@@ -224,8 +222,6 @@ RESPONSE FORMAT (JSON):
 {
   "message": "Your response to the user's feedback and what changed. Remind the user if needed that their selections help refine further recommendations.",
   "tripResearchBrief": {
-    "summary": "Updated summary, continuing to respect interests and preferences",
-    "dateNotes": ["Updated date notes"],
     "popularOptions": [
       {
         "id": "opt1",
@@ -252,10 +248,30 @@ RULES:
 - STRICTLY RESPECT new and existing traveler interests and preferences
 - Keep high-quality options and replace weak fits
 - Respect newly specified constraints
+- Remove any obvious assumptions already stated in the interests and preferences.
 - Keep options realistic for the destination and dates
 - Ensure every option still has at least one source link
 - Citations may be added from tool annotations; include sourceLinks in JSON when available
 - Return ONLY valid JSON, no additional text`,
+
+  COMPRESS_PREFERENCES: `You are a data organization expert. Your goal is to merge current user preferences with new answers to questions into a concise, non-redundant list of strings for a travel planning context.
+
+Input:
+1. Current Preferences (list of strings)
+2. New Answers (map of question to answer)
+
+Output Format (JSON):
+{
+  "preferences": ["concise interest 1", "specific preference 2", ...]
+}
+
+RULES:
+- PRESERVE existing interests as-is unless they are clearly redundant or made obsolete by new answers.
+- Combine related information into single, clear strings.
+- Remove redundant or obvious details.
+- Keep the output as a list of short but descriptive strings.
+- Focus on actionable travel preferences (e.g., "Prefers quiet mornings", "Loves spicy local seafood", "Avoids high-altitude hiking").
+- Return ONLY valid JSON.`,
 };
 
 
@@ -508,6 +524,24 @@ ${JSON.stringify(currentBrief, null, 2)}
   });
 
   messages.push({ role: "user", content: userMessage });
+
+  return messages;
+}
+
+export function buildCompressPreferencesMessages({
+  currentPreferences,
+  newAnswers,
+}: {
+  currentPreferences: string[];
+  newAnswers: Record<string, string>;
+}) {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: SYSTEM_PROMPTS.COMPRESS_PREFERENCES },
+    {
+      role: "user",
+      content: `Current Preferences:\n${JSON.stringify(currentPreferences, null, 2)}\n\nNew Answers to Questions:\n${JSON.stringify(newAnswers, null, 2)}`,
+    },
+  ];
 
   return messages;
 }

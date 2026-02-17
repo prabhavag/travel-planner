@@ -18,6 +18,7 @@ import {
   finalize,
   generateResearchBrief,
   confirmResearchBrief,
+  answerResearchQuestions,
   suggestTopActivities,
   selectActivities,
   groupDays,
@@ -302,6 +303,22 @@ export default function PlannerPage() {
     } catch (error) {
       console.error("Suggest activities error:", error);
       alert("Failed to suggest activities. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const handleAnswerResearchQuestions = async (answers: Record<string, string>) => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await answerResearchQuestions(sessionId, answers);
+      if (response.success && response.tripInfo) {
+        setTripInfo(response.tripInfo);
+      }
+    } catch (error) {
+      console.error("Answer research questions error:", error);
+      alert("Failed to save answers. Please try again.");
+    } finally {
       setLoading(false);
     }
   };
@@ -699,6 +716,7 @@ export default function PlannerPage() {
                     hasUnresolvedAssumptionConflicts={hasUnresolvedAssumptionConflicts}
                     onRegenerate={handleGenerateResearchBrief}
                     onProceed={handleProceedFromResearch}
+                    onAnswerQuestions={handleAnswerResearchQuestions}
                     isLoading={loading}
                   />
                 );

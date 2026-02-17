@@ -15,6 +15,7 @@ import {
   buildGroupActivitiesMessages,
   buildRegenerateDayThemeMessages,
   buildSuggestActivitiesChatMessages,
+  buildCompressPreferencesMessages,
 } from "./prompts";
 import { getPlacesClient } from "./places-client";
 import { getGeocodingService } from "./geocoding-service";
@@ -32,13 +33,8 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
     tripResearchBrief: {
       type: "object",
       additionalProperties: false,
-      required: ["summary", "dateNotes", "popularOptions", "assumptions", "openQuestions"],
+      required: ["popularOptions", "assumptions", "openQuestions"],
       properties: {
-        summary: { type: "string" },
-        dateNotes: {
-          type: "array",
-          items: { type: "string" },
-        },
         popularOptions: {
           type: "array",
           items: {
@@ -513,7 +509,7 @@ class LLMClient {
       : [];
 
     return {
-      summary: typeof raw.summary === "string" ? raw.summary : "",
+      summary: typeof raw.summary === "string" ? raw.summary : undefined,
       dateNotes: Array.isArray(raw.dateNotes) ? raw.dateNotes.filter((v): v is string => typeof v === "string") : [],
       popularOptions,
       assumptions: Array.isArray(raw.assumptions) ? raw.assumptions.filter((v): v is string => typeof v === "string") : [],
@@ -719,6 +715,40 @@ class LLMClient {
         success: false,
         message: "Sorry, I couldn't update the research brief. Please try again.",
         tripResearchBrief: null,
+      };
+    }
+  }
+
+  async compressPreferences({
+    currentPreferences,
+    newAnswers,
+  }: {
+    currentPreferences: string[];
+    newAnswers: Record<string, string>;
+  }): Promise<{ success: boolean; preferences: string[] }> {
+    const messages = buildCompressPreferencesMessages({
+      currentPreferences,
+      newAnswers,
+    });
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: 0.3, // Lower temperature for data formatting tasks
+        response_format: { type: "json_object" },
+      });
+
+      const response = this._parseJsonResponse(completion);
+      return {
+        success: true,
+        preferences: Array.isArray(response.preferences) ? response.preferences : currentPreferences,
+      };
+    } catch (error) {
+      console.error("Error in compressPreferences:", error);
+      return {
+        success: false,
+        preferences: currentPreferences,
       };
     }
   }

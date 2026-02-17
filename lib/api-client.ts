@@ -110,8 +110,8 @@ export interface ResearchOption {
 export type ResearchOptionPreference = "keep" | "maybe" | "reject";
 
 export interface TripResearchBrief {
-  summary: string;
-  dateNotes: string[];
+  summary?: string;
+  dateNotes?: string[];
   popularOptions: ResearchOption[];
   assumptions: string[];
   openQuestions: string[];
@@ -334,6 +334,16 @@ export async function confirmResearchBrief(
   return fetchJson(`${BASE_URL}/confirm-research-brief`, {
     method: "POST",
     body: JSON.stringify({ sessionId, researchOptionSelections }),
+  });
+}
+
+export async function answerResearchQuestions(
+  sessionId: string,
+  answers: Record<string, string>
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/answer-research-questions`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, answers }),
   });
 }
 

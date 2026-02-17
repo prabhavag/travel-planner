@@ -241,8 +241,8 @@ export const ResearchOptionSchema = z.object({
 export type ResearchOption = z.infer<typeof ResearchOptionSchema>;
 
 export const TripResearchBriefSchema = z.object({
-  summary: z.string(),
-  dateNotes: z.array(z.string()).default([]),
+  summary: z.string().optional(),
+  dateNotes: z.array(z.string()).optional().default([]),
   popularOptions: z.array(ResearchOptionSchema).default([]),
   assumptions: z.array(z.string()).default([]),
   openQuestions: z.array(z.string()).default([]),

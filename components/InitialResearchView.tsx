@@ -16,6 +16,7 @@ interface InitialResearchViewProps {
   hasUnresolvedAssumptionConflicts: boolean;
   onRegenerate: () => void;
   onProceed: () => void;
+  onAnswerQuestions: (answers: Record<string, string>) => void;
   isLoading?: boolean;
 }
 
@@ -28,8 +29,11 @@ export function InitialResearchView({
   hasUnresolvedAssumptionConflicts,
   onRegenerate,
   onProceed,
+  onAnswerQuestions,
   isLoading = false,
 }: InitialResearchViewProps) {
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+
   if (!researchBrief) {
     return (
       <div className="p-4">
@@ -136,6 +140,14 @@ export function InitialResearchView({
 
   const visibleOptions = activeOptionTab === "best-match" ? bestMatchOptions : otherPopularOptions;
 
+  const handleAnswerChange = (question: string, value: string) => {
+    setAnswers((prev) => ({ ...prev, [question]: value }));
+  };
+
+  const handleSubmitAnswers = () => {
+    onAnswerQuestions(answers);
+  };
+
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between bg-white py-2 px-4">
@@ -206,30 +218,6 @@ export function InitialResearchView({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Summary</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-gray-700 whitespace-pre-wrap">
-          {researchBrief.summary || "No summary generated yet."}
-        </CardContent>
-      </Card>
-
-      {researchBrief.dateNotes.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Date Notes</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {researchBrief.dateNotes.map((note, idx) => (
-              <p key={`${note}-${idx}`} className="text-sm text-gray-700">
-                • {note}
-              </p>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
       {(researchBrief.assumptions.length > 0 || researchBrief.openQuestions.length > 0) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {researchBrief.assumptions.length > 0 && (
@@ -248,14 +236,28 @@ export function InitialResearchView({
           )}
           {researchBrief.openQuestions.length > 0 && (
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-base">Open Questions</CardTitle>
+                <Button
+                  size="sm"
+                  onClick={handleSubmitAnswers}
+                  disabled={isLoading || Object.keys(answers).length === 0}
+                >
+                  Save Answers
+                </Button>
               </CardHeader>
-              <CardContent className="space-y-2">
-                {researchBrief.openQuestions.map((item, idx) => (
-                  <p key={`${item}-${idx}`} className="text-sm text-gray-700">
-                    • {item}
-                  </p>
+              <CardContent className="space-y-4">
+                {researchBrief.openQuestions.map((question, idx) => (
+                  <div key={`${question}-${idx}`} className="space-y-1.5">
+                    <p className="text-sm font-medium text-gray-700">{question}</p>
+                    <textarea
+                      className="w-full rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      rows={2}
+                      placeholder="Type your answer here..."
+                      value={answers[question] || ""}
+                      onChange={(e) => handleAnswerChange(question, e.target.value)}
+                    />
+                  </div>
                 ))}
               </CardContent>
             </Card>
