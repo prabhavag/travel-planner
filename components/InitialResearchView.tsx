@@ -67,7 +67,7 @@ export function InitialResearchView({
     currentDuration != null &&
     derivedDuration > 0 &&
     currentDuration > 0 &&
-    derivedDuration !== currentDuration;
+    Math.abs(derivedDuration - currentDuration) > 1;
   const allPreferences = tripInfo?.preferences || [];
   const dietaryHints = allPreferences.filter((item) =>
     /vegetarian|vegan|no meat|no seafood|halal|kosher|gluten/i.test(item)

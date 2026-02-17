@@ -327,7 +327,7 @@ export default function PlannerPage() {
     tripInfo?.durationDays != null &&
     derivedDuration > 0 &&
     tripInfo.durationDays > 0 &&
-    derivedDuration !== tripInfo.durationDays;
+    Math.abs(derivedDuration - tripInfo.durationDays) > 1;
   const hasUnresolvedAssumptionConflicts = workflowState === WORKFLOW_STATES.INITIAL_RESEARCH && hasDurationConflict;
 
   const handleResolveDurationConflict = async (mode: "use_date_range" | "keep_requested_duration") => {

@@ -38,7 +38,7 @@ RULES:
 - Extract information incrementally from user messages
 - Always return what you know so far in tripInfo
 - Calculate durationDays from startDate and endDate if both are provided
-- Set isComplete=true ONLY when destination AND dates are provided
+- A difference of <= 1 day between the date range and the requested duration is acceptable (e.g., June 1-6 for 7 days); set isComplete=true in such cases without flagging a conflict
 - When isComplete=true, confirm the details and ask if they want to proceed to planning
 - Return ONLY valid JSON, no additional text`,
 
@@ -101,8 +101,9 @@ Given a list of selected activities with their coordinates, duration, and best t
 1. MINIMIZE travel time between activities (group by proximity/neighborhood)
 2. Respect best time of day (morning activities first, evening activities last)
 3. Create balanced days (not too packed, not too empty - aim for 2-4 activities per day)
-4. Create a logical flow within each day
-5. Consider opening hours and realistic timing
+4. Treat the first and last days of the trip as partial days due to flight/commute constraints - plan fewer activities (1-2) for these days
+5. Create a logical flow within each day
+6. Consider opening hours and realistic timing
 
 RESPONSE FORMAT (JSON):
 {
@@ -214,6 +215,7 @@ RULES:
 - If date mismatch or ambiguity exists, mention it in dateNotes and openQuestions
 - Citations may be added from tool annotations; include sourceLinks in JSON when available
 - Keep message concise and actionable
+- NOTE: Treat the first and last days of the trip as partial days due to arrival/departure constraints; reflect this in your summary and notes
 - Return ONLY valid JSON, no extra text`,
 
   INITIAL_RESEARCH_CHAT: `You are refining an existing travel research brief with new user feedback.
