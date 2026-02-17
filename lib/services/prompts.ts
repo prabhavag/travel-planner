@@ -173,22 +173,22 @@ RULES:
 
 You MUST use up-to-date web context to gather:
 1. Date-specific considerations for the exact travel dates
-2. Popular and highly reviewed options that match traveler preferences
+2. Popular and highly reviewed options that STRICTLY match traveler interests and preferences
 3. Practical tradeoffs (crowds, drive-time, conditions, reservation needs)
 4. Links to credible sources for each option
 
 RESPONSE FORMAT (JSON):
 {
-  "message": "A concise conversational summary for the user",
+  "message": "A concise conversational summary for the user. Include a clear explanation that their initial selections (keep/maybe/reject) below will help you refine further recommendations and create a better personalized itinerary.",
   "tripResearchBrief": {
-    "summary": "High-level framing of what this trip should optimize for",
+    "summary": "High-level framing of what this trip should optimize for, based on traveler interests and preferences",
     "dateNotes": ["Date-specific notes and constraints"],
     "popularOptions": [
       {
         "id": "opt1",
         "title": "Specific option/place",
         "category": "snorkeling|hiking|food|culture|relaxation|adventure|other",
-        "whyItMatches": "Why this fits user context/preferences",
+        "whyItMatches": "Detailed explanation of why this fits user context/preferences",
         "bestForDates": "How this option fits the exact travel dates",
         "reviewSummary": "What reviews repeatedly praise/caution",
         "sourceLinks": [
@@ -206,6 +206,7 @@ RESPONSE FORMAT (JSON):
 }
 
 RULES:
+- STRICTLY RESPECT traveler interests and preferences when selecting popularOptions
 - Provide 6-10 popularOptions
 - Every popularOption must include at least 1 sourceLinks item
 - Favor trusted, recent, and destination-relevant sources
@@ -219,16 +220,16 @@ RULES:
 
 RESPONSE FORMAT (JSON):
 {
-  "message": "Your response to the user's feedback and what changed",
+  "message": "Your response to the user's feedback and what changed. Remind the user if needed that their selections help refine further recommendations.",
   "tripResearchBrief": {
-    "summary": "Updated summary",
+    "summary": "Updated summary, continuing to respect interests and preferences",
     "dateNotes": ["Updated date notes"],
     "popularOptions": [
       {
         "id": "opt1",
         "title": "Specific option/place",
         "category": "snorkeling|hiking|food|culture|relaxation|adventure|other",
-        "whyItMatches": "Why this matches",
+        "whyItMatches": "Why this matches, explicitly tied to user interests/preferences",
         "bestForDates": "Date-specific fit",
         "reviewSummary": "Review synthesis",
         "sourceLinks": [
@@ -246,6 +247,7 @@ RESPONSE FORMAT (JSON):
 }
 
 RULES:
+- STRICTLY RESPECT new and existing traveler interests and preferences
 - Keep high-quality options and replace weak fits
 - Respect newly specified constraints
 - Keep options realistic for the destination and dates

@@ -230,7 +230,48 @@ export function InitialResearchView({
         </Card>
       )}
 
-      <div className="bg-white rounded-lg border border-gray-200 p-2">
+      {(researchBrief.assumptions.length > 0 || researchBrief.openQuestions.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {researchBrief.assumptions.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Assumptions</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {researchBrief.assumptions.map((item, idx) => (
+                  <p key={`${item}-${idx}`} className="text-sm text-gray-700">
+                    • {item}
+                  </p>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+          {researchBrief.openQuestions.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Open Questions</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {researchBrief.openQuestions.map((item, idx) => (
+                  <p key={`${item}-${idx}`} className="text-sm text-gray-700">
+                    • {item}
+                  </p>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+        <div className="space-y-1">
+          <h3 className="text-sm font-medium text-gray-900">Refine Your Recommendations</h3>
+          <p className="text-xs text-gray-500 leading-relaxed">
+            Select <strong>Keep</strong> for places you love, <strong>Maybe</strong> for those you're considering,
+            or <strong>Reject</strong> for ones that don't fit. Your choices help refine our AI's understanding
+            to create a better personalized itinerary.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <Button
             type="button"
@@ -345,38 +386,6 @@ export function InitialResearchView({
         ))}
       </div>
 
-      {(researchBrief.assumptions.length > 0 || researchBrief.openQuestions.length > 0) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {researchBrief.assumptions.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Assumptions</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {researchBrief.assumptions.map((item, idx) => (
-                  <p key={`${item}-${idx}`} className="text-sm text-gray-700">
-                    • {item}
-                  </p>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-          {researchBrief.openQuestions.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Open Questions</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {researchBrief.openQuestions.map((item, idx) => (
-                  <p key={`${item}-${idx}`} className="text-sm text-gray-700">
-                    • {item}
-                  </p>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
     </div>
   );
 }
