@@ -158,7 +158,7 @@ export function InitialResearchView({
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between bg-white py-2 px-4">
         <div>
-          <h2 className="text-lg font-semibold">Initial Research Brief</h2>
+          <h2 className="text-lg font-semibold">Let's plan your places together</h2>
           <p className="text-sm text-gray-500">
             Refine in chat, then generate your activity list.
           </p>
@@ -273,7 +273,7 @@ export function InitialResearchView({
 
       <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
         <div className="space-y-1">
-          <h3 className="text-sm font-medium text-gray-900">Refine Your Recommendations</h3>
+          <h3 className="text-sm font-medium text-gray-900">Suggestions for you</h3>
           <p className="text-xs text-gray-500 leading-relaxed">
             Select <strong>Keep</strong> for places you love, <strong>Maybe</strong> for those you're considering,
             or <strong>Reject</strong> for ones that don't fit. Your choices help refine our AI's understanding

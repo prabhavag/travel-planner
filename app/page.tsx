@@ -54,7 +54,6 @@ const WORKFLOW_STATES = {
 const WORKFLOW_ORDER = [
   WORKFLOW_STATES.INFO_GATHERING,
   WORKFLOW_STATES.INITIAL_RESEARCH,
-  WORKFLOW_STATES.SUGGEST_ACTIVITIES,
   WORKFLOW_STATES.GROUP_DAYS,
   WORKFLOW_STATES.DAY_ITINERARY,
   WORKFLOW_STATES.MEAL_PREFERENCES,
@@ -260,10 +259,6 @@ export default function PlannerPage() {
       if (!response.success) {
         throw new Error(response.message);
       }
-      if (response.workflowState) {
-        setWorkflowState(response.workflowState);
-        updateMaxReachedState(response.workflowState);
-      }
       setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
     } catch (error) {
       console.error("Confirm research brief error:", error);
@@ -272,15 +267,14 @@ export default function PlannerPage() {
       setLoading(false);
       return;
     }
-    setLoading(false);
-    await handleSuggestActivities();
+    // Chained call to suggest activities with auto-proceed
+    await handleSuggestActivities(true);
   };
 
   // Suggest top 10 activities (streaming)
-  const handleSuggestActivities = async () => {
+  const handleSuggestActivities = async (autoProceed = false) => {
     if (!sessionId) return;
     setLoading(true);
-    setWorkflowState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
     setSuggestedActivities([]); // Clear and prepare for streaming
     setSelectedActivityIds([]);
 
@@ -288,12 +282,21 @@ export default function PlannerPage() {
       await suggestTopActivities(
         sessionId,
         (activity) => {
-          // Add each activity as it arrives
           setSuggestedActivities((prev) => [...prev, activity]);
         },
-        (message) => {
+        async (message) => {
           setChatHistory((prev) => [...prev, { role: "assistant", content: message }]);
-          setLoading(false);
+          if (autoProceed) {
+            // Use callback to get the latest activities list
+            setSuggestedActivities((currentActivities) => {
+              const ids = currentActivities.map(a => a.id);
+              setSelectedActivityIds(ids);
+              handleConfirmActivitySelectionInternal(ids);
+              return currentActivities;
+            });
+          } else {
+            setLoading(false);
+          }
           updateMaxReachedState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
         },
         (error) => {
@@ -302,7 +305,6 @@ export default function PlannerPage() {
           setLoading(false);
         },
         (enrichedActivity) => {
-          // Update activity with enrichment data (coordinates, rating, place_id)
           setSuggestedActivities((prev) =>
             prev.map((a) => (a.id === enrichedActivity.id ? enrichedActivity : a))
           );
@@ -311,6 +313,33 @@ export default function PlannerPage() {
     } catch (error) {
       console.error("Suggest activities error:", error);
       alert("Failed to suggest activities. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const handleConfirmActivitySelectionInternal = async (ids: string[]) => {
+    if (!sessionId || ids.length === 0) return;
+    setLoading(true);
+
+    try {
+      const selectResponse = await selectActivities(sessionId, ids);
+      if (!selectResponse.success) {
+        throw new Error(selectResponse.message);
+      }
+
+      const groupResponse = await groupDays(sessionId);
+      if (groupResponse.success) {
+        setWorkflowState(WORKFLOW_STATES.GROUP_DAYS);
+        updateMaxReachedState(WORKFLOW_STATES.GROUP_DAYS);
+        setDayGroups(groupResponse.dayGroups || []);
+        setGroupedDays(groupResponse.groupedDays || []);
+        setLastGroupedActivityIds([...ids]);
+        setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
+      }
+    } catch (error) {
+      console.error("Group days error:", error);
+      alert("Failed to organize activities. Please try again.");
+    } finally {
       setLoading(false);
     }
   };
@@ -395,32 +424,7 @@ export default function PlannerPage() {
 
   // Confirm activity selection and group into days
   const handleConfirmActivitySelection = async () => {
-    if (!sessionId || selectedActivityIds.length === 0) return;
-    setLoading(true);
-
-    try {
-      // First save selections
-      const selectResponse = await selectActivities(sessionId, selectedActivityIds);
-      if (!selectResponse.success) {
-        throw new Error(selectResponse.message);
-      }
-
-      // Then group into days
-      const groupResponse = await groupDays(sessionId);
-      if (groupResponse.success) {
-        setWorkflowState(WORKFLOW_STATES.GROUP_DAYS);
-        updateMaxReachedState(WORKFLOW_STATES.GROUP_DAYS);
-        setDayGroups(groupResponse.dayGroups || []);
-        setGroupedDays(groupResponse.groupedDays || []);
-        setLastGroupedActivityIds([...selectedActivityIds]);
-        setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
-      }
-    } catch (error) {
-      console.error("Group days error:", error);
-      alert("Failed to organize activities. Please try again.");
-    } finally {
-      setLoading(false);
-    }
+    handleConfirmActivitySelectionInternal(selectedActivityIds);
   };
 
   // Handle moving activity between days
@@ -644,7 +648,7 @@ export default function PlannerPage() {
       case WORKFLOW_STATES.INFO_GATHERING:
         return "Gathering Info";
       case WORKFLOW_STATES.INITIAL_RESEARCH:
-        return "Initial Research";
+        return "Planning Places";
       case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
         return "Select Activities";
       case WORKFLOW_STATES.SELECT_ACTIVITIES:
@@ -729,21 +733,6 @@ export default function PlannerPage() {
                   />
                 );
 
-              case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
-                return (
-                  <div className="p-4">
-                    <ActivitySelectionView
-                      activities={suggestedActivities}
-                      selectedIds={selectedActivityIds}
-                      userPreferences={tripInfo?.preferences || []}
-                      onSelectionChange={handleActivitySelectionChange}
-                      onConfirm={handleConfirmActivitySelection}
-                      onRegenerate={handleRegenerateActivities}
-                      onHoverActivity={setHoveredActivityId}
-                      isLoading={loading}
-                    />
-                  </div>
-                );
 
               case WORKFLOW_STATES.GROUP_DAYS:
                 return (
@@ -803,7 +792,7 @@ export default function PlannerPage() {
         return canProceed ? (
           <Button onClick={handleGenerateResearchBrief} disabled={loading} className="w-full mt-4">
             {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Create Initial Research Brief
+            Start Planning Places
           </Button>
         ) : null;
 
@@ -815,7 +804,7 @@ export default function PlannerPage() {
             className="w-full mt-4"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            {hasUnresolvedAssumptionConflicts ? "Resolve Assumptions to Continue" : "Generate Top Activities"}
+            {hasUnresolvedAssumptionConflicts ? "Resolve Assumptions to Continue" : "Generate Itinerary"}
           </Button>
         );
 
