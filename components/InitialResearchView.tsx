@@ -4,7 +4,7 @@ import { useMemo, useState, useRef, useLayoutEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, RefreshCw, Send } from "lucide-react";
+import { ChevronRight, ExternalLink, RefreshCw, Send } from "lucide-react";
 import type { ResearchOption, ResearchOptionPreference, TripInfo, TripResearchBrief } from "@/lib/api-client";
 
 interface InitialResearchViewProps {
@@ -205,7 +205,7 @@ export function InitialResearchView({
         <div>
           <h2 className="text-lg font-semibold">Let's plan your places together</h2>
           <p className="text-sm text-gray-500">
-            Refine in chat, then generate your activity list.
+            Review and refine your selections, then proceed to organize your trip by day.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -213,8 +213,9 @@ export function InitialResearchView({
             <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
             Refresh Research
           </Button>
-          <Button onClick={onProceed} disabled={isLoading || hasUnresolvedAssumptionConflicts}>
-            Generate Activities
+          <Button size="sm" onClick={onProceed} disabled={isLoading || hasUnresolvedAssumptionConflicts}>
+            Proceed to organizing your trip
+            <ChevronRight className="w-4 h-4 ml-1" />
           </Button>
         </div>
       </div>

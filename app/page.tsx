@@ -809,14 +809,16 @@ export default function PlannerPage() {
 
       case WORKFLOW_STATES.INITIAL_RESEARCH:
         return (
-          <Button
-            onClick={handleProceedFromResearch}
-            disabled={loading || hasUnresolvedAssumptionConflicts}
-            className="w-full mt-4"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            {hasUnresolvedAssumptionConflicts ? "Resolve Assumptions to Continue" : "Generate Itinerary"}
-          </Button>
+          <div className="flex justify-end mt-4">
+            <Button
+              onClick={handleProceedFromResearch}
+              disabled={loading || hasUnresolvedAssumptionConflicts}
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              {hasUnresolvedAssumptionConflicts ? "Resolve Assumptions to Continue" : "Proceed to organizing your trip"}
+              {!hasUnresolvedAssumptionConflicts && <ChevronRight className="w-4 h-4 ml-1" />}
+            </Button>
+          </div>
         );
 
       case WORKFLOW_STATES.DAY_ITINERARY:
