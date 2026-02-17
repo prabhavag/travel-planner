@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ExternalLink, RefreshCw } from "lucide-react";
-import type { ResearchOptionPreference, TripInfo, TripResearchBrief } from "@/lib/api-client";
+import type { ResearchOption, ResearchOptionPreference, TripInfo, TripResearchBrief } from "@/lib/api-client";
 
 interface InitialResearchViewProps {
   tripInfo: TripInfo | null;
@@ -76,9 +76,10 @@ export function InitialResearchView({
   const dietaryHints = allPreferences.filter((item) =>
     /vegetarian|vegan|no meat|no seafood|halal|kosher|gluten/i.test(item)
   );
-  const [activeOptionTab, setActiveOptionTab] = useState<"best-match" | "other-popular">("best-match");
+  const [activeOptionTab, setActiveOptionTab] = useState<string>("All");
+  const [hasInitializedTab, setHasInitializedTab] = useState(false);
 
-  const { bestMatchOptions, otherPopularOptions } = useMemo(() => {
+  const groupedOptions = useMemo(() => {
     const normalize = (value: string) =>
       value
         .toLowerCase()
@@ -86,59 +87,64 @@ export function InitialResearchView({
         .replace(/\s+/g, " ")
         .trim();
 
-    const preferenceTerms = allPreferences.map(normalize).filter(Boolean);
-
-    const scored = researchBrief.popularOptions
-      .map((option) => {
-        const selection = researchOptionSelections[option.id] || "maybe";
-        let score = 0;
-
-        if (selection === "keep") score += 4;
-        if (selection === "maybe") score += 1;
-        if (selection === "reject") score -= 5;
-
-        const category = normalize(option.category);
-        const why = normalize(option.whyItMatches || "");
-
-        for (const pref of preferenceTerms) {
-          if (category.includes(pref) || pref.includes(category)) score += 2;
-          if (why.includes(pref)) score += 1;
-        }
-
-        return { option, score };
-      })
-      .sort((a, b) => b.score - a.score);
-
-    const filteredBestMatch = scored
-      .filter((item) => item.score > 0)
-      .map((item) => item.option);
-
-    const fallbackBestMatch = scored
-      .map((item) => item.option)
-      .filter((option) => (researchOptionSelections[option.id] || "maybe") !== "reject");
-
-    const totalOptions = researchBrief.popularOptions.length;
-    const targetOtherCount =
-      totalOptions >= 8 ? 4 : totalOptions >= 6 ? 3 : totalOptions >= 4 ? 2 : totalOptions > 0 ? 1 : 0;
-    const maxBestMatchCount = Math.max(1, totalOptions - targetOtherCount);
-
-    const bestMatchCandidates = (filteredBestMatch.length > 0 ? filteredBestMatch : fallbackBestMatch).filter(
-      (option, idx, arr) => arr.findIndex((x) => x.id === option.id) === idx
-    );
-
-    const bestMatch = bestMatchCandidates.slice(0, maxBestMatchCount);
-
-    const bestMatchIds = new Set(bestMatch.map((option) => option.id));
-
-    const otherPopular = researchBrief.popularOptions.filter((option) => !bestMatchIds.has(option.id));
-
-    return {
-      bestMatchOptions: bestMatch,
-      otherPopularOptions: otherPopular,
+    const preferenceGroups: Record<string, ResearchOption[]> = {
+      All: researchBrief.popularOptions,
     };
-  }, [allPreferences, researchBrief.popularOptions, researchOptionSelections]);
 
-  const visibleOptions = activeOptionTab === "best-match" ? bestMatchOptions : otherPopularOptions;
+    // Initialize groups for each preference
+    allPreferences.forEach((pref) => {
+      const normalizedPref = normalize(pref);
+      if (normalizedPref) {
+        preferenceGroups[pref] = [];
+      }
+    });
+
+    const otherOptions: ResearchOption[] = [];
+
+    researchBrief.popularOptions.forEach((option) => {
+      const category = normalize(option.category);
+      const why = normalize(option.whyItMatches || "");
+      let matchedAny = false;
+
+      allPreferences.forEach((pref) => {
+        const normalizedPref = normalize(pref);
+        if (
+          normalizedPref &&
+          (category.includes(normalizedPref) ||
+            normalizedPref.includes(category) ||
+            why.includes(normalizedPref))
+        ) {
+          preferenceGroups[pref].push(option);
+          matchedAny = true;
+        }
+      });
+
+      if (!matchedAny) {
+        otherOptions.push(option);
+      }
+    });
+
+    if (otherOptions.length > 0) {
+      preferenceGroups["Other"] = otherOptions;
+    }
+
+    return preferenceGroups;
+  }, [allPreferences, researchBrief.popularOptions]);
+
+  const tabs = useMemo(() => {
+    return Object.keys(groupedOptions).filter((tab) => groupedOptions[tab].length > 0);
+  }, [groupedOptions]);
+
+  // Set initial active tab if not already set or if current tab is empty
+  useMemo(() => {
+    if ((!hasInitializedTab || !groupedOptions[activeOptionTab] || groupedOptions[activeOptionTab].length === 0) && tabs.length > 0) {
+      const initialTab = tabs.includes("All") ? "All" : tabs[0];
+      setActiveOptionTab(initialTab);
+      setHasInitializedTab(true);
+    }
+  }, [tabs, activeOptionTab, groupedOptions, hasInitializedTab]);
+
+  const visibleOptions = groupedOptions[activeOptionTab] || [];
 
   const handleAnswerChange = (question: string, value: string) => {
     setAnswers((prev) => ({ ...prev, [question]: value }));
@@ -275,25 +281,23 @@ export function InitialResearchView({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant={activeOptionTab === "best-match" ? "default" : "outline"}
-            onClick={() => setActiveOptionTab("best-match")}
-          >
-            Best Match for You
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={activeOptionTab === "other-popular" ? "default" : "outline"}
-            onClick={() => setActiveOptionTab("other-popular")}
-          >
-            Other Popular Options
-          </Button>
-          <span className="text-xs text-gray-500 ml-auto">
-            Showing {visibleOptions.length} option{visibleOptions.length === 1 ? "" : "s"}
-          </span>
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            {tabs.map((tab) => (
+              <Button
+                key={tab}
+                type="button"
+                size="sm"
+                variant={activeOptionTab === tab ? "default" : "outline"}
+                onClick={() => setActiveOptionTab(tab)}
+                className="whitespace-nowrap"
+              >
+                {tab === "All" ? "All Recommendations" : tab}
+              </Button>
+            ))}
+            <span className="text-xs text-gray-500 ml-auto flex-shrink-0">
+              Showing {visibleOptions.length} option{visibleOptions.length === 1 ? "" : "s"}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -348,7 +352,7 @@ export function InitialResearchView({
               {option.sourceLinks.length > 0 && (
                 <div className="space-y-2">
                   <p className="text-xs text-gray-500">Sources</p>
-                  {option.sourceLinks.map((source, idx) => (
+                  {option.sourceLinks.map((source: any, idx: number) => (
                     <a
                       key={`${option.id}-${source.url}-${idx}`}
                       href={source.url}
@@ -371,7 +375,7 @@ export function InitialResearchView({
                 <div className="space-y-2">
                   <p className="text-xs text-gray-500">Thumbnails</p>
                   <div className="grid grid-cols-3 gap-2">
-                    {option.photoUrls.slice(0, 3).map((url, idx) => (
+                    {option.photoUrls.slice(0, 3).map((url: string, idx: number) => (
                       <img
                         key={`${option.id}-photo-${idx}`}
                         src={url}
