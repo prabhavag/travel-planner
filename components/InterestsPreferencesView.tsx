@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -18,6 +18,14 @@ export function InterestsPreferencesView({
     isLoading = false,
 }: InterestsPreferencesViewProps) {
     const [newPreference, setNewPreference] = useState("");
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    // Auto-focus when loading state finishes
+    useEffect(() => {
+        if (!isLoading) {
+            inputRef.current?.focus();
+        }
+    }, [isLoading]);
 
     const handleAddPreference = async () => {
         if (!newPreference.trim()) return;
@@ -70,6 +78,7 @@ export function InterestsPreferencesView({
             <div className="p-4 border-t border-gray-100 bg-gray-50/30">
                 <div className="flex gap-2">
                     <Input
+                        ref={inputRef}
                         value={newPreference}
                         onChange={(e) => setNewPreference(e.target.value)}
                         placeholder="Add an interest or preference (e.g. No seafood)"

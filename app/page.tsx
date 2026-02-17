@@ -100,6 +100,14 @@ export default function PlannerPage() {
 
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-focus chat input when loading finishes
+  useEffect(() => {
+    if (!loading && activeTab === "chat" && !isChatMinimized) {
+      chatInputRef.current?.focus();
+    }
+  }, [loading, activeTab, isChatMinimized]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -990,6 +998,7 @@ export default function PlannerPage() {
 
                 <div className="p-3 border-t border-gray-100 flex gap-2 flex-shrink-0">
                   <Input
+                    ref={chatInputRef}
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     placeholder={
