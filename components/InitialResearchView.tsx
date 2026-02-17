@@ -76,75 +76,111 @@ export function InitialResearchView({
   const dietaryHints = allPreferences.filter((item) =>
     /vegetarian|vegan|no meat|no seafood|halal|kosher|gluten/i.test(item)
   );
-  const [activeOptionTab, setActiveOptionTab] = useState<string>("All");
+  const [activeStatus, setActiveStatus] = useState<string>("Inbox");
+  const [activeInterest, setActiveInterest] = useState<string>("All");
   const [hasInitializedTab, setHasInitializedTab] = useState(false);
 
-  const groupedOptions = useMemo(() => {
-    const normalize = (value: string) =>
-      value
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+  const normalize = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
 
-    const preferenceGroups: Record<string, ResearchOption[]> = {
-      All: researchBrief.popularOptions,
-    };
+  const matchesStatus = (option: ResearchOption, status: string) => {
+    const selection = researchOptionSelections[option.id];
+    if (status === "Inbox") return !selection;
+    if (status === "Selected") return selection === "keep";
+    if (status === "Postponed") return selection === "maybe";
+    if (status === "Rejected") return selection === "reject";
+    return true; // "All" or unknown
+  };
 
-    // Initialize groups for each preference
-    allPreferences.forEach((pref) => {
-      const normalizedPref = normalize(pref);
-      if (normalizedPref) {
-        preferenceGroups[pref] = [];
-      }
-    });
+  const matchesInterest = (option: ResearchOption, interest: string) => {
+    if (interest === "All" || interest === "Other") return true; // Other is special
+    const normalizedPref = normalize(interest);
+    const category = normalize(option.category);
+    const why = normalize(option.whyItMatches || "");
+    return (
+      category.includes(normalizedPref) ||
+      normalizedPref.includes(category) ||
+      why.includes(normalizedPref)
+    );
+  };
 
-    const otherOptions: ResearchOption[] = [];
 
+
+  const interestTabsList = useMemo(() => {
+    // Show all interest tabs that exist in the entire research brief
+    const tabs = new Set<string>(["All"]);
     researchBrief.popularOptions.forEach((option) => {
-      const category = normalize(option.category);
-      const why = normalize(option.whyItMatches || "");
-      let matchedAny = false;
-
       allPreferences.forEach((pref) => {
-        const normalizedPref = normalize(pref);
-        if (
-          normalizedPref &&
-          (category.includes(normalizedPref) ||
-            normalizedPref.includes(category) ||
-            why.includes(normalizedPref))
-        ) {
-          preferenceGroups[pref].push(option);
-          matchedAny = true;
+        if (matchesInterest(option, pref)) {
+          tabs.add(pref);
         }
       });
-
-      if (!matchedAny) {
-        otherOptions.push(option);
-      }
     });
 
-    if (otherOptions.length > 0) {
-      preferenceGroups["Other"] = otherOptions;
-    }
+    const hasOther = researchBrief.popularOptions.some((option) => {
+      return !allPreferences.some((pref) => matchesInterest(option, pref));
+    });
 
-    return preferenceGroups;
+    if (hasOther) tabs.add("Other");
+    return Array.from(tabs);
   }, [allPreferences, researchBrief.popularOptions]);
 
-  const tabs = useMemo(() => {
-    return Object.keys(groupedOptions).filter((tab) => groupedOptions[tab].length > 0);
-  }, [groupedOptions]);
+  const interestCounts = useMemo(() => {
+    const counts: Record<string, number> = { All: researchBrief.popularOptions.length };
+    interestTabsList.forEach((tab) => {
+      if (tab === "All") return;
+      counts[tab] = researchBrief.popularOptions.filter((opt) => {
+        if (tab === "Other") {
+          return !allPreferences.some((pref) => matchesInterest(opt, pref));
+        }
+        return matchesInterest(opt, tab);
+      }).length;
+    });
+    return counts;
+  }, [interestTabsList, researchBrief.popularOptions, allPreferences]);
+
+  const statusCounts = useMemo(() => {
+    // Counts reflect the currently selected interest
+    const counts = { Inbox: 0, Selected: 0, Postponed: 0, Rejected: 0 };
+    researchBrief.popularOptions.forEach((opt) => {
+      // Filter by interest first
+      if (activeInterest !== "All") {
+        if (activeInterest === "Other") {
+          if (allPreferences.some((pref) => matchesInterest(opt, pref))) return;
+        } else if (!matchesInterest(opt, activeInterest)) {
+          return;
+        }
+      }
+
+      if (!researchOptionSelections[opt.id]) counts.Inbox++;
+      else if (researchOptionSelections[opt.id] === "keep") counts.Selected++;
+      else if (researchOptionSelections[opt.id] === "maybe") counts.Postponed++;
+      else if (researchOptionSelections[opt.id] === "reject") counts.Rejected++;
+    });
+    return counts;
+  }, [researchBrief.popularOptions, researchOptionSelections, activeInterest, allPreferences]);
+
+  const visibleOptions = useMemo(() => {
+    return researchBrief.popularOptions.filter((option) => {
+      if (!matchesStatus(option, activeStatus)) return false;
+      if (activeInterest === "All") return true;
+      if (activeInterest === "Other") {
+        return !allPreferences.some((pref) => matchesInterest(option, pref));
+      }
+      return matchesInterest(option, activeInterest);
+    });
+  }, [activeStatus, activeInterest, researchBrief.popularOptions, researchOptionSelections, allPreferences]);
 
   // Set initial active tab if not already set or if current tab is empty
   useMemo(() => {
-    if ((!hasInitializedTab || !groupedOptions[activeOptionTab] || groupedOptions[activeOptionTab].length === 0) && tabs.length > 0) {
-      const initialTab = tabs.includes("All") ? "All" : tabs[0];
-      setActiveOptionTab(initialTab);
+    if (!hasInitializedTab && researchBrief.popularOptions.length > 0) {
       setHasInitializedTab(true);
     }
-  }, [tabs, activeOptionTab, groupedOptions, hasInitializedTab]);
-
-  const visibleOptions = groupedOptions[activeOptionTab] || [];
+  }, [researchBrief.popularOptions, hasInitializedTab]);
 
   const handleAnswerChange = (question: string, value: string) => {
     setAnswers((prev) => ({ ...prev, [question]: value }));
@@ -295,25 +331,76 @@ export function InitialResearchView({
             to create a better personalized itinerary.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
-            {tabs.map((tab) => (
-              <Button
-                key={tab}
-                type="button"
-                size="sm"
-                variant={activeOptionTab === tab ? "default" : "outline"}
-                onClick={() => setActiveOptionTab(tab)}
-                className="whitespace-nowrap"
-              >
-                {tab === "All" ? "All Recommendations" : tab}
-              </Button>
-            ))}
-            <span className="text-xs text-gray-500 ml-auto flex-shrink-0">
-              Showing {visibleOptions.length} option{visibleOptions.length === 1 ? "" : "s"}
-            </span>
-          </div>
+        <div className="flex flex-wrap gap-4 pt-2">
+          <button
+            onClick={() => setActiveStatus("Selected")}
+            disabled={statusCounts.Selected === 0}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Selected"
+                ? "bg-emerald-50 border-emerald-500 text-emerald-800"
+                : statusCounts.Selected > 0
+                  ? "bg-emerald-50/30 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
+                  : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
+              }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            Selected {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Selected}
+          </button>
+          <button
+            onClick={() => setActiveStatus("Postponed")}
+            disabled={statusCounts.Postponed === 0}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Postponed"
+                ? "bg-amber-50 border-amber-500 text-amber-800"
+                : statusCounts.Postponed > 0
+                  ? "bg-amber-50/30 border-amber-200 text-amber-700 hover:bg-amber-100"
+                  : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
+              }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
+            Postponed {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Postponed}
+          </button>
+          <button
+            onClick={() => setActiveStatus("Rejected")}
+            disabled={statusCounts.Rejected === 0}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Rejected"
+                ? "bg-rose-50 border-rose-500 text-rose-800"
+                : statusCounts.Rejected > 0
+                  ? "bg-rose-50/30 border-rose-200 text-rose-700 hover:bg-rose-100"
+                  : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
+              }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-rose-500" />
+            Rejected {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Rejected}
+          </button>
+          <button
+            onClick={() => setActiveStatus("Inbox")}
+            className={`ml-auto flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${activeStatus === "Inbox"
+                ? "bg-blue-600 border-blue-700 text-white"
+                : statusCounts.Inbox > 0
+                  ? "bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 animate-pulse"
+                  : "bg-gray-50 border-gray-100 text-gray-400"
+              }`}
+          >
+            {statusCounts.Inbox} {activeInterest !== "All" ? activeInterest : ""} inbox
+          </button>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
+        {interestTabsList.map((tab: string) => (
+          <Button
+            key={tab}
+            type="button"
+            size="sm"
+            variant={activeInterest === tab ? "default" : "outline"}
+            onClick={() => setActiveInterest(tab)}
+            className="whitespace-nowrap"
+          >
+            {tab} ({interestCounts[tab] || 0})
+          </Button>
+        ))}
+        <span className="text-xs text-gray-500 ml-auto flex-shrink-0">
+          Showing {visibleOptions.length} of {activeStatus} options
+        </span>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
