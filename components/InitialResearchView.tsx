@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ExternalLink, RefreshCw, Send } from "lucide-react";
 import type { ResearchOption, ResearchOptionPreference, TripInfo, TripResearchBrief } from "@/lib/api-client";
 
 interface InitialResearchViewProps {
@@ -242,27 +242,42 @@ export function InitialResearchView({
           )}
           {researchBrief.openQuestions.length > 0 && (
             <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-base">Open Questions</CardTitle>
-                <Button
-                  size="sm"
-                  onClick={handleSubmitAnswers}
-                  disabled={isLoading || Object.keys(answers).length === 0}
-                >
-                  Save Answers
-                </Button>
+              <CardHeader>
+                <CardTitle className="text-base">Let’s Clarify These</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {researchBrief.openQuestions.map((question, idx) => (
-                  <div key={`${question}-${idx}`} className="space-y-1.5">
+                  <div key={`${question}-${idx}`} className="space-y-2">
                     <p className="text-sm font-medium text-gray-700">{question}</p>
-                    <textarea
-                      className="w-full rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      rows={2}
-                      placeholder="Type your answer here..."
-                      value={answers[question] || ""}
-                      onChange={(e) => handleAnswerChange(question, e.target.value)}
-                    />
+                    <div className="flex gap-2">
+                      <textarea
+                        className="flex-1 rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        rows={2}
+                        placeholder="Type your answer here..."
+                        value={answers[question] || ""}
+                        onChange={(e) => handleAnswerChange(question, e.target.value)}
+                        disabled={isLoading}
+                      />
+                      <Button
+                        size="icon"
+                        className="h-[52px] w-[52px] shrink-0"
+                        onClick={() => {
+                          const answer = answers[question];
+                          if (answer?.trim()) {
+                            onAnswerQuestions({ [question]: answer.trim() });
+                            // Optionally clear local answer, though the parent should ideally filter the question out
+                            setAnswers(prev => {
+                              const newAns = { ...prev };
+                              delete newAns[question];
+                              return newAns;
+                            });
+                          }
+                        }}
+                        disabled={isLoading || !answers[question]?.trim()}
+                      >
+                        <Send className="h-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </CardContent>

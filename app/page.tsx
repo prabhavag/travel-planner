@@ -351,6 +351,17 @@ export default function PlannerPage() {
       const response = await answerResearchQuestions(sessionId, answers);
       if (response.success && response.tripInfo) {
         setTripInfo(response.tripInfo);
+
+        // Dismiss the questions that were answered
+        if (tripResearchBrief) {
+          const answeredKeys = Object.keys(answers);
+          setTripResearchBrief({
+            ...tripResearchBrief,
+            openQuestions: tripResearchBrief.openQuestions.filter(
+              (q) => !answeredKeys.includes(q)
+            ),
+          });
+        }
       }
     } catch (error) {
       console.error("Answer research questions error:", error);
