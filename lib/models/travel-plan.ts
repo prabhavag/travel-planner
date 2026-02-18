@@ -269,6 +269,7 @@ export const SuggestedActivitySchema = z.object({
   opening_hours: z.string().nullable().optional(),
   photo_url: z.string().nullable().optional(),
   photo_urls: z.array(z.string()).max(3).optional(),
+  researchOption: ResearchOptionSchema.nullable().optional(),
 });
 
 export type SuggestedActivity = z.infer<typeof SuggestedActivitySchema>;

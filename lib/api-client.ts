@@ -366,6 +366,7 @@ export interface SuggestedActivity {
   opening_hours?: string | null;
   photo_url?: string | null;
   photo_urls?: string[];
+  researchOption?: ResearchOption | null;
 }
 
 export interface DayGroup {

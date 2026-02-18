@@ -4,6 +4,7 @@ import { getLLMClient } from "@/lib/services/llm-client";
 import { getGeocodingService } from "@/lib/services/geocoding-service";
 import { getPlacesClient, PlacesClient } from "@/lib/services/places-client";
 import type { SuggestedActivity, Coordinates } from "@/lib/models/travel-plan";
+import { mergeSuggestedActivities } from "@/lib/services/card-merging";
 
 /**
  * Enrich a single activity with Places API data (coordinates, ratings, place_id)
@@ -181,11 +182,20 @@ export async function POST(request: NextRequest) {
         })
       );
 
+      const mergedActivities = mergeSuggestedActivities({
+        existingActivities: session.suggestedActivities || [],
+        incomingActivities: enrichedActivities,
+      });
+      const validActivityIds = new Set(mergedActivities.map((activity) => activity.id));
+      const selectedActivityIds = (session.selectedActivityIds || []).filter((id) =>
+        validActivityIds.has(id)
+      );
+
       // Update session state
       sessionStore.update(sessionId, {
         workflowState: WORKFLOW_STATES.SUGGEST_ACTIVITIES,
-        suggestedActivities: enrichedActivities,
-        selectedActivityIds: [],
+        suggestedActivities: mergedActivities,
+        selectedActivityIds,
       });
 
       sessionStore.addToConversation(sessionId, "assistant", message);

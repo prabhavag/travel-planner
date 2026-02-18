@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { getLLMClient } from "@/lib/services/llm-client";
+import { mergeResearchBriefAndSelections, mergeSuggestedActivities } from "@/lib/services/card-merging";
 
 export async function POST(request: NextRequest) {
   try {
@@ -91,7 +92,15 @@ export async function POST(request: NextRequest) {
       }
 
       if (result.tripResearchBrief) {
-        sessionStore.update(sessionId, { tripResearchBrief: result.tripResearchBrief });
+        const merged = mergeResearchBriefAndSelections({
+          currentBrief: session.tripResearchBrief,
+          currentSelections: session.researchOptionSelections || {},
+          incomingBrief: result.tripResearchBrief,
+        });
+        sessionStore.update(sessionId, {
+          tripResearchBrief: merged.tripResearchBrief,
+          researchOptionSelections: merged.researchOptionSelections,
+        });
       }
 
       sessionStore.addToConversation(sessionId, "assistant", result.message);
@@ -104,6 +113,7 @@ export async function POST(request: NextRequest) {
         message: result.message,
         tripInfo: updatedSession?.tripInfo,
         tripResearchBrief: updatedSession?.tripResearchBrief,
+        researchOptionSelections: updatedSession?.researchOptionSelections,
       });
     } else if (session.workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES) {
       const result = await llmClient.chatDuringSuggestActivities({
@@ -121,9 +131,19 @@ export async function POST(request: NextRequest) {
       // Merge or replace activities
       if (result.newActivities && result.newActivities.length > 0) {
         const existingActivities = result.replaceActivities ? [] : (session.suggestedActivities || []);
+        const mergedActivities = result.replaceActivities
+          ? result.newActivities
+          : mergeSuggestedActivities({
+              existingActivities,
+              incomingActivities: result.newActivities,
+            });
+        const validActivityIds = new Set(mergedActivities.map((activity) => activity.id));
+        const selectedActivityIds = result.replaceActivities
+          ? []
+          : (session.selectedActivityIds || []).filter((id) => validActivityIds.has(id));
         sessionStore.update(sessionId, {
-          suggestedActivities: [...existingActivities, ...result.newActivities],
-          selectedActivityIds: result.replaceActivities ? [] : (session.selectedActivityIds || []),
+          suggestedActivities: mergedActivities,
+          selectedActivityIds,
         });
       }
 

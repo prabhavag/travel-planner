@@ -66,6 +66,49 @@ interface ChatMessage {
   content: string;
 }
 
+const normalizeActivityValue = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const activityKey = (activity: SuggestedActivity) =>
+  `${normalizeActivityValue(activity.name)}|${normalizeActivityValue(activity.type)}`;
+
+const mergeActivities = (
+  existing: SuggestedActivity[],
+  incoming: SuggestedActivity[]
+): SuggestedActivity[] => {
+  const merged = [...existing];
+  const idToIndex = new Map(merged.map((activity, index) => [activity.id, index]));
+  const keyToIndex = new Map(merged.map((activity, index) => [activityKey(activity), index]));
+
+  for (const nextActivity of incoming) {
+    const idIndex = idToIndex.get(nextActivity.id);
+    const key = activityKey(nextActivity);
+    const keyIndex = keyToIndex.get(key);
+
+    if (idIndex !== undefined) {
+      merged[idIndex] = { ...merged[idIndex], ...nextActivity, id: merged[idIndex].id };
+      continue;
+    }
+
+    if (keyIndex !== undefined) {
+      merged[keyIndex] = { ...merged[keyIndex], ...nextActivity, id: merged[keyIndex].id };
+      idToIndex.set(nextActivity.id, keyIndex);
+      continue;
+    }
+
+    merged.push(nextActivity);
+    const newIndex = merged.length - 1;
+    idToIndex.set(nextActivity.id, newIndex);
+    keyToIndex.set(key, newIndex);
+  }
+
+  return merged;
+};
+
 export default function PlannerPage() {
   // Session state
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -259,7 +302,22 @@ export default function PlannerPage() {
       if (!response.success) {
         throw new Error(response.message);
       }
-      setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      if (response.suggestedActivities) {
+        setSuggestedActivities(response.suggestedActivities);
+      }
+      if (response.selectedActivityIds) {
+        setSelectedActivityIds(response.selectedActivityIds);
+      }
+      const groupResponse = await groupDays(sessionId);
+      if (!groupResponse.success) {
+        throw new Error(groupResponse.message);
+      }
+      setWorkflowState(WORKFLOW_STATES.GROUP_DAYS);
+      updateMaxReachedState(WORKFLOW_STATES.GROUP_DAYS);
+      setDayGroups(groupResponse.dayGroups || []);
+      setGroupedDays(groupResponse.groupedDays || []);
+      setLastGroupedActivityIds([...(response.selectedActivityIds || [])]);
+      setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
     } catch (error) {
       console.error("Confirm research brief error:", error);
       const errorMessage = error instanceof Error ? error.message : "Failed to confirm research brief. Please try again.";
@@ -267,31 +325,32 @@ export default function PlannerPage() {
       setLoading(false);
       return;
     }
-    // Chained call to suggest activities with auto-proceed
-    await handleSuggestActivities(true);
+    setLoading(false);
   };
 
   // Suggest top 10 activities (streaming)
   const handleSuggestActivities = async (autoProceed = false) => {
     if (!sessionId) return;
     setLoading(true);
-    setSuggestedActivities([]); // Clear and prepare for streaming
-    setSelectedActivityIds([]);
 
     try {
       await suggestTopActivities(
         sessionId,
         (activity) => {
-          setSuggestedActivities((prev) => [...prev, activity]);
+          setSuggestedActivities((prev) => mergeActivities(prev, [activity]));
         },
         async (message) => {
           setChatHistory((prev) => [...prev, { role: "assistant", content: message }]);
           if (autoProceed) {
             // Use callback to get the latest activities list
             setSuggestedActivities((currentActivities) => {
-              const ids = currentActivities.map(a => a.id);
-              setSelectedActivityIds(ids);
-              handleConfirmActivitySelectionInternal(ids);
+              const currentIds = new Set(currentActivities.map((a) => a.id));
+              setSelectedActivityIds((prevSelectedIds) => {
+                const preserved = prevSelectedIds.filter((id) => currentIds.has(id));
+                const idsToUse = preserved.length > 0 ? preserved : Array.from(currentIds);
+                handleConfirmActivitySelectionInternal(idsToUse);
+                return idsToUse;
+              });
               return currentActivities;
             });
           } else {
@@ -306,7 +365,7 @@ export default function PlannerPage() {
         },
         (enrichedActivity) => {
           setSuggestedActivities((prev) =>
-            prev.map((a) => (a.id === enrichedActivity.id ? enrichedActivity : a))
+            mergeActivities(prev, [enrichedActivity])
           );
         }
       );
@@ -573,7 +632,6 @@ export default function PlannerPage() {
 
   const handleRegenerateActivities = async () => {
     if (!sessionId) return;
-    setSuggestedActivities([]);
     handleSuggestActivities();
   };
 

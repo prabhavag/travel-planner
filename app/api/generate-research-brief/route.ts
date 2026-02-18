@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { getLLMClient } from "@/lib/services/llm-client";
+import { mergeResearchBriefAndSelections } from "@/lib/services/card-merging";
 
 export async function POST(request: NextRequest) {
   try {
@@ -43,10 +44,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const merged = mergeResearchBriefAndSelections({
+      currentBrief: session.tripResearchBrief,
+      currentSelections: session.researchOptionSelections || {},
+      incomingBrief: result.tripResearchBrief,
+    });
+
     sessionStore.update(sessionId, {
       workflowState: WORKFLOW_STATES.INITIAL_RESEARCH,
-      tripResearchBrief: result.tripResearchBrief,
-      researchOptionSelections: {},
+      tripResearchBrief: merged.tripResearchBrief,
+      researchOptionSelections: merged.researchOptionSelections,
     });
     sessionStore.addToConversation(sessionId, "assistant", result.message);
 
@@ -55,8 +62,8 @@ export async function POST(request: NextRequest) {
       sessionId,
       workflowState: WORKFLOW_STATES.INITIAL_RESEARCH,
       message: result.message,
-      tripResearchBrief: result.tripResearchBrief,
-      researchOptionSelections: {},
+      tripResearchBrief: merged.tripResearchBrief,
+      researchOptionSelections: merged.researchOptionSelections,
     });
   } catch (error) {
     console.error("Error in generateResearchBrief:", error);

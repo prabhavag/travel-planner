@@ -12,9 +12,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Clock, ChevronLeft, ChevronRight, Star, MapPin, ListChecks } from "lucide-react";
+import { ChevronLeft, ChevronRight, MapPin, ListChecks } from "lucide-react";
 import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
+import { ActivityCard } from "@/components/ActivityCard";
+import { ResearchOptionCard } from "@/components/ResearchOptionCard";
 
 interface DayGroupingViewProps {
   groupedDays: GroupedDay[];
@@ -84,132 +86,68 @@ export function DayGroupingView({
     setMovingActivity(null);
   };
 
-  const normalize = (value: string) =>
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  const preferenceTerms = userPreferences.map(normalize).filter(Boolean);
-
-  const isInterestTagMatch = (tag: string): boolean => {
-    const normalizedTag = normalize(tag);
-    if (!normalizedTag || normalizedTag === "general interest match" || preferenceTerms.length === 0) {
-      return false;
-    }
-
-    return preferenceTerms.some(
-      (pref) => pref === normalizedTag || pref.includes(normalizedTag) || normalizedTag.includes(pref)
-    );
-  };
-
-  const getActivityTypeColor = (type: string): string => {
-    const colors: Record<string, string> = {
-      museum: "bg-purple-100 text-purple-800",
-      landmark: "bg-blue-100 text-blue-800",
-      park: "bg-green-100 text-green-800",
-      viewpoint: "bg-cyan-100 text-cyan-800",
-      market: "bg-orange-100 text-orange-800",
-      experience: "bg-pink-100 text-pink-800",
-      neighborhood: "bg-yellow-100 text-yellow-800",
-      beach: "bg-teal-100 text-teal-800",
-      temple: "bg-red-100 text-red-800",
-      gallery: "bg-indigo-100 text-indigo-800",
-    };
-    return colors[type.toLowerCase()] || "bg-gray-100 text-gray-800";
-  };
-
   const ActivityItem = ({
     activity,
     dayNumber,
+    index,
   }: {
     activity: SuggestedActivity;
     dayNumber: number;
+    index: number;
   }) => {
     const isMoving = movingActivity?.id === activity.id;
+    const moveControls = (
+      <div className="pt-3 mt-3 border-t border-gray-50">
+        {isMoving ? (
+          <div className="flex items-center gap-2">
+            <Select onValueChange={(val) => handleMoveConfirm(parseInt(val, 10))}>
+              <SelectTrigger className="flex-1 h-8 text-[10px]">
+                <SelectValue placeholder="Move to day..." />
+              </SelectTrigger>
+              <SelectContent>
+                {groupedDays.map((day) => (
+                  <SelectItem key={day.dayNumber} value={day.dayNumber.toString()}>
+                    Day {day.dayNumber}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={handleMoveCancel} className="h-8 px-2 text-[10px]">
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleMoveStart(activity.id, dayNumber)}
+            className="w-full h-8 text-[10px] font-medium text-gray-500 hover:text-primary hover:border-primary transition-colors"
+          >
+            Change Day
+          </Button>
+        )}
+      </div>
+    );
+
+    if (activity.researchOption) {
+      return (
+        <ResearchOptionCard
+          option={activity.researchOption}
+          selection="keep"
+          readOnly={true}
+          extraContent={moveControls}
+        />
+      );
+    }
 
     return (
-      <div
-        className={`p-4 rounded-xl border transition-all duration-200 bg-white mb-3 ${isMoving ? "ring-2 ring-primary bg-blue-50/30 shadow-md scale-[1.02]" : "border-gray-100"
-          }`}
-      >
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <Badge variant="secondary" className={`${getActivityTypeColor(activity.type)} text-[10px] h-5`}>
-                {activity.type}
-              </Badge>
-            </div>
-            <h4 className="text-sm font-bold text-gray-900 line-clamp-1">{activity.name}</h4>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {(activity.interestTags && activity.interestTags.length > 0
-                ? activity.interestTags
-                : ["general interest match"]).map((tag) => {
-                  const isMatch = isInterestTagMatch(tag);
-                  return (
-                    <Badge
-                      key={`${activity.id}-${tag}`}
-                      variant="secondary"
-                      className={`max-w-[150px] truncate ${isMatch
-                          ? "border border-rose-200 bg-rose-50 text-rose-800"
-                          : "border border-sky-200 bg-sky-50 text-sky-800"
-                        }`}
-                    >
-                      {tag}
-                    </Badge>
-                  );
-                })}
-            </div>
-          </div>
-        </div>
-
-        <p className="text-xs text-gray-600 line-clamp-2 mb-3 leading-relaxed">{activity.description}</p>
-
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-gray-500 pb-3">
-          <div className="flex items-center gap-1 font-medium text-gray-700">
-            <Clock className="w-3 h-3 text-primary" />
-            <span>{activity.estimatedDuration}</span>
-          </div>
-          {activity.rating && (
-            <div className="flex items-center gap-0.5">
-              <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-              <span className="font-medium text-gray-700">{activity.rating.toFixed(1)}</span>
-            </div>
-          )}
-        </div>
-
-        <div className="pt-3 border-t border-gray-50">
-          {isMoving ? (
-            <div className="flex items-center gap-2">
-              <Select onValueChange={(val) => handleMoveConfirm(parseInt(val))}>
-                <SelectTrigger className="flex-1 h-8 text-[10px]">
-                  <SelectValue placeholder="Move to day..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {groupedDays.map((day) => (
-                    <SelectItem key={day.dayNumber} value={day.dayNumber.toString()}>
-                      Day {day.dayNumber}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button variant="outline" size="sm" onClick={handleMoveCancel} className="h-8 px-2 text-[10px]">
-                Cancel
-              </Button>
-            </div>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleMoveStart(activity.id, dayNumber)}
-              className="w-full h-8 text-[10px] font-medium text-gray-500 hover:text-primary hover:border-primary transition-colors"
-            >
-              Change Day
-            </Button>
-          )}
-        </div>
-      </div>
+      <ActivityCard
+        activity={activity}
+        index={index}
+        isSelected={true}
+        userPreferences={userPreferences}
+        extraContent={moveControls}
+      />
     );
   };
 
@@ -272,11 +210,12 @@ export function DayGroupingView({
                 <CardContent className="flex-1 overflow-hidden p-0">
                   <ScrollArea className="h-full px-4 pb-6">
                     <div className="space-y-1">
-                      {day.activities.map((activity) => (
+                      {day.activities.map((activity, index) => (
                         <ActivityItem
                           key={activity.id}
                           activity={activity}
                           dayNumber={day.dayNumber}
+                          index={index}
                         />
                       ))}
                     </div>
@@ -296,4 +235,3 @@ export function DayGroupingView({
     </div>
   );
 }
-
