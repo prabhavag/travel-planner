@@ -212,7 +212,12 @@ RULES:
 - Favor trusted, recent, and destination-relevant sources
 - Be explicit when source evidence is mixed or uncertain
 - Remove any obvious assumptions already stated in the interests and preferences.
-- If date mismatch or ambiguity exists, mention it in openQuestions
+- Use openQuestions sparingly: include only blocking clarifications that materially change activity selection or day planning.
+- Ask at most 3 openQuestions.
+- Prefer tap-friendly, closed-form questions whenever possible (yes/no, either-or, or short option lists).
+- Avoid filler or "just in case" questions.
+- Do not ask dietary follow-ups unless meals/food activities are part of the plan and the existing preferences are insufficient or contradictory.
+- If date mismatch or ambiguity exists, include one direct resolution question in openQuestions.
 - Citations may be added from tool annotations; include sourceLinks in JSON when available
 - Keep message concise and actionable
 - Return ONLY valid JSON, no extra text`,
@@ -251,6 +256,8 @@ RULES:
 - Keep high-quality options and replace weak fits
 - Respect newly specified constraints
 - Remove any obvious assumptions already stated in the interests and preferences.
+- Keep openQuestions minimal and high-signal only (max 3), and prefer closed-form phrasing when possible.
+- Avoid re-asking dietary details unless they change option fit or meal planning decisions.
 - Keep options realistic for the destination and dates
 - Ensure every option still has at least one source link
 - Citations may be added from tool annotations; include sourceLinks in JSON when available

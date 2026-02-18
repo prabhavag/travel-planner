@@ -4,7 +4,7 @@ import { useMemo, useState, useRef, useLayoutEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, ChevronUp, RefreshCw, Send } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, RefreshCw, Send, X } from "lucide-react";
 import type { ResearchOption, ResearchOptionPreference, TripInfo, TripResearchBrief } from "@/lib/api-client";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
 
@@ -18,8 +18,60 @@ interface InitialResearchViewProps {
   onRegenerate: () => void;
   onProceed: () => void;
   onAnswerQuestions: (answers: Record<string, string>) => void;
+  onDismissQuestion: (question: string) => void;
   isLoading?: boolean;
 }
+
+type QuestionInputKind = "textarea" | "choice" | "yes_no" | "slider";
+
+interface QuestionPreset {
+  kind: QuestionInputKind;
+  options?: string[];
+  sliderLabels?: [string, string];
+}
+
+const QUESTION_PRESETS: Array<{ pattern: RegExp; preset: QuestionPreset }> = [
+  {
+    pattern: /guided tours?|self[- ]guided|mix/i,
+    preset: {
+      kind: "choice",
+      options: ["Guided Tours", "Self-guided", "Mix"],
+    },
+  },
+  {
+    pattern: /dietary|food restriction|restrictions/i,
+    preset: {
+      kind: "yes_no",
+      options: ["No", "Yes, add details"],
+    },
+  },
+  {
+    pattern: /vegetarian|vegan/i,
+    preset: {
+      kind: "choice",
+      options: ["Strict vegetarian", "Vegan", "Flexible", "No additional restrictions"],
+    },
+  },
+  {
+    pattern: /activity intensity|pace|easy|challenging|strenuous|fitness/i,
+    preset: {
+      kind: "slider",
+      sliderLabels: ["Easy", "Challenging"],
+    },
+  },
+  {
+    pattern: /^(are|do|can|will|would|is|did)\b/i,
+    preset: {
+      kind: "yes_no",
+      options: ["Yes", "No"],
+    },
+  },
+];
+
+const inferQuestionPreset = (question: string): QuestionPreset => {
+  const matchedPreset = QUESTION_PRESETS.find(({ pattern }) => pattern.test(question));
+  return matchedPreset?.preset || { kind: "textarea" };
+};
 
 export function InitialResearchView({
   tripInfo,
@@ -31,9 +83,12 @@ export function InitialResearchView({
   onRegenerate,
   onProceed,
   onAnswerQuestions,
+  onDismissQuestion,
   isLoading = false,
 }: InitialResearchViewProps) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [answerNotes, setAnswerNotes] = useState<Record<string, string>>({});
+  const [sliderValues, setSliderValues] = useState<Record<string, number>>({});
   const [showAssumptions, setShowAssumptions] = useState(false);
 
   // Preserve scroll position when switching interest chips to prevent layout-shift scroll jumps
@@ -77,7 +132,6 @@ export function InitialResearchView({
   const dietaryHints = allPreferences.filter((item) =>
     /vegetarian|vegan|no meat|no seafood|halal|kosher|gluten/i.test(item)
   );
-  const nonDietaryInterests = allPreferences.filter((item) => !dietaryHints.includes(item));
   const [activeStatus, setActiveStatus] = useState<string>("Postponed");
   const [activeInterest, setActiveInterest] = useState<string>("All");
   const [hasInitializedTab, setHasInitializedTab] = useState(false);
@@ -200,6 +254,39 @@ export function InitialResearchView({
     onAnswerQuestions(answers);
   };
 
+  const buildFinalAnswer = (question: string, baseAnswer: string) => {
+    const note = answerNotes[question]?.trim();
+    if (!note) return baseAnswer.trim();
+    return `${baseAnswer.trim()} — ${note}`;
+  };
+
+  const submitSingleAnswer = (question: string, answer: string) => {
+    const finalAnswer = buildFinalAnswer(question, answer);
+    if (!finalAnswer.trim()) return;
+    onAnswerQuestions({ [question]: finalAnswer });
+    setAnswers((prev) => {
+      const next = { ...prev };
+      delete next[question];
+      return next;
+    });
+    setAnswerNotes((prev) => {
+      const next = { ...prev };
+      delete next[question];
+      return next;
+    });
+    setSliderValues((prev) => {
+      const next = { ...prev };
+      delete next[question];
+      return next;
+    });
+  };
+
+  const sliderDescription = (value: number) => {
+    if (value <= 2) return "Easy";
+    if (value === 3) return "Moderate";
+    return "Challenging";
+  };
+
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between bg-white py-2 px-4">
@@ -305,35 +392,179 @@ export function InitialResearchView({
             <div className="max-h-[240px] overflow-y-auto space-y-4 pr-1">
               {researchBrief.openQuestions.map((question, idx) => (
                 <div key={`${question}-${idx}`} className="space-y-2">
-                  <p className="text-sm font-medium text-gray-700">{question}</p>
-                  <div className="flex gap-2">
-                    <textarea
-                      className="flex-1 rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      rows={2}
-                      placeholder="Type your answer here..."
-                      value={answers[question] || ""}
-                      onChange={(e) => handleAnswerChange(question, e.target.value)}
-                      disabled={isLoading}
-                    />
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-medium text-gray-700">{question}</p>
                     <Button
+                      type="button"
                       size="icon"
-                      className="h-[52px] w-[52px] shrink-0"
-                      onClick={() => {
-                        const answer = answers[question];
-                        if (answer?.trim()) {
-                          onAnswerQuestions({ [question]: answer.trim() });
-                          setAnswers(prev => {
-                            const newAns = { ...prev };
-                            delete newAns[question];
-                            return newAns;
-                          });
-                        }
-                      }}
-                      disabled={isLoading || !answers[question]?.trim()}
+                      variant="ghost"
+                      className="h-7 w-7 shrink-0 text-gray-400 hover:text-gray-700"
+                      onClick={() => onDismissQuestion(question)}
+                      disabled={isLoading}
+                      title="Dismiss question"
                     >
-                      <Send className="h-4 w-4" />
+                      <X className="h-4 w-4" />
                     </Button>
                   </div>
+                  {(() => {
+                    const preset = inferQuestionPreset(question);
+
+                    if (preset.kind === "choice") {
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap gap-2">
+                            {preset.options?.map((option) => (
+                              <Button
+                                key={option}
+                                type="button"
+                                size="sm"
+                                variant={answers[question] === option ? "default" : "outline"}
+                                onClick={() => handleAnswerChange(question, option)}
+                                disabled={isLoading}
+                              >
+                                {option}
+                              </Button>
+                            ))}
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              className="flex-1 rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              placeholder="Optional note"
+                              value={answerNotes[question] || ""}
+                              onChange={(e) =>
+                                setAnswerNotes((prev) => ({ ...prev, [question]: e.target.value }))
+                              }
+                              disabled={isLoading}
+                            />
+                            <Button
+                              size="icon"
+                              className="h-[40px] w-[40px] shrink-0"
+                              onClick={() => submitSingleAnswer(question, answers[question] || "")}
+                              disabled={isLoading || !answers[question]?.trim()}
+                            >
+                              <Send className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (preset.kind === "yes_no") {
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap gap-2">
+                            {preset.options?.map((option) => (
+                              <Button
+                                key={option}
+                                type="button"
+                                size="sm"
+                                variant={answers[question] === option ? "default" : "outline"}
+                                onClick={() => handleAnswerChange(question, option)}
+                                disabled={isLoading}
+                              >
+                                {option}
+                              </Button>
+                            ))}
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              className="flex-1 rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              placeholder="Optional comment"
+                              value={answerNotes[question] || ""}
+                              onChange={(e) =>
+                                setAnswerNotes((prev) => ({ ...prev, [question]: e.target.value }))
+                              }
+                              disabled={isLoading}
+                            />
+                            <Button
+                              size="icon"
+                              className="h-[40px] w-[40px] shrink-0"
+                              onClick={() => submitSingleAnswer(question, answers[question] || "")}
+                              disabled={isLoading || !answers[question]?.trim()}
+                            >
+                              <Send className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (preset.kind === "slider") {
+                      const sliderValue = sliderValues[question] ?? 3;
+                      const [leftLabel, rightLabel] = preset.sliderLabels || ["Low", "High"];
+                      return (
+                        <div className="space-y-2">
+                          <div className="rounded-md border border-gray-200 p-3">
+                            <input
+                              type="range"
+                              min={1}
+                              max={5}
+                              step={1}
+                              value={sliderValue}
+                              onChange={(e) =>
+                                setSliderValues((prev) => ({
+                                  ...prev,
+                                  [question]: Number(e.target.value),
+                                }))
+                              }
+                              className="w-full"
+                              disabled={isLoading}
+                            />
+                            <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+                              <span>{leftLabel}</span>
+                              <span className="font-medium text-gray-700">{sliderDescription(sliderValue)}</span>
+                              <span>{rightLabel}</span>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              className="flex-1 rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              placeholder="Optional note"
+                              value={answerNotes[question] || ""}
+                              onChange={(e) =>
+                                setAnswerNotes((prev) => ({ ...prev, [question]: e.target.value }))
+                              }
+                              disabled={isLoading}
+                            />
+                            <Button
+                              size="icon"
+                              className="h-[40px] w-[40px] shrink-0"
+                              onClick={() =>
+                                submitSingleAnswer(
+                                  question,
+                                  `Activity intensity: ${sliderDescription(sliderValue).toLowerCase()} (${sliderValue}/5)`
+                                )
+                              }
+                              disabled={isLoading}
+                            >
+                              <Send className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="flex gap-2">
+                        <textarea
+                          className="flex-1 rounded-md border border-gray-200 p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          rows={2}
+                          placeholder="Type your answer here..."
+                          value={answers[question] || ""}
+                          onChange={(e) => handleAnswerChange(question, e.target.value)}
+                          disabled={isLoading}
+                        />
+                        <Button
+                          size="icon"
+                          className="h-[52px] w-[52px] shrink-0"
+                          onClick={() => submitSingleAnswer(question, answers[question] || "")}
+                          disabled={isLoading || !answers[question]?.trim()}
+                        >
+                          <Send className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
             </div>

@@ -430,6 +430,14 @@ export default function PlannerPage() {
     }
   };
 
+  const handleDismissResearchQuestion = (question: string) => {
+    if (!tripResearchBrief) return;
+    setTripResearchBrief({
+      ...tripResearchBrief,
+      openQuestions: tripResearchBrief.openQuestions.filter((q) => q !== question),
+    });
+  };
+
   const handleResearchSelectionChange = (optionId: string, preference: ResearchOptionPreference) => {
     setResearchOptionSelections((prev) => ({
       ...prev,
@@ -798,6 +806,7 @@ export default function PlannerPage() {
                     onRegenerate={handleGenerateResearchBrief}
                     onProceed={handleProceedFromResearch}
                     onAnswerQuestions={handleAnswerResearchQuestions}
+                    onDismissQuestion={handleDismissResearchQuestion}
                     isLoading={loading}
                   />
                 );
