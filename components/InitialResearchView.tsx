@@ -4,7 +4,7 @@ import { useMemo, useState, useRef, useLayoutEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronRight, RefreshCw, Send } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, RefreshCw, Send } from "lucide-react";
 import type { ResearchOption, ResearchOptionPreference, TripInfo, TripResearchBrief } from "@/lib/api-client";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
 
@@ -34,6 +34,7 @@ export function InitialResearchView({
   isLoading = false,
 }: InitialResearchViewProps) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [showAssumptions, setShowAssumptions] = useState(false);
 
   // Preserve scroll position when switching interest chips to prevent layout-shift scroll jumps
   const scrollYRef = useRef<number | null>(null);
@@ -80,6 +81,14 @@ export function InitialResearchView({
   const [activeStatus, setActiveStatus] = useState<string>("Postponed");
   const [activeInterest, setActiveInterest] = useState<string>("All");
   const [hasInitializedTab, setHasInitializedTab] = useState(false);
+  const overviewOpening = useMemo(() => {
+    if (!researchBrief.summary) return "";
+    const parts = researchBrief.summary
+      .split(/(?<=[.!?])\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    return parts.slice(0, 2).join(" ");
+  }, [researchBrief.summary]);
 
   const normalize = (value: string) =>
     value
@@ -217,6 +226,9 @@ export function InitialResearchView({
           <CardTitle className="text-base">Trip Overview</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-gray-700">
+          {overviewOpening && (
+            <p className="text-sm leading-relaxed text-gray-800">{overviewOpening}</p>
+          )}
           <p>
             <span className="text-gray-500">Dates:</span>{" "}
             {tripInfo?.startDate && tripInfo?.endDate ? `${tripInfo.startDate} to ${tripInfo.endDate}` : "Not set"}
@@ -233,6 +245,28 @@ export function InitialResearchView({
             <span className="text-gray-500">Dietary constraints:</span>{" "}
             {dietaryHints.length > 0 ? dietaryHints.join(", ") : allPreferences.join(", ") || "None specified"}
           </p>
+          {researchBrief.assumptions.length > 0 && (
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAssumptions((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-800"
+              >
+                {showAssumptions ? "Hide assumptions" : "View assumptions"}
+                {showAssumptions ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              </button>
+              {showAssumptions && (
+                <ul className="mt-2 space-y-1">
+                  {researchBrief.assumptions.map((item, idx) => (
+                    <li key={`${item}-${idx}`} className="text-sm text-gray-600 flex gap-1.5">
+                      <span className="text-gray-400 shrink-0">•</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {hasDurationConflict && (
             <div className="pt-2">
@@ -261,34 +295,6 @@ export function InitialResearchView({
           )}
         </CardContent>
       </Card>
-
-      {(researchBrief.summary || researchBrief.assumptions.length > 0) && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Research Summary</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {researchBrief.summary && (
-              <p className="text-sm text-gray-700 leading-relaxed">
-                {researchBrief.summary}
-              </p>
-            )}
-            {researchBrief.assumptions.length > 0 && (
-              <div className="pt-2">
-                <p className="text-xs font-medium text-gray-500 mb-1.5">What we considered</p>
-                <ul className="space-y-1">
-                  {researchBrief.assumptions.map((item, idx) => (
-                    <li key={`${item}-${idx}`} className="text-sm text-gray-600 flex gap-1.5">
-                      <span className="text-gray-400 shrink-0">•</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {researchBrief.openQuestions.length > 0 && (
         <Card>
