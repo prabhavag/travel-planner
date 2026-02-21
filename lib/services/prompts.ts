@@ -2,7 +2,13 @@
  * Externalized system prompts for LLM client
  */
 
-import type { TripInfo, SuggestedActivity, GroupedDay, TripResearchBrief } from "@/lib/models/travel-plan";
+import type {
+  TripInfo,
+  SuggestedActivity,
+  GroupedDay,
+  TripResearchBrief,
+  ResearchOptionPreference,
+} from "@/lib/models/travel-plan";
 
 export const SYSTEM_PROMPTS = {
   INFO_GATHERING: `You are an expert travel planning assistant. You are in the INFO GATHERING phase.
@@ -281,6 +287,55 @@ RULES:
 - Keep the output as a list of short but descriptive strings.
 - Focus on actionable travel preferences (e.g., "Prefers quiet mornings", "Loves spicy local seafood", "Avoids high-altitude hiking").
 - Return ONLY valid JSON.`,
+
+  INITIAL_RESEARCH_TOOL_ROUTER: `You are an orchestration assistant for the INITIAL_RESEARCH phase.
+
+You can either:
+1) answer directly, OR
+2) call tools to mutate the research cards first, then answer.
+
+Available tool intents:
+- add_research_options: user asks for more places/options/alternatives
+- remove_research_option: user asks to delete/remove/exclude a specific research card
+
+Rules:
+- Prefer tool calls for add/remove requests.
+- If removal target is ambiguous, call remove_research_option with the best available clue; the tool result will return ambiguity candidates. Then ask the user to choose.
+- If the user asks informational questions (why, compare, explain), answer directly without tools.
+- Keep responses concise and user-facing.
+- Never invent card IDs; use IDs from provided context when possible.
+- Do not expose internal tool call details to the user.`,
+
+  INITIAL_RESEARCH_ADD_OPTIONS: `You generate additional travel research options only.
+
+Output must be strict JSON with this shape:
+{
+  "message": "Short note about what was added",
+  "popularOptions": [
+    {
+      "id": "optX",
+      "title": "Specific option/place",
+      "category": "snorkeling|hiking|food|culture|relaxation|adventure|other",
+      "whyItMatches": "Why it fits user request and preferences",
+      "bestForDates": "Date-specific fit",
+      "reviewSummary": "What reviews commonly praise/caution",
+      "sourceLinks": [
+        {
+          "title": "Source title",
+          "url": "https://...",
+          "snippet": "Short evidence snippet"
+        }
+      ]
+    }
+  ]
+}
+
+Rules:
+- Return 1-5 options as requested.
+- Every option must include at least one source link.
+- Avoid duplicates against existing option titles in context.
+- Respect destination, dates, and traveler preferences.
+- Return ONLY valid JSON.`,
 };
 
 
@@ -553,4 +608,73 @@ export function buildCompressPreferencesMessages({
   ];
 
   return messages;
+}
+
+export function buildInitialResearchDebriefAgentInput({
+  tripInfo,
+  compactBriefOptions,
+  openQuestions,
+  recentConversation,
+  userMessage,
+}: {
+  tripInfo: TripInfo;
+  compactBriefOptions: Array<{
+    id: string;
+    title: string;
+    category: string;
+    selection: ResearchOptionPreference;
+    sourceLinkCount: number;
+    whyItMatches: string;
+    bestForDates: string;
+    reviewSummary: string;
+  }>;
+  openQuestions: string[];
+  recentConversation: Array<{ role: "user" | "assistant"; content: string }>;
+  userMessage: string;
+}) {
+  return `Trip context:
+${JSON.stringify(tripInfo, null, 2)}
+
+Current research cards (compact):
+${JSON.stringify(compactBriefOptions, null, 2)}
+
+Open questions:
+${JSON.stringify(openQuestions, null, 2)}
+
+Recent conversation (last ${recentConversation.length} messages):
+${JSON.stringify(recentConversation, null, 2)}
+
+Latest user message:
+${userMessage}`;
+}
+
+export function buildAdditionalResearchOptionsInput({
+  tripInfo,
+  currentOptionTitles,
+  userRequest,
+  count,
+  category,
+}: {
+  tripInfo: TripInfo;
+  currentOptionTitles: string[];
+  userRequest: string;
+  count: number;
+  category?: string;
+}) {
+  return `Generate additional research options for this trip:
+
+Trip context:
+${JSON.stringify(tripInfo, null, 2)}
+
+Requested additions:
+${userRequest}
+
+Requested count:
+${count}
+
+Requested category:
+${category || "not specified"}
+
+Existing option titles to avoid duplicating:
+${JSON.stringify(currentOptionTitles, null, 2)}`;
 }

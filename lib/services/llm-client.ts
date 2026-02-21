@@ -1,12 +1,17 @@
 import OpenAI from "openai";
+import { z } from "zod";
 import {
   type TripInfo,
   type SuggestedActivity,
   type DayGroup,
   type GroupedDay,
   type TripResearchBrief,
+  type ResearchOptionPreference,
 } from "@/lib/models/travel-plan";
 import {
+  SYSTEM_PROMPTS,
+  buildAdditionalResearchOptionsInput,
+  buildInitialResearchDebriefAgentInput,
   buildInfoGatheringMessages,
   buildInitialResearchBriefMessages,
   buildInitialResearchChatMessages,
@@ -19,6 +24,7 @@ import {
 } from "./prompts";
 import { getPlacesClient } from "./places-client";
 import { getGeocodingService } from "./geocoding-service";
+import { mergeResearchBriefAndSelections } from "./card-merging";
 
 const DEFAULT_MODEL = "gpt-4o";
 const DEFAULT_TEMPERATURE = 0.5;
@@ -78,9 +84,138 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
   },
 };
 
+const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["message", "popularOptions"],
+  properties: {
+    message: { type: "string" },
+    popularOptions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "title", "category", "whyItMatches", "bestForDates", "reviewSummary", "sourceLinks"],
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          category: { type: "string", enum: [...RESEARCH_CATEGORIES] },
+          whyItMatches: { type: "string" },
+          bestForDates: { type: "string" },
+          reviewSummary: { type: "string" },
+          sourceLinks: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["title", "url", "snippet"],
+              properties: {
+                title: { type: "string" },
+                url: { type: "string" },
+                snippet: { type: ["string", "null"] },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+const MAX_INITIAL_RESEARCH_TOOL_STEPS = 3;
+
+const addResearchOptionsArgsSchema = z.object({
+  request: z.string().trim().min(1),
+  count: z.number().int().min(1).max(5).optional(),
+  category: z.enum(RESEARCH_CATEGORIES).optional(),
+});
+
+const removeResearchOptionArgsSchema = z
+  .object({
+    option_id: z.string().trim().min(1).optional(),
+    option_title: z.string().trim().min(1).optional(),
+  })
+  .refine((value) => Boolean(value.option_id || value.option_title), {
+    message: "Either option_id or option_title is required",
+  });
+
+const INITIAL_RESEARCH_TOOLS: Array<Record<string, unknown>> = [
+  {
+    type: "function",
+    name: "add_research_options",
+    description: "Add 1-5 new research cards based on the user's request.",
+    strict: false,
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["request"],
+      properties: {
+        request: { type: "string" },
+        count: { type: "integer", minimum: 1, maximum: 5 },
+        category: { type: "string", enum: [...RESEARCH_CATEGORIES] },
+      },
+    },
+  },
+  {
+    type: "function",
+    name: "remove_research_option",
+    description: "Remove a research card by id or title. Use when user asks to delete/remove a card.",
+    strict: false,
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: [],
+      properties: {
+        option_id: { type: "string" },
+        option_title: { type: "string" },
+      },
+    },
+  },
+];
+
 interface LLMClientOptions {
   model?: string;
   temperature?: number;
+}
+
+type ResearchCategory = (typeof RESEARCH_CATEGORIES)[number];
+
+export type InitialResearchToolName = "add_research_options" | "remove_research_option";
+
+export interface AddResearchOptionsArgs {
+  request: string;
+  count?: number;
+  category?: ResearchCategory;
+}
+
+export interface RemoveResearchOptionArgs {
+  option_id?: string;
+  option_title?: string;
+}
+
+export interface ToolExecutionResult {
+  toolName: InitialResearchToolName;
+  ok: boolean;
+  status: "success" | "error" | "ambiguous" | "not_found";
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface InitialResearchAgentResult {
+  success: boolean;
+  message: string;
+  tripResearchBrief: TripResearchBrief;
+  researchOptionSelections: Record<string, ResearchOptionPreference>;
+}
+
+interface ResearchToolState {
+  tripResearchBrief: TripResearchBrief;
+  researchOptionSelections: Record<string, ResearchOptionPreference>;
+}
+
+interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
 }
 
 
@@ -579,6 +714,465 @@ class LLMClient {
       assumptions: Array.isArray(raw.assumptions) ? raw.assumptions.filter((v): v is string => typeof v === "string") : [],
       openQuestions: Array.isArray(raw.openQuestions) ? raw.openQuestions.filter((v): v is string => typeof v === "string") : [],
     };
+  }
+
+  private _normalizeLookupText(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private _buildCompactResearchOptions({
+    tripResearchBrief,
+    researchOptionSelections,
+  }: {
+    tripResearchBrief: TripResearchBrief;
+    researchOptionSelections: Record<string, ResearchOptionPreference>;
+  }) {
+    return (tripResearchBrief.popularOptions || []).map((option) => ({
+      id: option.id,
+      title: option.title,
+      category: option.category,
+      selection: researchOptionSelections[option.id] || "maybe",
+      sourceLinkCount: option.sourceLinks?.length || 0,
+      whyItMatches: option.whyItMatches,
+      bestForDates: option.bestForDates,
+      reviewSummary: option.reviewSummary,
+    }));
+  }
+
+  private _extractFunctionCallsFromResponse(response: OpenAI.Responses.Response): OpenAI.Responses.ResponseFunctionToolCall[] {
+    return (response.output || []).filter(
+      (item): item is OpenAI.Responses.ResponseFunctionToolCall => item.type === "function_call"
+    );
+  }
+
+  private async generateAdditionalResearchOptionsWithWebSearch({
+    tripInfo,
+    currentBrief,
+    userRequest,
+    count,
+    category,
+  }: {
+    tripInfo: TripInfo;
+    currentBrief: TripResearchBrief;
+    userRequest: string;
+    count: number;
+    category?: ResearchCategory;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    options: TripResearchBrief["popularOptions"];
+  }> {
+    const clampedCount = Math.max(1, Math.min(5, count));
+    const input = buildAdditionalResearchOptionsInput({
+      tripInfo,
+      currentOptionTitles: currentBrief.popularOptions.map((option) => option.title),
+      userRequest,
+      count: clampedCount,
+      category,
+    });
+
+    try {
+      const response = await this.openai.responses.create({
+        model: this.model,
+        instructions: SYSTEM_PROMPTS.INITIAL_RESEARCH_ADD_OPTIONS,
+        input,
+        temperature: this.temperature,
+        tools: [{ type: "web_search_preview", search_context_size: "high" }],
+        tool_choice: "auto",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "additional_research_options_response",
+            strict: true,
+            schema: ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA,
+          },
+        },
+      });
+
+      const parsed = this._parseResearchResponseJson(response);
+      const normalizedBrief = this._normalizeTripResearchBrief({
+        popularOptions: parsed.popularOptions,
+        assumptions: [],
+        openQuestions: [],
+        dateNotes: [],
+      });
+      const citations = this._extractUrlCitationsFromResponse(response);
+      const mergedBrief = this._mergeCitationLinksIntoBrief({
+        brief: normalizedBrief,
+        citations,
+      });
+      const enrichedBrief = await this._enrichResearchBriefWithPlacePhotos({
+        brief: mergedBrief,
+        destination: tripInfo.destination,
+      });
+
+      const existingTitles = new Set(
+        currentBrief.popularOptions.map((option) => this._normalizeLookupText(option.title))
+      );
+      const uniqueOptions: TripResearchBrief["popularOptions"] = [];
+
+      for (const option of enrichedBrief.popularOptions) {
+        const normalizedTitle = this._normalizeLookupText(option.title);
+        if (!normalizedTitle || existingTitles.has(normalizedTitle)) continue;
+        if (!option.sourceLinks || option.sourceLinks.length === 0) continue;
+        uniqueOptions.push(option);
+        existingTitles.add(normalizedTitle);
+        if (uniqueOptions.length >= clampedCount) break;
+      }
+
+      return {
+        success: true,
+        message: typeof parsed.message === "string" ? parsed.message : "I found additional options.",
+        options: uniqueOptions,
+      };
+    } catch (error) {
+      console.error("Error in generateAdditionalResearchOptionsWithWebSearch:", error);
+      return {
+        success: false,
+        message: "I couldn't fetch additional options right now.",
+        options: [],
+      };
+    }
+  }
+
+  private async _executeAddResearchOptionsTool({
+    rawArgs,
+    state,
+    tripInfo,
+  }: {
+    rawArgs: unknown;
+    state: ResearchToolState;
+    tripInfo: TripInfo;
+  }): Promise<{ result: ToolExecutionResult; nextState: ResearchToolState }> {
+    const parsedArgs = addResearchOptionsArgsSchema.safeParse(rawArgs);
+    if (!parsedArgs.success) {
+      console.warn("[initial-research-agent] add_research_options validation failed", parsedArgs.error.flatten());
+      return {
+        result: {
+          toolName: "add_research_options",
+          ok: false,
+          status: "error",
+          message: "Invalid arguments for add_research_options.",
+          details: { issues: parsedArgs.error.issues.map((issue) => issue.message) },
+        },
+        nextState: state,
+      };
+    }
+
+    const count = Math.max(1, Math.min(5, parsedArgs.data.count ?? 3));
+    const generation = await this.generateAdditionalResearchOptionsWithWebSearch({
+      tripInfo,
+      currentBrief: state.tripResearchBrief,
+      userRequest: parsedArgs.data.request,
+      count,
+      category: parsedArgs.data.category,
+    });
+
+    if (!generation.success) {
+      return {
+        result: {
+          toolName: "add_research_options",
+          ok: false,
+          status: "error",
+          message: generation.message,
+        },
+        nextState: state,
+      };
+    }
+
+    if (generation.options.length === 0) {
+      return {
+        result: {
+          toolName: "add_research_options",
+          ok: true,
+          status: "not_found",
+          message: "No distinct new options matched your request.",
+        },
+        nextState: state,
+      };
+    }
+
+    const merged = mergeResearchBriefAndSelections({
+      currentBrief: state.tripResearchBrief,
+      currentSelections: state.researchOptionSelections,
+      incomingBrief: {
+        ...state.tripResearchBrief,
+        popularOptions: generation.options,
+      },
+    });
+
+    return {
+      result: {
+        toolName: "add_research_options",
+        ok: true,
+        status: "success",
+        message: generation.message,
+        details: {
+          addedCount: generation.options.length,
+          addedOptionIds: generation.options.map((option) => option.id),
+        },
+      },
+      nextState: {
+        tripResearchBrief: merged.tripResearchBrief,
+        researchOptionSelections: merged.researchOptionSelections,
+      },
+    };
+  }
+
+  private async _executeRemoveResearchOptionTool({
+    rawArgs,
+    state,
+  }: {
+    rawArgs: unknown;
+    state: ResearchToolState;
+  }): Promise<{ result: ToolExecutionResult; nextState: ResearchToolState }> {
+    const parsedArgs = removeResearchOptionArgsSchema.safeParse(rawArgs);
+    if (!parsedArgs.success) {
+      console.warn("[initial-research-agent] remove_research_option validation failed", parsedArgs.error.flatten());
+      return {
+        result: {
+          toolName: "remove_research_option",
+          ok: false,
+          status: "error",
+          message: "Invalid arguments for remove_research_option.",
+          details: { issues: parsedArgs.error.issues.map((issue) => issue.message) },
+        },
+        nextState: state,
+      };
+    }
+
+    const byId = parsedArgs.data.option_id
+      ? state.tripResearchBrief.popularOptions.filter((option) => option.id === parsedArgs.data.option_id)
+      : [];
+
+    const normalizedTitle = parsedArgs.data.option_title
+      ? this._normalizeLookupText(parsedArgs.data.option_title)
+      : "";
+
+    const exactTitleMatches = normalizedTitle
+      ? state.tripResearchBrief.popularOptions.filter(
+          (option) => this._normalizeLookupText(option.title) === normalizedTitle
+        )
+      : [];
+
+    const substringMatches =
+      normalizedTitle && byId.length === 0 && exactTitleMatches.length === 0
+        ? state.tripResearchBrief.popularOptions.filter((option) => {
+            const candidate = this._normalizeLookupText(option.title);
+            return candidate.includes(normalizedTitle) || normalizedTitle.includes(candidate);
+          })
+        : [];
+
+    const matches = byId.length > 0 ? byId : exactTitleMatches.length > 0 ? exactTitleMatches : substringMatches;
+
+    if (matches.length === 0) {
+      const nearMatches =
+        normalizedTitle.length > 0
+          ? state.tripResearchBrief.popularOptions
+              .filter((option) => {
+                const title = this._normalizeLookupText(option.title);
+                return normalizedTitle
+                  .split(" ")
+                  .filter((token) => token.length > 2)
+                  .some((token) => title.includes(token));
+              })
+              .slice(0, 5)
+              .map((option) => ({ id: option.id, title: option.title }))
+          : [];
+
+      return {
+        result: {
+          toolName: "remove_research_option",
+          ok: true,
+          status: "not_found",
+          message: "I couldn't find a matching card to remove.",
+          details: { nearMatches },
+        },
+        nextState: state,
+      };
+    }
+
+    if (matches.length > 1) {
+      return {
+        result: {
+          toolName: "remove_research_option",
+          ok: true,
+          status: "ambiguous",
+          message: "Multiple cards match this request. Ask the user to pick one.",
+          details: {
+            candidates: matches.slice(0, 5).map((option) => ({ id: option.id, title: option.title })),
+          },
+        },
+        nextState: state,
+      };
+    }
+
+    const target = matches[0];
+    const nextBrief: TripResearchBrief = {
+      ...state.tripResearchBrief,
+      popularOptions: state.tripResearchBrief.popularOptions.filter((option) => option.id !== target.id),
+    };
+    const nextSelections = { ...state.researchOptionSelections };
+    delete nextSelections[target.id];
+
+    return {
+      result: {
+        toolName: "remove_research_option",
+        ok: true,
+        status: "success",
+        message: `Removed ${target.title}.`,
+        details: { removedOptionId: target.id, removedTitle: target.title },
+      },
+      nextState: {
+        tripResearchBrief: nextBrief,
+        researchOptionSelections: nextSelections,
+      },
+    };
+  }
+
+  private async _executeInitialResearchToolCall({
+    toolCall,
+    state,
+    tripInfo,
+  }: {
+    toolCall: OpenAI.Responses.ResponseFunctionToolCall;
+    state: ResearchToolState;
+    tripInfo: TripInfo;
+  }): Promise<{ result: ToolExecutionResult; nextState: ResearchToolState }> {
+    let parsedArgs: unknown = {};
+    try {
+      parsedArgs = toolCall.arguments ? JSON.parse(toolCall.arguments) : {};
+    } catch {
+      return {
+        result: {
+          toolName: (toolCall.name as InitialResearchToolName) || "add_research_options",
+          ok: false,
+          status: "error",
+          message: "Tool arguments were not valid JSON.",
+        },
+        nextState: state,
+      };
+    }
+
+    if (toolCall.name === "add_research_options") {
+      return this._executeAddResearchOptionsTool({ rawArgs: parsedArgs, state, tripInfo });
+    }
+
+    if (toolCall.name === "remove_research_option") {
+      return this._executeRemoveResearchOptionTool({ rawArgs: parsedArgs, state });
+    }
+
+    return {
+      result: {
+        toolName: "add_research_options",
+        ok: false,
+        status: "error",
+        message: `Unknown tool: ${toolCall.name}`,
+      },
+      nextState: state,
+    };
+  }
+
+  async runInitialResearchDebriefAgent({
+    tripInfo,
+    currentBrief,
+    researchOptionSelections,
+    conversationHistory,
+    userMessage,
+  }: {
+    tripInfo: TripInfo;
+    currentBrief: TripResearchBrief;
+    researchOptionSelections: Record<string, ResearchOptionPreference>;
+    conversationHistory: ConversationMessage[];
+    userMessage: string;
+  }): Promise<InitialResearchAgentResult> {
+    let state: ResearchToolState = {
+      tripResearchBrief: currentBrief,
+      researchOptionSelections: { ...researchOptionSelections },
+    };
+
+    let previousResponseId: string | undefined;
+    let input: string | Array<Record<string, unknown>> = buildInitialResearchDebriefAgentInput({
+      tripInfo,
+      compactBriefOptions: this._buildCompactResearchOptions({
+        tripResearchBrief: state.tripResearchBrief,
+        researchOptionSelections: state.researchOptionSelections,
+      }),
+      openQuestions: state.tripResearchBrief.openQuestions || [],
+      recentConversation: conversationHistory.slice(-10),
+      userMessage,
+    });
+
+    try {
+      for (let iteration = 1; iteration <= MAX_INITIAL_RESEARCH_TOOL_STEPS; iteration += 1) {
+        const response = await this.openai.responses.create({
+          model: this.model,
+          instructions: SYSTEM_PROMPTS.INITIAL_RESEARCH_TOOL_ROUTER,
+          input: input as unknown as OpenAI.Responses.ResponseInput,
+          previous_response_id: previousResponseId,
+          temperature: this.temperature,
+          tools: INITIAL_RESEARCH_TOOLS as unknown as OpenAI.Responses.Tool[],
+          tool_choice: "auto",
+          parallel_tool_calls: false,
+        });
+
+        previousResponseId = response.id;
+        const functionCalls = this._extractFunctionCallsFromResponse(response);
+        console.log(`[initial-research-agent] iteration=${iteration} function_calls=${functionCalls.length}`);
+
+        if (functionCalls.length === 0) {
+          const finalMessage =
+            (typeof response.output_text === "string" && response.output_text.trim()) ||
+            "I updated your research brief.";
+          return {
+            success: true,
+            message: finalMessage,
+            tripResearchBrief: state.tripResearchBrief,
+            researchOptionSelections: state.researchOptionSelections,
+          };
+        }
+
+        const toolOutputs: Array<Record<string, unknown>> = [];
+        for (const toolCall of functionCalls) {
+          const { result, nextState } = await this._executeInitialResearchToolCall({
+            toolCall,
+            state,
+            tripInfo,
+          });
+          console.log(
+            `[initial-research-agent] tool=${result.toolName} validation_ok=${result.ok} status=${result.status}`
+          );
+          state = nextState;
+          toolOutputs.push({
+            type: "function_call_output",
+            call_id: toolCall.call_id,
+            output: JSON.stringify(result),
+          });
+        }
+
+        input = toolOutputs;
+      }
+
+      return {
+        success: true,
+        message:
+          "I applied what I could from your request. If you want another change, tell me exactly which card to update.",
+        tripResearchBrief: state.tripResearchBrief,
+        researchOptionSelections: state.researchOptionSelections,
+      };
+    } catch (error) {
+      console.error("Error in runInitialResearchDebriefAgent:", error);
+      return {
+        success: false,
+        message: "Sorry, I couldn't update the research brief right now. Please try again.",
+        tripResearchBrief: state.tripResearchBrief,
+        researchOptionSelections: state.researchOptionSelections,
+      };
+    }
   }
 
   async gatherInfo({

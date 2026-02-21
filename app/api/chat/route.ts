@@ -78,30 +78,67 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const result = await llmClient.refineInitialResearchBrief({
+      const refreshedSession = sessionStore.get(sessionId);
+      const result = await llmClient.runInitialResearchDebriefAgent({
         tripInfo: session.tripInfo,
         currentBrief: session.tripResearchBrief,
+        researchOptionSelections: session.researchOptionSelections || {},
+        conversationHistory: refreshedSession?.conversationHistory || [],
         userMessage: message,
       });
 
       if (!result.success) {
-        return NextResponse.json(
-          { success: false, message: result.message },
-          { status: 500 }
-        );
-      }
+        const fallback = await llmClient.refineInitialResearchBrief({
+          tripInfo: session.tripInfo,
+          currentBrief: session.tripResearchBrief,
+          userMessage: message,
+        });
 
-      if (result.tripResearchBrief) {
+        if (!fallback.success || !fallback.tripResearchBrief) {
+          const safeMessage =
+            result.message || "I couldn't apply that change right now, but your current research cards are unchanged.";
+          sessionStore.addToConversation(sessionId, "assistant", safeMessage);
+          const updatedSession = sessionStore.get(sessionId);
+
+          return NextResponse.json({
+            success: true,
+            sessionId,
+            workflowState: updatedSession?.workflowState,
+            message: safeMessage,
+            tripInfo: updatedSession?.tripInfo,
+            tripResearchBrief: updatedSession?.tripResearchBrief,
+            researchOptionSelections: updatedSession?.researchOptionSelections,
+          });
+        }
+
         const merged = mergeResearchBriefAndSelections({
           currentBrief: session.tripResearchBrief,
           currentSelections: session.researchOptionSelections || {},
-          incomingBrief: result.tripResearchBrief,
+          incomingBrief: fallback.tripResearchBrief,
         });
+
         sessionStore.update(sessionId, {
           tripResearchBrief: merged.tripResearchBrief,
           researchOptionSelections: merged.researchOptionSelections,
         });
+        sessionStore.addToConversation(sessionId, "assistant", fallback.message);
+        const updatedSession = sessionStore.get(sessionId);
+
+        return NextResponse.json({
+          success: true,
+          sessionId,
+          workflowState: updatedSession?.workflowState,
+          message: fallback.message,
+          tripInfo: updatedSession?.tripInfo,
+          tripResearchBrief: updatedSession?.tripResearchBrief,
+          researchOptionSelections: updatedSession?.researchOptionSelections,
+        });
       }
+
+      sessionStore.update(sessionId, {
+        tripResearchBrief: result.tripResearchBrief,
+        researchOptionSelections: result.researchOptionSelections,
+      });
 
       sessionStore.addToConversation(sessionId, "assistant", result.message);
       const updatedSession = sessionStore.get(sessionId);
