@@ -198,9 +198,15 @@ export function InitialResearchView({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onRegenerate} disabled={isLoading}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRegenerate}
+            disabled={isLoading}
+            title="Uses current suggestions as context to generate better/new ones"
+          >
             <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-            Refresh Research
+            Refine suggestions
           </Button>
           <Button size="sm" onClick={onProceed} disabled={isLoading || hasUnresolvedAssumptionConflicts}>
             Proceed to organizing your trip
