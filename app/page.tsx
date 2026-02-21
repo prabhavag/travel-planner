@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2, Send, MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw, ChevronUp, ChevronDown } from "lucide-react";
 import MapComponent from "@/components/MapComponent";
-import { ActivitySelectionView } from "@/components/ActivitySelectionView";
 import { InitialResearchView } from "@/components/InitialResearchView";
 import { DayGroupingView } from "@/components/DayGroupingView";
 import { RestaurantSelectionView } from "@/components/RestaurantSelectionView";
@@ -177,7 +176,6 @@ export default function PlannerPage() {
   const [initializing, setInitializing] = useState(true);
   const [chatInput, setChatInput] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [canProceed, setCanProceed] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "interests">("chat");
   const [hoveredActivityId, setHoveredActivityId] = useState<string | null>(null);
   const [activeDay, setActiveDay] = useState<number | null>(1);
@@ -334,7 +332,6 @@ export default function PlannerPage() {
         if (response.tripInfo) setTripInfo(response.tripInfo);
         if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
         if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
-        if (response.canProceed !== undefined) setCanProceed(response.canProceed);
         if (response.suggestedActivities) setSuggestedActivities(response.suggestedActivities);
         if (response.workflowState) {
           setWorkflowState(response.workflowState);
@@ -368,7 +365,6 @@ export default function PlannerPage() {
         if (response.tripInfo) setTripInfo(response.tripInfo);
         if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
         if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
-        if (response.canProceed !== undefined) setCanProceed(response.canProceed);
       }
     } catch (error) {
       console.error("Suggestion chat error:", error);
@@ -417,6 +413,13 @@ export default function PlannerPage() {
 
   const handleProceedFromResearch = async () => {
     if (!sessionId || hasUnresolvedAssumptionConflicts) return;
+    const confirmedSelectedActivityIds = Object.entries(researchOptionSelections)
+      .filter(([, preference]) => preference === "keep")
+      .map(([optionId]) => optionId);
+    if (confirmedSelectedActivityIds.length === 0) {
+      alert("Select at least one activity with Keep before organizing your trip.");
+      return;
+    }
     setLoading(true);
     try {
       const response = await confirmResearchBrief(sessionId, researchOptionSelections);
@@ -426,9 +429,8 @@ export default function PlannerPage() {
       if (response.suggestedActivities) {
         setSuggestedActivities(response.suggestedActivities);
       }
-      if (response.selectedActivityIds) {
-        setSelectedActivityIds(response.selectedActivityIds);
-      }
+      const selectedIds = response.selectedActivityIds || [];
+      setSelectedActivityIds(selectedIds);
       const groupResponse = await groupDays(sessionId);
       if (!groupResponse.success) {
         throw new Error(groupResponse.message);
@@ -437,7 +439,7 @@ export default function PlannerPage() {
       updateMaxReachedState(WORKFLOW_STATES.GROUP_DAYS);
       setDayGroups(groupResponse.dayGroups || []);
       setGroupedDays(groupResponse.groupedDays || []);
-      setLastGroupedActivityIds([...(response.selectedActivityIds || [])]);
+      setLastGroupedActivityIds([...selectedIds]);
       setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
     } catch (error) {
       console.error("Confirm research brief error:", error);
@@ -625,6 +627,7 @@ export default function PlannerPage() {
     tripInfo.durationDays > 0 &&
     Math.abs(derivedDuration - tripInfo.durationDays) > 1;
   const hasUnresolvedAssumptionConflicts = workflowState === WORKFLOW_STATES.INITIAL_RESEARCH && hasDurationConflict;
+  const hasAnyKeptResearchOption = Object.values(researchOptionSelections).some((preference) => preference === "keep");
 
   const handleResolveDurationConflict = async (mode: "use_date_range" | "keep_requested_duration") => {
     if (!sessionId || !tripInfo) return;
@@ -1204,6 +1207,7 @@ export default function PlannerPage() {
                     deepResearchOptionId={deepResearchOptionId}
                     lastDeepResearchAtByOptionId={lastDeepResearchAtByOptionId}
                     onProceed={handleProceedFromResearch}
+                    canProceed={hasAnyKeptResearchOption}
                     isLoading={loading}
                   />
                 );

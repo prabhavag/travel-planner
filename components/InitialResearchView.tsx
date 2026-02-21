@@ -21,6 +21,7 @@ interface InitialResearchViewProps {
   deepResearchOptionId?: string | null;
   lastDeepResearchAtByOptionId?: Record<string, string>;
   onProceed: () => void;
+  canProceed?: boolean;
   isLoading?: boolean;
 }
 
@@ -37,6 +38,7 @@ export function InitialResearchView({
   deepResearchOptionId = null,
   lastDeepResearchAtByOptionId = {},
   onProceed,
+  canProceed = true,
   isLoading = false,
 }: InitialResearchViewProps) {
   const [showAssumptions, setShowAssumptions] = useState(false);
@@ -84,7 +86,6 @@ export function InitialResearchView({
   );
   const [activeStatus, setActiveStatus] = useState<string>("Postponed");
   const [activeInterest, setActiveInterest] = useState<string>("All");
-  const [hasInitializedTab, setHasInitializedTab] = useState(false);
   const overviewOpening = useMemo(() => {
     if (!researchBrief.summary) return "";
     const parts = researchBrief.summary
@@ -189,13 +190,6 @@ export function InitialResearchView({
     });
   }, [activeStatus, activeInterest, researchBrief.popularOptions, researchOptionSelections, allPreferences]);
 
-  // Set initial active tab if not already set or if current tab is empty
-  useMemo(() => {
-    if (!hasInitializedTab && researchBrief.popularOptions.length > 0) {
-      setHasInitializedTab(true);
-    }
-  }, [researchBrief.popularOptions, hasInitializedTab]);
-
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between bg-white py-2 px-4">
@@ -216,7 +210,7 @@ export function InitialResearchView({
             <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
             Update or get more suggestions
           </Button>
-          <Button size="sm" onClick={onProceed} disabled={isLoading || hasUnresolvedAssumptionConflicts}>
+          <Button size="sm" onClick={onProceed} disabled={isLoading || hasUnresolvedAssumptionConflicts || !canProceed}>
             Proceed to organizing your trip
             <ChevronRight className="w-4 h-4 ml-1" />
           </Button>

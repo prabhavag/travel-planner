@@ -67,7 +67,6 @@ export async function POST(request: NextRequest) {
         message: result.message,
         tripInfo: result.tripInfo,
         tripResearchBrief: updatedSession?.tripResearchBrief,
-        canProceed: result.isComplete,
         missingInfo: result.missingInfo,
       });
     } else if (session.workflowState === WORKFLOW_STATES.INITIAL_RESEARCH) {

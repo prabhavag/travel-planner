@@ -57,7 +57,6 @@ export interface SessionResponse {
   tripInfo?: TripInfo;
   skeleton?: Skeleton;
   expandedDays?: Record<number, ExpandedDay>;
-  canProceed?: boolean;
   finalPlan?: FinalPlan;
   nextDayToExpand?: number;
   canReview?: boolean;
