@@ -4,13 +4,17 @@ import { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Loader2, Search } from "lucide-react";
 import type { ResearchOption, ResearchOptionPreference } from "@/lib/api-client";
 
 interface ResearchOptionCardProps {
   option: ResearchOption;
   selection: ResearchOptionPreference;
   onSelectionChange?: (optionId: string, preference: ResearchOptionPreference) => void;
+  onDeepResearch?: (optionId: string) => void;
+  deepResearchLoading?: boolean;
+  deepResearchDisabled?: boolean;
+  lastDeepResearchAt?: string;
   readOnly?: boolean;
   extraContent?: ReactNode;
 }
@@ -29,9 +33,22 @@ export function ResearchOptionCard({
   option,
   selection,
   onSelectionChange,
+  onDeepResearch,
+  deepResearchLoading = false,
+  deepResearchDisabled = false,
+  lastDeepResearchAt,
   readOnly = false,
   extraContent,
 }: ResearchOptionCardProps) {
+  const formattedLastDeepResearchAt = lastDeepResearchAt
+    ? new Date(lastDeepResearchAt).toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : null;
+
   return (
     <Card className="border-gray-200">
       <CardHeader className="pb-2">
@@ -78,6 +95,24 @@ export function ResearchOptionCard({
               </Button>
             );
           })}
+          {onDeepResearch && (
+            <div className="flex flex-col gap-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={readOnly || deepResearchDisabled || deepResearchLoading}
+                onClick={() => onDeepResearch(option.id)}
+                className="border-blue-200 text-blue-700 hover:bg-blue-50"
+              >
+                {deepResearchLoading ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Search className="w-3.5 h-3.5 mr-1.5" />}
+                Research
+              </Button>
+              {formattedLastDeepResearchAt ? (
+                <span className="text-[11px] text-gray-500">Last researched {formattedLastDeepResearchAt}</span>
+              ) : null}
+            </div>
+          )}
         </div>
         {option.sourceLinks.length > 0 && (
           <div className="space-y-2">

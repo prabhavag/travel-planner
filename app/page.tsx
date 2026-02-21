@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +27,9 @@ import {
   setMealPreferences,
   updateTripInfo,
   updateWorkflowState,
+  deepResearchOption,
+  deepResearchSelectedOptions,
+  enrichResearchPhotos,
   type TripInfo,
   type SuggestedActivity,
   type GroupedDay,
@@ -181,10 +184,15 @@ export default function PlannerPage() {
   const [isChatMinimized, setIsChatMinimized] = useState(false);
   const [tripBasicsSaving, setTripBasicsSaving] = useState(false);
   const [tripBasicsPreferencesInput, setTripBasicsPreferencesInput] = useState("");
+  const [deepResearchOptionId, setDeepResearchOptionId] = useState<string | null>(null);
+  const [lastDeepResearchAtByOptionId, setLastDeepResearchAtByOptionId] = useState<Record<string, string>>({});
+  const [photoEnrichmentInProgress, setPhotoEnrichmentInProgress] = useState(false);
+  const photoEnrichmentSignatureRef = useRef<string>("");
 
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
+  const leftPanelScrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-focus chat input when loading finishes
   useEffect(() => {
@@ -220,6 +228,7 @@ export default function PlannerPage() {
   useEffect(() => {
     if (!tripResearchBrief) {
       setResearchOptionSelections({});
+      setLastDeepResearchAtByOptionId({});
       return;
     }
 
@@ -230,11 +239,67 @@ export default function PlannerPage() {
       }
       return next;
     });
+
+    // Keep timestamps only for currently visible options.
+    const validIds = new Set(tripResearchBrief.popularOptions.map((option) => option.id));
+    setLastDeepResearchAtByOptionId((prev) => {
+      const next: Record<string, string> = {};
+      for (const [id, value] of Object.entries(prev)) {
+        if (validIds.has(id)) next[id] = value;
+      }
+      return next;
+    });
   }, [tripResearchBrief]);
 
   useEffect(() => {
     setTripBasicsPreferencesInput((tripInfo.preferences || []).join(", "));
   }, [tripInfo.preferences]);
+
+  const triggerPhotoEnrichment = useCallback(async () => {
+    if (!sessionId || !tripResearchBrief || photoEnrichmentInProgress) return;
+    const missingIds = tripResearchBrief.popularOptions
+      .filter((option) => !option.photoUrls || option.photoUrls.length === 0)
+      .map((option) => option.id)
+      .sort();
+    if (missingIds.length === 0) return;
+
+    const signature = `${sessionId}:${missingIds.join("|")}`;
+    if (photoEnrichmentSignatureRef.current === signature) return;
+    const previousSignature = photoEnrichmentSignatureRef.current;
+    photoEnrichmentSignatureRef.current = signature;
+
+    setPhotoEnrichmentInProgress(true);
+    try {
+      const response = await enrichResearchPhotos(sessionId);
+      if (response.success && response.tripResearchBrief) {
+        setTripResearchBrief(response.tripResearchBrief);
+      }
+    } catch (error) {
+      console.error("Photo enrichment error:", error);
+      // Allow retries after failures.
+      if (photoEnrichmentSignatureRef.current === signature) {
+        photoEnrichmentSignatureRef.current = previousSignature;
+      }
+    } finally {
+      setPhotoEnrichmentInProgress(false);
+    }
+  }, [photoEnrichmentInProgress, sessionId, tripResearchBrief]);
+
+  useEffect(() => {
+    void triggerPhotoEnrichment();
+  }, [triggerPhotoEnrichment]);
+
+  const runWithPreservedLeftPanelScroll = useCallback(async (work: () => Promise<void>) => {
+    const container = leftPanelScrollRef.current;
+    const previousTop = container?.scrollTop ?? 0;
+    const previousLeft = container?.scrollLeft ?? 0;
+    await work();
+    if (container) {
+      requestAnimationFrame(() => {
+        container.scrollTo({ top: previousTop, left: previousLeft, behavior: "auto" });
+      });
+    }
+  }, []);
 
   const initializeSession = async () => {
     try {
@@ -317,15 +382,24 @@ export default function PlannerPage() {
   };
 
   // Suggest top 10 activities (streaming)
-  const handleGenerateResearchBrief = async () => {
+  const handleGenerateResearchBrief = async (depth: "fast" | "deep" = "fast") => {
     if (!sessionId) return;
     setLoading(true);
 
     try {
-      const response = await generateResearchBrief(sessionId);
+      const response = await generateResearchBrief(sessionId, depth);
       if (response.success) {
         if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
         if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
+        if (depth === "deep" && response.tripResearchBrief) {
+          const timestamp = new Date().toISOString();
+          const ids = response.tripResearchBrief.popularOptions.map((option) => option.id);
+          setLastDeepResearchAtByOptionId((prev) => {
+            const next = { ...prev };
+            for (const id of ids) next[id] = timestamp;
+            return next;
+          });
+        }
         if (response.workflowState) {
           setWorkflowState(response.workflowState);
           updateMaxReachedState(response.workflowState);
@@ -373,6 +447,84 @@ export default function PlannerPage() {
       return;
     }
     setLoading(false);
+  };
+
+  const handleDeepResearchOption = async (optionId: string) => {
+    if (!sessionId) return;
+    setDeepResearchOptionId(optionId);
+    setLoading(true);
+    try {
+      await runWithPreservedLeftPanelScroll(async () => {
+        const response = await deepResearchOption(sessionId, optionId);
+        if (!response.success) {
+          throw new Error(response.message);
+        }
+        if (response.tripResearchBrief) {
+          setTripResearchBrief((prev) => {
+            if (!prev) return response.tripResearchBrief || null;
+            const byId = new Map(response.tripResearchBrief?.popularOptions.map((option) => [option.id, option]));
+            return {
+              ...prev,
+              popularOptions: prev.popularOptions.map((option) => byId.get(option.id) || option),
+            };
+          });
+        }
+        // Keep existing selections exactly as-is; deep research should only refresh card content.
+        setLastDeepResearchAtByOptionId((prev) => ({
+          ...prev,
+          [optionId]: new Date().toISOString(),
+        }));
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      });
+    } catch (error) {
+      console.error("Deep research option error:", error);
+      const errorMessage = error instanceof Error ? error.message : "Failed to run deep research for this option.";
+      alert(errorMessage);
+    } finally {
+      setDeepResearchOptionId(null);
+      setLoading(false);
+    }
+  };
+
+  const handleDeepResearchSelected = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      await runWithPreservedLeftPanelScroll(async () => {
+        const response = await deepResearchSelectedOptions(sessionId);
+        if (!response.success) {
+          throw new Error(response.message);
+        }
+        if (response.tripResearchBrief) {
+          setTripResearchBrief((prev) => {
+            if (!prev) return response.tripResearchBrief || null;
+            const byId = new Map(response.tripResearchBrief?.popularOptions.map((option) => [option.id, option]));
+            return {
+              ...prev,
+              popularOptions: prev.popularOptions.map((option) => byId.get(option.id) || option),
+            };
+          });
+        }
+        // Keep existing selections exactly as-is; deep research should only refresh card content.
+        if (response.deepResearchedOptionIds && response.deepResearchedOptionIds.length > 0) {
+          const timestamp = new Date().toISOString();
+          setLastDeepResearchAtByOptionId((prev) => {
+            const next = { ...prev };
+            for (const id of response.deepResearchedOptionIds || []) {
+              next[id] = timestamp;
+            }
+            return next;
+          });
+        }
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      });
+    } catch (error) {
+      console.error("Deep research selected error:", error);
+      const errorMessage = error instanceof Error ? error.message : "Failed to run deep research for selected cards.";
+      alert(errorMessage);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Suggest top 10 activities (streaming)
@@ -724,7 +876,7 @@ export default function PlannerPage() {
       alert("Could not save trip basics. Please try again.");
       return;
     }
-    await handleGenerateResearchBrief();
+    await handleGenerateResearchBrief("fast");
   };
 
   const updateMaxReachedState = (state: string) => {
@@ -859,7 +1011,7 @@ export default function PlannerPage() {
           </div>
         )}
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+        <div ref={leftPanelScrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {(() => {
             switch (workflowState) {
               case WORKFLOW_STATES.INFO_GATHERING: {
@@ -1046,7 +1198,11 @@ export default function PlannerPage() {
                     onSelectionChange={handleResearchSelectionChange}
                     onResolveDurationConflict={handleResolveDurationConflict}
                     hasUnresolvedAssumptionConflicts={hasUnresolvedAssumptionConflicts}
-                    onRegenerate={handleGenerateResearchBrief}
+                    onRegenerate={() => handleGenerateResearchBrief("fast")}
+                    onDeepResearchAll={handleDeepResearchSelected}
+                    onDeepResearchOption={handleDeepResearchOption}
+                    deepResearchOptionId={deepResearchOptionId}
+                    lastDeepResearchAtByOptionId={lastDeepResearchAtByOptionId}
                     onProceed={handleProceedFromResearch}
                     isLoading={loading}
                   />

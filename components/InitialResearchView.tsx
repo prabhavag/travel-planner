@@ -16,6 +16,10 @@ interface InitialResearchViewProps {
   onResolveDurationConflict: (mode: "use_date_range" | "keep_requested_duration") => void;
   hasUnresolvedAssumptionConflicts: boolean;
   onRegenerate: () => void;
+  onDeepResearchAll: () => void;
+  onDeepResearchOption: (optionId: string) => void;
+  deepResearchOptionId?: string | null;
+  lastDeepResearchAtByOptionId?: Record<string, string>;
   onProceed: () => void;
   isLoading?: boolean;
 }
@@ -28,6 +32,10 @@ export function InitialResearchView({
   onResolveDurationConflict,
   hasUnresolvedAssumptionConflicts,
   onRegenerate,
+  onDeepResearchAll,
+  onDeepResearchOption,
+  deepResearchOptionId = null,
+  lastDeepResearchAtByOptionId = {},
   onProceed,
   isLoading = false,
 }: InitialResearchViewProps) {
@@ -299,7 +307,7 @@ export function InitialResearchView({
             to create a better personalized itinerary.
           </p>
         </div>
-        <div className="flex flex-wrap gap-4 pt-2">
+        <div className="flex flex-wrap gap-4 pt-2 items-center">
           <button
             onClick={() => setActiveStatus("Selected")}
             disabled={statusCounts.Selected === 0}
@@ -350,6 +358,16 @@ export function InitialResearchView({
           >
             {statusCounts.Inbox} {activeInterest !== "All" ? activeInterest : ""} inbox
           </button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onDeepResearchAll}
+            disabled={isLoading}
+            title="Runs deeper web research for selected and postponed cards only"
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+            Research selected + postponed
+          </Button>
         </div>
       </div>
 
@@ -383,6 +401,10 @@ export function InitialResearchView({
                 option={option}
                 selection={researchOptionSelections[option.id] || "maybe"}
                 onSelectionChange={onSelectionChange}
+                onDeepResearch={onDeepResearchOption}
+                deepResearchLoading={isLoading && deepResearchOptionId === option.id}
+                deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
+                lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}
               />
             ))}
           </div>

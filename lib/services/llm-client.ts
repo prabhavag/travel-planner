@@ -6,6 +6,7 @@ import {
   type DayGroup,
   type GroupedDay,
   type TripResearchBrief,
+  type ResearchOption,
   type ResearchOptionPreference,
 } from "@/lib/models/travel-plan";
 import {
@@ -114,6 +115,41 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
                 url: { type: "string" },
                 snippet: { type: ["string", "null"] },
               },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["message", "option"],
+  properties: {
+    message: { type: "string" },
+    option: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "title", "category", "whyItMatches", "bestForDates", "reviewSummary", "sourceLinks"],
+      properties: {
+        id: { type: "string" },
+        title: { type: "string" },
+        category: { type: "string", enum: [...RESEARCH_CATEGORIES] },
+        whyItMatches: { type: "string" },
+        bestForDates: { type: "string" },
+        reviewSummary: { type: "string" },
+        sourceLinks: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "url", "snippet"],
+            properties: {
+              title: { type: "string" },
+              url: { type: "string" },
+              snippet: { type: ["string", "null"] },
             },
           },
         },
@@ -1279,8 +1315,10 @@ class LLMClient {
 
   async generateInitialResearchBrief({
     tripInfo,
+    depth = "fast",
   }: {
     tripInfo: TripInfo;
+    depth?: "fast" | "deep";
   }): Promise<{
     success: boolean;
     message: string;
@@ -1291,6 +1329,25 @@ class LLMClient {
     });
 
     try {
+      if (depth === "fast") {
+        const completion = await this.openai.chat.completions.create({
+          messages,
+          model: this.model,
+          temperature: this.temperature,
+          response_format: { type: "json_object" },
+        });
+        const parsed = this._parseJsonResponse(completion);
+        const normalizedBrief = this._normalizeTripResearchBrief(parsed.tripResearchBrief);
+
+        return {
+          success: true,
+          message:
+            (typeof parsed.message === "string" && parsed.message) ||
+            "I prepared an initial research brief you can refine.",
+          tripResearchBrief: normalizedBrief,
+        };
+      }
+
       const response = await this._createResearchResponseWithWebSearch({
         messages,
         searchContextSize: "high",
@@ -1372,6 +1429,134 @@ class LLMClient {
       return {
         success: false,
         message: "Sorry, I couldn't update the research brief. Please try again.",
+        tripResearchBrief: null,
+      };
+    }
+  }
+
+  async deepResearchOption({
+    tripInfo,
+    option,
+  }: {
+    tripInfo: TripInfo;
+    option: ResearchOption;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    option: ResearchOption | null;
+  }> {
+    const input = `Deepen research for exactly one travel option using up-to-date web sources.
+
+Trip context:
+Destination: ${tripInfo.destination}
+Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
+Duration: ${tripInfo.durationDays} days
+Preferences: ${(tripInfo.preferences || []).join(", ") || "General tourism"}
+Activity level: ${tripInfo.activityLevel}
+Budget: ${tripInfo.budget || "Not specified"}
+
+Current option (preserve id and title):
+${JSON.stringify(option, null, 2)}
+
+Return one improved option with stronger evidence and date fit.`;
+
+    try {
+      const response = await this.openai.responses.create({
+        model: this.model,
+        input,
+        temperature: this.temperature,
+        tools: [{ type: "web_search_preview", search_context_size: "high" }],
+        tool_choice: "auto",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "single_trip_research_option_response",
+            strict: true,
+            schema: SINGLE_RESEARCH_OPTION_JSON_SCHEMA,
+          },
+        },
+      });
+
+      const raw = this._parseResearchResponseJson(response);
+      const normalized = this._normalizeTripResearchBrief({
+        summary: "",
+        dateNotes: [],
+        assumptions: [],
+        openQuestions: [],
+        popularOptions: [raw.option],
+      });
+      const baseOption = normalized.popularOptions[0];
+      if (!baseOption) {
+        return {
+          success: false,
+          message: "I couldn't deepen that option right now. Please try again.",
+          option: null,
+        };
+      }
+
+      const citations = this._extractUrlCitationsFromResponse(response);
+      const withLinks = this._mergeCitationLinksIntoBrief({
+        brief: {
+          summary: "",
+          dateNotes: [],
+          assumptions: [],
+          openQuestions: [],
+          popularOptions: [baseOption],
+        },
+        citations,
+      });
+      const withPhotos = await this._enrichResearchBriefWithPlacePhotos({
+        brief: withLinks,
+        destination: tripInfo.destination,
+      });
+
+      const enriched = withPhotos.popularOptions[0] || baseOption;
+
+      return {
+        success: true,
+        message:
+          (typeof raw.message === "string" && raw.message.trim()) ||
+          `I ran deeper research on ${option.title}.`,
+        option: {
+          ...enriched,
+          id: option.id,
+          title: option.title,
+          category: option.category,
+        },
+      };
+    } catch (error) {
+      console.error("Error in deepResearchOption:", error);
+      return {
+        success: false,
+        message: "Sorry, I couldn't run deep research for that option. Please try again.",
+        option: null,
+      };
+    }
+  }
+
+  async enrichResearchBriefPhotos({
+    tripInfo,
+    brief,
+  }: {
+    tripInfo: TripInfo;
+    brief: TripResearchBrief;
+  }): Promise<{
+    success: boolean;
+    tripResearchBrief: TripResearchBrief | null;
+  }> {
+    try {
+      const enrichedBrief = await this._enrichResearchBriefWithPlacePhotos({
+        brief,
+        destination: tripInfo.destination,
+      });
+      return {
+        success: true,
+        tripResearchBrief: enrichedBrief,
+      };
+    } catch (error) {
+      console.error("Error in enrichResearchBriefPhotos:", error);
+      return {
+        success: false,
         tripResearchBrief: null,
       };
     }

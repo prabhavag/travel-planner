@@ -77,6 +77,7 @@ export interface SessionResponse {
   restaurantSuggestions?: RestaurantSuggestion[];
   selectedRestaurantIds?: string[];
   wantsRestaurants?: boolean;
+  deepResearchedOptionIds?: string[];
 }
 
 export interface TripInfo {
@@ -320,10 +321,15 @@ export async function suggestMealsNearby(
   });
 }
 
-export async function generateResearchBrief(sessionId: string): Promise<SessionResponse> {
+export type ResearchDepth = "fast" | "deep";
+
+export async function generateResearchBrief(
+  sessionId: string,
+  depth: ResearchDepth = "fast"
+): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/generate-research-brief`, {
     method: "POST",
-    body: JSON.stringify({ sessionId }),
+    body: JSON.stringify({ sessionId, depth }),
   });
 }
 
@@ -334,6 +340,30 @@ export async function confirmResearchBrief(
   return fetchJson(`${BASE_URL}/confirm-research-brief`, {
     method: "POST",
     body: JSON.stringify({ sessionId, researchOptionSelections }),
+  });
+}
+
+export async function deepResearchOption(
+  sessionId: string,
+  optionId: string
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/deep-research-option`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, optionId }),
+  });
+}
+
+export async function deepResearchSelectedOptions(sessionId: string): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/deep-research-selected`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+export async function enrichResearchPhotos(sessionId: string): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/enrich-research-photos`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
   });
 }
 

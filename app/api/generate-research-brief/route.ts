@@ -5,7 +5,7 @@ import { mergeResearchBriefAndSelections } from "@/lib/services/card-merging";
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId } = await request.json();
+    const { sessionId, depth } = await request.json();
 
     if (!sessionId) {
       return NextResponse.json(
@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
     const llmClient = getLLMClient();
     const result = await llmClient.generateInitialResearchBrief({
       tripInfo: session.tripInfo,
+      depth: depth === "deep" ? "deep" : "fast",
     });
 
     if (!result.success || !result.tripResearchBrief) {
