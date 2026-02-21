@@ -861,61 +861,6 @@ export default function PlannerPage() {
     );
   };
 
-  // Render action button
-  const renderActionButton = () => {
-    switch (workflowState) {
-      case WORKFLOW_STATES.INFO_GATHERING:
-        return canProceed ? (
-          <Button onClick={handleGenerateResearchBrief} disabled={loading} className="w-full mt-4">
-            {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Start Planning Places
-          </Button>
-        ) : null;
-
-      case WORKFLOW_STATES.INITIAL_RESEARCH:
-        return (
-          <div className="flex justify-end mt-4">
-            <Button
-              onClick={handleProceedFromResearch}
-              disabled={loading || hasUnresolvedAssumptionConflicts}
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-              {hasUnresolvedAssumptionConflicts ? "Resolve Assumptions to Continue" : "Proceed to organizing your trip"}
-              {!hasUnresolvedAssumptionConflicts && <ChevronRight className="w-4 h-4 ml-1" />}
-            </Button>
-          </div>
-        );
-
-      case WORKFLOW_STATES.DAY_ITINERARY:
-        return (
-          <div className="flex gap-2 mt-4">
-            <Button onClick={handleGetRestaurants} disabled={loading} className="flex-1">
-              {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-              Add Restaurants
-            </Button>
-            <Button onClick={handleSkipRestaurants} disabled={loading} variant="outline" className="flex-1">
-              Skip to Review
-            </Button>
-          </div>
-        );
-
-      case WORKFLOW_STATES.REVIEW:
-        return (
-          <Button
-            onClick={handleFinalize}
-            disabled={loading}
-            className="w-full mt-4 bg-green-600 hover:bg-green-700"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Finalize Itinerary
-          </Button>
-        );
-
-      default:
-        return null;
-    }
-  };
-
   if (initializing) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-100">
@@ -1017,7 +962,7 @@ export default function PlannerPage() {
 
           {/* AI Travel Companion */}
           <div
-            className={`absolute bottom-4 left-4 right-4 lg:left-auto lg:right-4 lg:w-[380px] ${isChatMinimized ? "h-[56px]" : "h-[40%] min-h-[260px] max-h-[420px]"
+            className={`absolute bottom-4 left-4 right-4 lg:left-auto lg:right-4 lg:w-[380px] ${isChatMinimized ? "h-[56px]" : "h-[43%] min-h-[280px] max-h-[440px]"
               } bg-white/95 backdrop-blur border border-gray-200 shadow-xl rounded-2xl flex flex-col overflow-hidden transition-all duration-300`}
           >
             <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -1108,7 +1053,6 @@ export default function PlannerPage() {
                       </div>
                     )}
 
-                  {renderActionButton()}
                 </ScrollArea>
 
                 <div className="p-3 border-t border-gray-100 flex gap-2 flex-shrink-0">
