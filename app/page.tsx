@@ -18,7 +18,6 @@ import {
   finalize,
   generateResearchBrief,
   confirmResearchBrief,
-  answerResearchQuestions,
   suggestTopActivities,
   selectActivities,
   groupDays,
@@ -403,41 +402,6 @@ export default function PlannerPage() {
     }
   };
 
-  const handleAnswerResearchQuestions = async (answers: Record<string, string>) => {
-    if (!sessionId) return;
-    setLoading(true);
-    try {
-      const response = await answerResearchQuestions(sessionId, answers);
-      if (response.success && response.tripInfo) {
-        setTripInfo(response.tripInfo);
-
-        // Dismiss the questions that were answered
-        if (tripResearchBrief) {
-          const answeredKeys = Object.keys(answers);
-          setTripResearchBrief({
-            ...tripResearchBrief,
-            openQuestions: tripResearchBrief.openQuestions.filter(
-              (q) => !answeredKeys.includes(q)
-            ),
-          });
-        }
-      }
-    } catch (error) {
-      console.error("Answer research questions error:", error);
-      alert("Failed to save answers. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDismissResearchQuestion = (question: string) => {
-    if (!tripResearchBrief) return;
-    setTripResearchBrief({
-      ...tripResearchBrief,
-      openQuestions: tripResearchBrief.openQuestions.filter((q) => q !== question),
-    });
-  };
-
   const handleResearchSelectionChange = (optionId: string, preference: ResearchOptionPreference) => {
     setResearchOptionSelections((prev) => ({
       ...prev,
@@ -805,8 +769,6 @@ export default function PlannerPage() {
                     hasUnresolvedAssumptionConflicts={hasUnresolvedAssumptionConflicts}
                     onRegenerate={handleGenerateResearchBrief}
                     onProceed={handleProceedFromResearch}
-                    onAnswerQuestions={handleAnswerResearchQuestions}
-                    onDismissQuestion={handleDismissResearchQuestion}
                     isLoading={loading}
                   />
                 );
