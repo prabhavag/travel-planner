@@ -95,6 +95,17 @@ interface ChatMessage {
   content: string;
 }
 
+const EMPTY_TRIP_INFO: TripInfo = {
+  destination: null,
+  startDate: null,
+  endDate: null,
+  durationDays: null,
+  preferences: [],
+  activityLevel: "moderate",
+  travelers: 1,
+  budget: null,
+};
+
 const normalizeActivityValue = (value: string) =>
   value
     .toLowerCase()
@@ -144,7 +155,7 @@ export default function PlannerPage() {
   const [workflowState, setWorkflowState] = useState(WORKFLOW_STATES.INFO_GATHERING);
 
   // Trip data
-  const [tripInfo, setTripInfo] = useState<TripInfo | null>(null);
+  const [tripInfo, setTripInfo] = useState<TripInfo>(EMPTY_TRIP_INFO);
   const [tripResearchBrief, setTripResearchBrief] = useState<TripResearchBrief | null>(null);
   const [researchOptionSelections, setResearchOptionSelections] = useState<Record<string, ResearchOptionPreference>>({});
 
@@ -168,6 +179,8 @@ export default function PlannerPage() {
   const [hoveredActivityId, setHoveredActivityId] = useState<string | null>(null);
   const [activeDay, setActiveDay] = useState<number | null>(1);
   const [isChatMinimized, setIsChatMinimized] = useState(false);
+  const [tripBasicsSaving, setTripBasicsSaving] = useState(false);
+  const [tripBasicsPreferencesInput, setTripBasicsPreferencesInput] = useState("");
 
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -219,6 +232,10 @@ export default function PlannerPage() {
     });
   }, [tripResearchBrief]);
 
+  useEffect(() => {
+    setTripBasicsPreferencesInput((tripInfo.preferences || []).join(", "));
+  }, [tripInfo.preferences]);
+
   const initializeSession = async () => {
     try {
       const response = await startSession();
@@ -226,6 +243,7 @@ export default function PlannerPage() {
         setSessionId(response.sessionId);
         setWorkflowState(response.workflowState);
         setChatHistory([{ role: "assistant", content: response.message }]);
+        setTripInfo(response.tripInfo || EMPTY_TRIP_INFO);
       }
     } catch (error) {
       console.error("Failed to start session:", error);
@@ -639,7 +657,7 @@ export default function PlannerPage() {
 
   // Update preferences
   const handleUpdatePreferences = async (newPreferences: string[]) => {
-    if (!sessionId || !tripInfo) return;
+    if (!sessionId) return;
 
     // Optimistic update
     const updatedTripInfo = { ...tripInfo, preferences: newPreferences };
@@ -657,6 +675,56 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const parsePreferencesFromInput = (value: string) =>
+    value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+  const persistTripInfoUpdate = async (updates: Partial<TripInfo>) => {
+    if (!sessionId) return true;
+    setTripBasicsSaving(true);
+    try {
+      const response = await updateTripInfo(sessionId, updates);
+      if (response.success && response.tripInfo) {
+        setTripInfo(response.tripInfo);
+      }
+      return true;
+    } catch (error) {
+      console.error("Failed to update trip basics:", error);
+      return false;
+    } finally {
+      setTripBasicsSaving(false);
+    }
+  };
+
+  const handleTripFieldBlur = async (updates: Partial<TripInfo>) => {
+    await persistTripInfoUpdate(updates);
+  };
+
+  const handleProceedFromTripBasics = async () => {
+    if (!sessionId) return;
+    const hasRequiredBasics =
+      Boolean(tripInfo.destination?.trim()) && Boolean(tripInfo.startDate) && Boolean(tripInfo.endDate);
+    if (!hasRequiredBasics) return;
+
+    const synced = await persistTripInfoUpdate({
+      destination: tripInfo.destination,
+      startDate: tripInfo.startDate,
+      endDate: tripInfo.endDate,
+      durationDays: tripInfo.durationDays,
+      travelers: tripInfo.travelers,
+      activityLevel: tripInfo.activityLevel,
+      budget: tripInfo.budget,
+      preferences: tripInfo.preferences,
+    });
+    if (!synced) {
+      alert("Could not save trip basics. Please try again.");
+      return;
+    }
+    await handleGenerateResearchBrief();
   };
 
   const updateMaxReachedState = (state: string) => {
@@ -794,6 +862,181 @@ export default function PlannerPage() {
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {(() => {
             switch (workflowState) {
+              case WORKFLOW_STATES.INFO_GATHERING: {
+                const hasRequiredBasics =
+                  Boolean(tripInfo.destination?.trim()) && Boolean(tripInfo.startDate) && Boolean(tripInfo.endDate);
+
+                return (
+                  <div className="p-4">
+                    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                      <div className="mb-4">
+                        <h2 className="text-lg font-semibold text-gray-900">Trip Basics</h2>
+                        <p className="mt-1 text-sm text-gray-600">
+                          Fill these details here or share them in chat. Both stay in sync.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div className="sm:col-span-2">
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            Destination
+                          </label>
+                          <Input
+                            value={tripInfo.destination || ""}
+                            onChange={(e) => setTripInfo((prev) => ({ ...prev, destination: e.target.value || null }))}
+                            onBlur={(e) => handleTripFieldBlur({ destination: e.target.value.trim() || null })}
+                            placeholder="e.g. Maui"
+                            disabled={loading || tripBasicsSaving}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            Start Date
+                          </label>
+                          <Input
+                            type="date"
+                            value={tripInfo.startDate || ""}
+                            onChange={(e) => setTripInfo((prev) => ({ ...prev, startDate: e.target.value || null }))}
+                            onBlur={(e) => handleTripFieldBlur({ startDate: e.target.value || null })}
+                            disabled={loading || tripBasicsSaving}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            End Date
+                          </label>
+                          <Input
+                            type="date"
+                            value={tripInfo.endDate || ""}
+                            onChange={(e) => setTripInfo((prev) => ({ ...prev, endDate: e.target.value || null }))}
+                            onBlur={(e) => handleTripFieldBlur({ endDate: e.target.value || null })}
+                            disabled={loading || tripBasicsSaving}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            Duration (Days)
+                          </label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={tripInfo.durationDays ?? ""}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setTripInfo((prev) => ({
+                                ...prev,
+                                durationDays: value ? Number(value) : null,
+                              }));
+                            }}
+                            onBlur={(e) => {
+                              const value = e.target.value;
+                              handleTripFieldBlur({ durationDays: value ? Number(value) : null });
+                            }}
+                            placeholder="e.g. 5"
+                            disabled={loading || tripBasicsSaving}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            Travelers
+                          </label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={tripInfo.travelers ?? 1}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setTripInfo((prev) => ({
+                                ...prev,
+                                travelers: value ? Number(value) : 1,
+                              }));
+                            }}
+                            onBlur={(e) => {
+                              const value = e.target.value;
+                              handleTripFieldBlur({ travelers: value ? Number(value) : 1 });
+                            }}
+                            disabled={loading || tripBasicsSaving}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            Activity Level
+                          </label>
+                          <select
+                            value={tripInfo.activityLevel || "moderate"}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setTripInfo((prev) => ({ ...prev, activityLevel: value }));
+                              handleTripFieldBlur({ activityLevel: value });
+                            }}
+                            disabled={loading || tripBasicsSaving}
+                            className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
+                          >
+                            <option value="relaxed">Relaxed</option>
+                            <option value="moderate">Moderate</option>
+                            <option value="active">Active</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            Budget
+                          </label>
+                          <Input
+                            value={tripInfo.budget || ""}
+                            onChange={(e) => setTripInfo((prev) => ({ ...prev, budget: e.target.value || null }))}
+                            onBlur={(e) => handleTripFieldBlur({ budget: e.target.value.trim() || null })}
+                            placeholder="e.g. mid-range"
+                            disabled={loading || tripBasicsSaving}
+                          />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            Interests & Preferences
+                          </label>
+                          <Input
+                            value={tripBasicsPreferencesInput}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setTripBasicsPreferencesInput(value);
+                            }}
+                            onBlur={(e) => {
+                              const parsedPreferences = parsePreferencesFromInput(e.target.value);
+                              setTripInfo((prev) => ({
+                                ...prev,
+                                preferences: parsedPreferences,
+                              }));
+                              handleTripFieldBlur({ preferences: parsedPreferences });
+                            }}
+                            placeholder="snorkeling, hiking, local food"
+                            disabled={loading || tripBasicsSaving}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-5 flex items-center justify-between gap-3">
+                        <p className="text-xs text-gray-500">
+                          Required: destination, start date, end date
+                        </p>
+                        <Button
+                          onClick={handleProceedFromTripBasics}
+                          disabled={!hasRequiredBasics || loading || tripBasicsSaving}
+                        >
+                          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                          Proceed to Next Stage
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
               case WORKFLOW_STATES.INITIAL_RESEARCH:
                 return (
                   <InitialResearchView
