@@ -4,7 +4,7 @@ import { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, Loader2, Search } from "lucide-react";
+import { ExternalLink, Loader2, Search, ChevronDown, ChevronUp } from "lucide-react";
 import type { ResearchOption, ResearchOptionPreference } from "@/lib/api-client";
 
 interface ResearchOptionCardProps {
@@ -17,6 +17,8 @@ interface ResearchOptionCardProps {
   lastDeepResearchAt?: string;
   readOnly?: boolean;
   extraContent?: ReactNode;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 const categoryClassMap: Record<string, string> = {
@@ -39,6 +41,8 @@ export function ResearchOptionCard({
   lastDeepResearchAt,
   readOnly = false,
   extraContent,
+  collapsed = false,
+  onToggleCollapse,
 }: ResearchOptionCardProps) {
   const formattedLastDeepResearchAt = lastDeepResearchAt
     ? new Date(lastDeepResearchAt).toLocaleString([], {
@@ -53,12 +57,27 @@ export function ResearchOptionCard({
     <Card className="border-gray-200">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-base">{option.title}</CardTitle>
-          <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>
-            {option.category}
-          </Badge>
+          <CardTitle className="text-base flex-1">{option.title}</CardTitle>
+          <div className="flex items-center gap-1">
+            <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>
+              {option.category}
+            </Badge>
+            {onToggleCollapse && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onToggleCollapse}
+                className="h-6 w-6 p-0 text-gray-400 hover:text-primary"
+                title={collapsed ? "Expand card" : "Collapse card"}
+              >
+                {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
+      {!collapsed && (
       <CardContent className="space-y-3">
         <div>
           <p className="text-xs text-gray-500 mb-1">Why it matches</p>
@@ -154,6 +173,7 @@ export function ResearchOptionCard({
         )}
         {extraContent}
       </CardContent>
+      )}
     </Card>
   );
 }

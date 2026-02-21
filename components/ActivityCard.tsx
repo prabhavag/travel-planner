@@ -4,7 +4,7 @@ import { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, Clock, Star, MapPin, ExternalLink } from "lucide-react";
+import { Check, Clock, Star, MapPin, ExternalLink, ChevronDown, ChevronUp } from "lucide-react";
 import type { SuggestedActivity } from "@/lib/api-client";
 import { formatCost } from "@/lib/utils/currency";
 
@@ -16,6 +16,8 @@ interface ActivityCardProps {
   onClick?: () => void;
   onHoverActivity?: (id: string | null) => void;
   extraContent?: ReactNode;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export function ActivityCard({
@@ -26,6 +28,8 @@ export function ActivityCard({
   onClick,
   onHoverActivity,
   extraContent,
+  collapsed = false,
+  onToggleCollapse,
 }: ActivityCardProps) {
   const normalize = (value: string) =>
     value
@@ -85,6 +89,20 @@ export function ActivityCard({
             {activity.name}
           </CardTitle>
           <div className="flex items-center gap-1 flex-shrink-0">
+            {onToggleCollapse && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCollapse();
+                }}
+                className="h-6 w-6 p-0 text-gray-400 hover:text-primary"
+                title={collapsed ? "Expand card" : "Collapse card"}
+              >
+                {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -125,6 +143,7 @@ export function ActivityCard({
           })}
         </div>
       </CardHeader>
+      {!collapsed && (
       <CardContent className="pt-0">
         <p className="text-sm text-gray-600 line-clamp-3 mb-3">{activity.description}</p>
         <div className="flex flex-wrap gap-3 text-sm text-gray-500">
@@ -179,6 +198,7 @@ export function ActivityCard({
         </div>
         {extraContent}
       </CardContent>
+      )}
     </Card>
   );
 }
