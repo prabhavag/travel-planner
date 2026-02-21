@@ -206,7 +206,7 @@ export function InitialResearchView({
             title="Uses current suggestions as context to generate better/new ones"
           >
             <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-            Refine suggestions
+            Update or get more suggestions
           </Button>
           <Button size="sm" onClick={onProceed} disabled={isLoading || hasUnresolvedAssumptionConflicts}>
             Proceed to organizing your trip
