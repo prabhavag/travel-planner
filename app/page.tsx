@@ -60,6 +60,36 @@ const WORKFLOW_ORDER = [
   WORKFLOW_STATES.FINALIZE,
 ];
 
+const UI_STAGE_LABELS = [
+  "Trip Basics",
+  "Select Your Activities",
+  "Organize Your Days",
+  "Accommodation Suggestions",
+  "Add Hotels & Flights",
+  "Final Review",
+];
+
+const WORKFLOW_TO_UI_STAGE: Record<string, number> = {
+  [WORKFLOW_STATES.INFO_GATHERING]: 0,
+  [WORKFLOW_STATES.INITIAL_RESEARCH]: 1,
+  [WORKFLOW_STATES.SUGGEST_ACTIVITIES]: 1,
+  [WORKFLOW_STATES.SELECT_ACTIVITIES]: 1,
+  [WORKFLOW_STATES.GROUP_DAYS]: 2,
+  [WORKFLOW_STATES.DAY_ITINERARY]: 2,
+  [WORKFLOW_STATES.MEAL_PREFERENCES]: 3,
+  [WORKFLOW_STATES.REVIEW]: 4,
+  [WORKFLOW_STATES.FINALIZE]: 5,
+};
+
+const UI_STAGE_TO_WORKFLOW: Record<number, string> = {
+  0: WORKFLOW_STATES.INFO_GATHERING,
+  1: WORKFLOW_STATES.INITIAL_RESEARCH,
+  2: WORKFLOW_STATES.GROUP_DAYS,
+  3: WORKFLOW_STATES.MEAL_PREFERENCES,
+  4: WORKFLOW_STATES.REVIEW,
+  5: WORKFLOW_STATES.FINALIZE,
+};
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -683,30 +713,36 @@ export default function PlannerPage() {
     }
   };
 
+  const getCurrentUiStageIndex = () => {
+    return WORKFLOW_TO_UI_STAGE[workflowState] ?? 0;
+  };
+
+  const getMaxReachedUiStageIndex = () => {
+    return WORKFLOW_TO_UI_STAGE[maxReachedState] ?? 0;
+  };
+
+  const handleUiStageClick = async (stageIndex: number) => {
+    if (!sessionId || loading) return;
+    const maxStage = getMaxReachedUiStageIndex();
+    if (stageIndex > maxStage) return;
+
+    const targetState = UI_STAGE_TO_WORKFLOW[stageIndex];
+    if (!targetState || targetState === workflowState) return;
+
+    setLoading(true);
+    try {
+      await updateWorkflowState(sessionId, targetState);
+      setWorkflowState(targetState);
+    } catch (error) {
+      console.error("Jump to stage error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Get state label
   const getStateLabel = () => {
-    switch (workflowState) {
-      case WORKFLOW_STATES.INFO_GATHERING:
-        return "Gathering Info";
-      case WORKFLOW_STATES.INITIAL_RESEARCH:
-        return "Planning Places";
-      case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
-        return "Select Activities";
-      case WORKFLOW_STATES.SELECT_ACTIVITIES:
-        return "Select Activities";
-      case WORKFLOW_STATES.GROUP_DAYS:
-        return "Organize Days";
-      case WORKFLOW_STATES.DAY_ITINERARY:
-        return "Your Itinerary";
-      case WORKFLOW_STATES.MEAL_PREFERENCES:
-        return "Add Restaurants";
-      case WORKFLOW_STATES.REVIEW:
-        return "Review";
-      case WORKFLOW_STATES.FINALIZE:
-        return "Finalized";
-      default:
-        return "";
-    }
+    return UI_STAGE_LABELS[getCurrentUiStageIndex()] || "";
   };
 
   // Render left panel content based on state
@@ -895,7 +931,56 @@ export default function PlannerPage() {
 
   return (
     <div className="h-screen overflow-hidden bg-gray-100">
-      <div className="flex h-full flex-col lg:flex-row">
+      <div className="flex h-full flex-col">
+        <div className="border-b border-gray-200 bg-white px-4 py-2">
+          <div className="overflow-x-auto">
+            <div className="relative min-w-[760px] px-2 pb-0.5 pt-1">
+              <div className="absolute left-6 right-6 top-5 h-px bg-gray-300" />
+              <div
+                className="absolute left-6 top-5 h-px bg-blue-500 transition-all"
+                style={{
+                  width: `calc((100% - 3rem) * ${getCurrentUiStageIndex() / (UI_STAGE_LABELS.length - 1)})`,
+                }}
+              />
+              <div className="relative grid grid-cols-6">
+                {UI_STAGE_LABELS.map((label, index) => {
+                  const current = getCurrentUiStageIndex();
+                  const maxReached = getMaxReachedUiStageIndex();
+                  const isCompleted = index < current;
+                  const isCurrent = index === current;
+                  const isClickable = index <= maxReached && !loading;
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => handleUiStageClick(index)}
+                      disabled={!isClickable}
+                      className={`flex flex-col items-center gap-2 px-1 text-center ${isClickable ? "cursor-pointer" : "cursor-not-allowed"}`}
+                      title={isClickable ? `Go to ${label}` : `Complete earlier stages to unlock ${label}`}
+                    >
+                      <span
+                        className={`z-10 flex h-6 w-6 items-center justify-center rounded-full border text-xs font-semibold transition-colors ${
+                          isCurrent
+                            ? "border-blue-600 bg-blue-600 text-white"
+                            : isCompleted
+                              ? "border-emerald-600 bg-emerald-600 text-white"
+                              : "border-gray-300 bg-white text-gray-500"
+                        }`}
+                      >
+                        {isCompleted ? "✓" : index + 1}
+                      </span>
+                      <span className={`text-[11px] font-medium leading-tight ${isCurrent ? "text-blue-700" : "text-gray-600"}`}>
+                        {label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* Left Panel: Itinerary / Workflow Content */}
         <div className="w-full lg:w-[55%] h-full min-h-0 flex flex-col bg-gray-100">
           <div className="flex-1 min-h-0 bg-gray-100">
@@ -943,7 +1028,6 @@ export default function PlannerPage() {
                 </h1>
               </div>
               <div className="flex items-center gap-2">
-                <Badge className="bg-blue-500">{getStateLabel()}</Badge>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1057,6 +1141,7 @@ export default function PlannerPage() {
             ) : null}
           </div>
         </div>
+      </div>
       </div>
     </div>
   );
