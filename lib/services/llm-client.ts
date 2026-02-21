@@ -162,6 +162,69 @@ class LLMClient {
     };
   }
 
+  private _extractNextJsonObject(buffer: string): { json: string; rest: string } | null {
+    const start = buffer.indexOf("{");
+    if (start === -1) {
+      return null;
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = start; i < buffer.length; i++) {
+      const char = buffer[i];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+
+      if (char === "{") {
+        depth += 1;
+      } else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          const json = buffer.slice(start, i + 1);
+          const rest = buffer.slice(i + 1);
+          return { json, rest };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private _coerceSuggestedActivityId(
+    rawId: unknown,
+    seenIds: Set<string>,
+    nextIndex: number
+  ): string {
+    const candidate = typeof rawId === "string" ? rawId.trim() : "";
+    if (candidate && !seenIds.has(candidate)) {
+      return candidate;
+    }
+
+    let index = Math.max(1, nextIndex);
+    let fallback = `act${index}`;
+    while (seenIds.has(fallback)) {
+      index += 1;
+      fallback = `act${index}`;
+    }
+    return fallback;
+  }
+
   private _isWebSearchUnsupportedError(error: unknown): boolean {
     const apiLike = error as { status?: number; param?: string; message?: string };
     const message = String(apiLike?.message || "");
@@ -783,46 +846,92 @@ class LLMClient {
 
       let buffer = "";
       let messageYielded = false;
+      const seenActivityIds = new Set<string>();
 
       for await (const chunk of stream) {
         const content = chunk.choices[0]?.delta?.content || "";
         buffer += content;
 
-        // Process complete lines as they arrive
-        while (buffer.includes("\n")) {
-          const newlineIndex = buffer.indexOf("\n");
-          const line = buffer.slice(0, newlineIndex).trim();
-          buffer = buffer.slice(newlineIndex + 1);
-
-          if (line) {
-            try {
-              const parsed = JSON.parse(line);
-              if (!messageYielded && parsed.message && !parsed.id) {
-                // First line is the message
-                yield { type: "message", message: parsed.message };
-                messageYielded = true;
-              } else if (parsed.id) {
-                // Activity line
-                yield { type: "activity", activity: this._normalizeSuggestedActivity(parsed as SuggestedActivity) };
+        let extracted = this._extractNextJsonObject(buffer);
+        while (extracted) {
+          const current = extracted;
+          try {
+            const parsed = JSON.parse(current.json) as Record<string, unknown>;
+            if (
+              !messageYielded &&
+              typeof parsed.message === "string" &&
+              !("name" in parsed)
+            ) {
+              yield { type: "message", message: parsed.message };
+              messageYielded = true;
+            } else if (typeof parsed.name === "string" && typeof parsed.type === "string") {
+              if (seenActivityIds.size >= 10) {
+                buffer = current.rest;
+                extracted = this._extractNextJsonObject(buffer);
+                continue;
               }
-            } catch {
-              // Not valid JSON yet, might be partial - skip this line
-              console.warn("Skipping invalid JSON line:", line);
+              const coercedId = this._coerceSuggestedActivityId(
+                parsed.id,
+                seenActivityIds,
+                seenActivityIds.size + 1
+              );
+              seenActivityIds.add(coercedId);
+
+              yield {
+                type: "activity",
+                activity: this._normalizeSuggestedActivity({
+                  ...(parsed as unknown as SuggestedActivity),
+                  id: coercedId,
+                }),
+              };
             }
+          } catch {
+            console.warn("Skipping invalid JSON object:", current.json);
           }
+
+          buffer = current.rest;
+          extracted = this._extractNextJsonObject(buffer);
         }
       }
 
-      // Process any remaining content in buffer
-      if (buffer.trim()) {
+      // Final flush for any complete object left in the buffer
+      let extracted = this._extractNextJsonObject(buffer);
+      while (extracted) {
+        const current = extracted;
         try {
-          const parsed = JSON.parse(buffer.trim());
-          if (parsed.id) {
-            yield { type: "activity", activity: this._normalizeSuggestedActivity(parsed as SuggestedActivity) };
+          const parsed = JSON.parse(current.json) as Record<string, unknown>;
+          if (
+            !messageYielded &&
+            typeof parsed.message === "string" &&
+            !("name" in parsed)
+          ) {
+            yield { type: "message", message: parsed.message };
+            messageYielded = true;
+          } else if (typeof parsed.name === "string" && typeof parsed.type === "string") {
+            if (seenActivityIds.size >= 10) {
+              extracted = this._extractNextJsonObject(current.rest);
+              continue;
+            }
+            const coercedId = this._coerceSuggestedActivityId(
+              parsed.id,
+              seenActivityIds,
+              seenActivityIds.size + 1
+            );
+            seenActivityIds.add(coercedId);
+
+            yield {
+              type: "activity",
+              activity: this._normalizeSuggestedActivity({
+                ...(parsed as unknown as SuggestedActivity),
+                id: coercedId,
+              }),
+            };
           }
         } catch {
-          console.warn("Skipping final invalid JSON:", buffer);
+          console.warn("Skipping final invalid JSON object:", current.json);
         }
+
+        extracted = this._extractNextJsonObject(current.rest);
       }
 
       yield { type: "complete" };
