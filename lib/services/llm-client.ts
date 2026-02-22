@@ -683,6 +683,8 @@ class LLMClient {
           return {
             ...option,
             photoUrls: photoUrls.slice(0, 3),
+            coordinates: places[0]?.location || null,
+            place_id: placeId,
           };
         } catch {
           return {
@@ -724,6 +726,9 @@ class LLMClient {
               .map((url) => url.trim())
               .slice(0, 3)
             : [];
+          const coordinatesRaw = (opt.coordinates || null) as Record<string, unknown> | null;
+          const lat = coordinatesRaw && typeof coordinatesRaw.lat === "number" ? coordinatesRaw.lat : null;
+          const lng = coordinatesRaw && typeof coordinatesRaw.lng === "number" ? coordinatesRaw.lng : null;
 
           return {
             id: typeof opt.id === "string" && opt.id.trim() ? opt.id.trim() : `opt${index + 1}`,
@@ -738,6 +743,8 @@ class LLMClient {
             reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
             sourceLinks,
             photoUrls,
+            coordinates: lat != null && lng != null ? { lat, lng } : null,
+            place_id: typeof opt.place_id === "string" ? opt.place_id : null,
           };
         })
         .filter((option) => option.title.length > 0)

@@ -160,6 +160,7 @@ export default function PlannerPage() {
   const [tripInfo, setTripInfo] = useState<TripInfo>(EMPTY_TRIP_INFO);
   const [tripResearchBrief, setTripResearchBrief] = useState<TripResearchBrief | null>(null);
   const [researchOptionSelections, setResearchOptionSelections] = useState<Record<string, ResearchOptionPreference>>({});
+  const [researchMapFocusPreference, setResearchMapFocusPreference] = useState<"all" | "keep" | "maybe" | "reject">("all");
 
   // New activity-first flow state
   const [suggestedActivities, setSuggestedActivities] = useState<SuggestedActivity[]>([]);
@@ -256,7 +257,14 @@ export default function PlannerPage() {
   const triggerPhotoEnrichment = useCallback(async () => {
     if (!sessionId || !tripResearchBrief || photoEnrichmentInProgress) return;
     const missingIds = tripResearchBrief.popularOptions
-      .filter((option) => !option.photoUrls || option.photoUrls.length === 0)
+      .filter(
+        (option) =>
+          !option.photoUrls ||
+          option.photoUrls.length === 0 ||
+          !option.coordinates ||
+          typeof option.coordinates.lat !== "number" ||
+          typeof option.coordinates.lng !== "number"
+      )
       .map((option) => option.id)
       .sort();
     if (missingIds.length === 0) return;
@@ -1208,6 +1216,7 @@ export default function PlannerPage() {
                     lastDeepResearchAtByOptionId={lastDeepResearchAtByOptionId}
                     onProceed={handleProceedFromResearch}
                     canProceed={hasAnyKeptResearchOption}
+                    onStatusFocusChange={setResearchMapFocusPreference}
                     isLoading={loading}
                   />
                 );
@@ -1341,12 +1350,10 @@ export default function PlannerPage() {
           <div className="absolute inset-0">
             <MapComponent
               destination={tripInfo?.destination}
-              suggestedActivities={
-                workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES ||
-                  workflowState === WORKFLOW_STATES.SELECT_ACTIVITIES
-                  ? suggestedActivities
-                  : undefined
-              }
+              tripResearchBrief={tripResearchBrief}
+              researchOptionSelections={researchOptionSelections}
+              researchFocusPreference={researchMapFocusPreference}
+              suggestedActivities={suggestedActivities}
               selectedActivityIds={selectedActivityIds}
               groupedDays={
                 workflowState === WORKFLOW_STATES.GROUP_DAYS ||

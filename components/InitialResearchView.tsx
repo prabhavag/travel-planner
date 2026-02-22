@@ -22,6 +22,7 @@ interface InitialResearchViewProps {
   lastDeepResearchAtByOptionId?: Record<string, string>;
   onProceed: () => void;
   canProceed?: boolean;
+  onStatusFocusChange?: (status: "all" | "keep" | "maybe" | "reject") => void;
   isLoading?: boolean;
 }
 
@@ -39,6 +40,7 @@ export function InitialResearchView({
   lastDeepResearchAtByOptionId = {},
   onProceed,
   canProceed = true,
+  onStatusFocusChange,
   isLoading = false,
 }: InitialResearchViewProps) {
   const [showAssumptions, setShowAssumptions] = useState(false);
@@ -109,6 +111,20 @@ export function InitialResearchView({
     if (status === "Postponed") return selection === "maybe";
     if (status === "Rejected") return selection === "reject";
     return true; // "All" or unknown
+  };
+
+  const setStatusAndFocus = (status: string) => {
+    setActiveStatus(status);
+    if (!onStatusFocusChange) return;
+    if (status === "Selected") {
+      onStatusFocusChange("keep");
+    } else if (status === "Postponed") {
+      onStatusFocusChange("maybe");
+    } else if (status === "Rejected") {
+      onStatusFocusChange("reject");
+    } else {
+      onStatusFocusChange("all");
+    }
   };
 
   const matchesInterest = (option: ResearchOption, interest: string) => {
@@ -303,7 +319,7 @@ export function InitialResearchView({
         </div>
         <div className="flex flex-wrap gap-4 pt-2 items-center">
           <button
-            onClick={() => setActiveStatus("Selected")}
+            onClick={() => setStatusAndFocus("Selected")}
             disabled={statusCounts.Selected === 0}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Selected"
               ? "bg-emerald-50 border-emerald-500 text-emerald-800"
@@ -316,7 +332,7 @@ export function InitialResearchView({
             Selected {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Selected}
           </button>
           <button
-            onClick={() => setActiveStatus("Postponed")}
+            onClick={() => setStatusAndFocus("Postponed")}
             disabled={statusCounts.Postponed === 0}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Postponed"
               ? "bg-amber-50 border-amber-500 text-amber-800"
@@ -329,7 +345,7 @@ export function InitialResearchView({
             Postponed {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Postponed}
           </button>
           <button
-            onClick={() => setActiveStatus("Rejected")}
+            onClick={() => setStatusAndFocus("Rejected")}
             disabled={statusCounts.Rejected === 0}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Rejected"
               ? "bg-rose-50 border-rose-500 text-rose-800"
@@ -342,7 +358,7 @@ export function InitialResearchView({
             Rejected {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Rejected}
           </button>
           <button
-            onClick={() => setActiveStatus("Inbox")}
+            onClick={() => setStatusAndFocus("Inbox")}
             className={`ml-auto flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${activeStatus === "Inbox"
               ? "bg-blue-600 border-blue-700 text-white"
               : statusCounts.Inbox > 0

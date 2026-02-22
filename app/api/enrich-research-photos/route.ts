@@ -29,13 +29,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const needsPhotos = brief.popularOptions.some((option) => !option.photoUrls || option.photoUrls.length === 0);
-    if (!needsPhotos) {
+    const needsEnrichment = brief.popularOptions.some(
+      (option) =>
+        !option.photoUrls ||
+        option.photoUrls.length === 0 ||
+        !option.coordinates ||
+        typeof option.coordinates.lat !== "number" ||
+        typeof option.coordinates.lng !== "number"
+    );
+    if (!needsEnrichment) {
       return NextResponse.json({
         success: true,
         sessionId,
         workflowState: session.workflowState,
-        message: "Photos already available.",
+        message: "Research locations already enriched.",
         tripResearchBrief: brief,
       });
     }
@@ -61,7 +68,7 @@ export async function POST(request: NextRequest) {
       success: true,
       sessionId,
       workflowState: session.workflowState,
-      message: "Photos updated.",
+      message: "Research photos and locations updated.",
       tripResearchBrief: result.tripResearchBrief,
       researchOptionSelections: session.researchOptionSelections,
     });

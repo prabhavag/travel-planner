@@ -105,6 +105,8 @@ export interface ResearchOption {
   reviewSummary: string;
   sourceLinks: ResearchSource[];
   photoUrls?: string[];
+  coordinates?: { lat: number; lng: number } | null;
+  place_id?: string | null;
 }
 
 export type ResearchOptionPreference = "keep" | "maybe" | "reject";

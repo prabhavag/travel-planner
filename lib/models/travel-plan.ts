@@ -236,6 +236,8 @@ export const ResearchOptionSchema = z.object({
   reviewSummary: z.string(),
   sourceLinks: z.array(ResearchSourceSchema).default([]),
   photoUrls: z.array(z.string()).max(3).default([]),
+  coordinates: CoordinatesSchema.optional().nullable(),
+  place_id: z.string().optional().nullable(),
 });
 
 export type ResearchOption = z.infer<typeof ResearchOptionSchema>;

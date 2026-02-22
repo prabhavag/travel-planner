@@ -10,9 +10,14 @@ import {
   OverlayView,
 } from "@react-google-maps/api";
 import { getConfig } from "@/lib/api-client";
-import type { SuggestedActivity, GroupedDay } from "@/lib/api-client";
+import type {
+  SuggestedActivity,
+  GroupedDay,
+  TripResearchBrief,
+  ResearchOptionPreference,
+} from "@/lib/api-client";
 import { Loader2 } from "lucide-react";
-import { DAY_COLORS, getDayColor, SELECTED_COLOR, UNSELECTED_COLOR } from "@/lib/constants";
+import { getDayColor, SELECTED_COLOR, UNSELECTED_COLOR } from "@/lib/constants";
 
 const containerStyle = {
   width: "100%",
@@ -50,14 +55,19 @@ interface Location {
   day: number;
   desc: string;
   isSelected?: boolean;
+  preference?: ResearchOptionPreference;
   activityId?: string;
   photoUrl?: string | null;
+  mode: "research" | "suggested" | "grouped" | "legacy";
 }
 
 interface MapComponentProps {
   itinerary?: DayItinerary[];
   destination?: string | null;
   // New activity-first flow props
+  tripResearchBrief?: TripResearchBrief | null;
+  researchOptionSelections?: Record<string, ResearchOptionPreference>;
+  researchFocusPreference?: "all" | "keep" | "maybe" | "reject";
   suggestedActivities?: SuggestedActivity[];
   selectedActivityIds?: string[];
   groupedDays?: GroupedDay[];
@@ -71,6 +81,9 @@ const libraries: ("places")[] = ["places"];
 export default function MapComponent({
   itinerary,
   destination,
+  tripResearchBrief,
+  researchOptionSelections,
+  researchFocusPreference = "all",
   suggestedActivities,
   selectedActivityIds,
   groupedDays,
@@ -96,29 +109,8 @@ export default function MapComponent({
     const locs: Location[] = [];
     const selectedSet = new Set(selectedActivityIds || []);
 
-    // Mode 1: Suggested activities (activity selection phase)
-    if (suggestedActivities && suggestedActivities.length > 0) {
-      suggestedActivities.forEach((activity, actIndex) => {
-        if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
-          const isSelected = selectedSet.has(activity.id);
-          locs.push({
-            name: activity.name,
-            lat: activity.coordinates.lat,
-            lng: activity.coordinates.lng,
-            slot: activity.bestTimeOfDay || "any",
-            slotIndex: 0,
-            actIndex: actIndex,
-            day: 0, // No day assigned yet
-            desc: activity.type,
-            isSelected: isSelected,
-            activityId: activity.id,
-            photoUrl: activity.photo_url || null,
-          });
-        }
-      });
-    }
-    // Mode 2: Grouped days (day grouping and itinerary phases)
-    else if (groupedDays && groupedDays.length > 0) {
+    // Mode 1: Grouped days (day grouping and itinerary phases)
+    if (groupedDays && groupedDays.length > 0) {
       groupedDays.forEach((day) => {
         day.activities.forEach((activity, actIndex) => {
           if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
@@ -133,6 +125,7 @@ export default function MapComponent({
               desc: `Day ${day.dayNumber} - ${activity.type}`,
               activityId: activity.id,
               photoUrl: activity.photo_url || null,
+              mode: "grouped",
             });
           }
         });
@@ -149,12 +142,56 @@ export default function MapComponent({
               day: day.dayNumber,
               desc: `Day ${day.dayNumber} - Restaurant`,
               photoUrl: restaurant.photo_url || null,
+              mode: "grouped",
             });
           }
         });
       });
     }
-    // Mode 3: Legacy itinerary format
+    // Mode 2: Initial research recommendations
+    else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
+      tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
+        if (!option.coordinates?.lat || !option.coordinates?.lng) return;
+        const preference = researchOptionSelections?.[option.id] || "maybe";
+        locs.push({
+          name: option.title,
+          lat: option.coordinates.lat,
+          lng: option.coordinates.lng,
+          slot: option.category,
+          slotIndex: 0,
+          actIndex: optionIndex,
+          day: 0,
+          desc: `${option.category}`,
+          activityId: option.id,
+          photoUrl: option.photoUrls?.[0] || null,
+          preference,
+          mode: "research",
+        });
+      });
+    }
+    // Mode 3: Suggested activities (before day grouping)
+    else if (suggestedActivities && suggestedActivities.length > 0) {
+      suggestedActivities.forEach((activity, actIndex) => {
+        if (!selectedSet.has(activity.id)) return;
+        if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
+          locs.push({
+            name: activity.name,
+            lat: activity.coordinates.lat,
+            lng: activity.coordinates.lng,
+            slot: activity.bestTimeOfDay || "any",
+            slotIndex: 0,
+            actIndex: actIndex,
+            day: 0, // No day assigned yet
+            desc: activity.type,
+            isSelected: true,
+            activityId: activity.id,
+            photoUrl: activity.photo_url || null,
+            mode: "suggested",
+          });
+        }
+      });
+    }
+    // Mode 4: Legacy itinerary format
     else if (itinerary) {
       itinerary.forEach((day, dayIndex) => {
         const dayNumber = day.day_number || day.dayNumber || dayIndex + 1;
@@ -172,6 +209,7 @@ export default function MapComponent({
                   actIndex: actIndex,
                   day: dayNumber,
                   desc: `Day ${dayNumber} - ${slot}`,
+                  mode: "legacy",
                 });
               }
             });
@@ -181,7 +219,7 @@ export default function MapComponent({
     }
 
     return locs;
-  }, [suggestedActivities, selectedActivityIds, groupedDays, itinerary]);
+  }, [tripResearchBrief, researchOptionSelections, suggestedActivities, selectedActivityIds, groupedDays, itinerary]);
 
   if (loading) {
     return (
@@ -212,8 +250,13 @@ export default function MapComponent({
     );
   }
 
-  // Determine if we're in activity selection mode
-  const isActivitySelectionMode = suggestedActivities && suggestedActivities.length > 0;
+  const isGroupedMode = Boolean(groupedDays && groupedDays.length > 0);
+  const isResearchSelectionMode = Boolean(
+    !isGroupedMode && tripResearchBrief && tripResearchBrief.popularOptions.length > 0
+  );
+  const isActivitySelectionMode = Boolean(
+    !isGroupedMode && !isResearchSelectionMode && suggestedActivities && suggestedActivities.length > 0
+  );
 
   return (
     <div className="h-full w-full min-h-[500px] rounded-xl border border-gray-200 overflow-hidden">
@@ -222,6 +265,9 @@ export default function MapComponent({
         locations={locations}
         itinerary={itinerary}
         destination={destination}
+        isGroupedMode={isGroupedMode}
+        isResearchSelectionMode={isResearchSelectionMode}
+        researchFocusPreference={researchFocusPreference}
         isActivitySelectionMode={isActivitySelectionMode}
         onActivityClick={onActivityClick}
         hoveredActivityId={hoveredActivityId}
@@ -236,6 +282,9 @@ interface GoogleMapContentProps {
   locations: Location[];
   itinerary?: DayItinerary[];
   destination?: string | null;
+  isGroupedMode?: boolean;
+  isResearchSelectionMode?: boolean;
+  researchFocusPreference?: "all" | "keep" | "maybe" | "reject";
   isActivitySelectionMode?: boolean;
   onActivityClick?: (activityId: string) => void;
   hoveredActivityId?: string | null;
@@ -288,6 +337,9 @@ function GoogleMapContent({
   locations,
   itinerary,
   destination,
+  isGroupedMode,
+  isResearchSelectionMode,
+  researchFocusPreference = "all",
   isActivitySelectionMode,
   onActivityClick,
   hoveredActivityId,
@@ -375,7 +427,25 @@ function GoogleMapContent({
   const getMarkerIcon = (loc: Location): google.maps.Symbol => {
     const isHovered = loc.activityId === hoveredActivityId;
 
-    // In activity selection mode, use pin shapes
+    if (isResearchSelectionMode) {
+      const preference = loc.preference || "maybe";
+      const isFocusedCategory = researchFocusPreference === "all" || preference === researchFocusPreference;
+      const fillColor =
+        preference === "keep" ? "#22C55E" : preference === "reject" ? "#EF4444" : "#FACC15";
+      const baseOpacity = isFocusedCategory ? 0.96 : 0.34;
+      return {
+        path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
+        fillColor,
+        fillOpacity: isHovered ? Math.min(baseOpacity + 0.18, 1) : baseOpacity,
+        strokeColor: isHovered ? "#1F2937" : "#ffffff",
+        strokeWeight: isHovered ? 2 : 1,
+        scale: isHovered ? (isFocusedCategory ? 2.1 : 1.6) : (isFocusedCategory ? 1.75 : 1.25),
+        anchor: new window.google.maps.Point(12, 21),
+        labelOrigin: new window.google.maps.Point(12, 8),
+      };
+    }
+
+    // In suggested-activity selection mode, use selected/unselected colors
     if (isActivitySelectionMode) {
       return {
         path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
@@ -383,7 +453,7 @@ function GoogleMapContent({
         fillOpacity: loc.isSelected || isHovered ? 1 : 0.6,
         strokeColor: isHovered ? "#3B82F6" : "#ffffff",
         strokeWeight: isHovered ? 2 : 1,
-        scale: isHovered ? 2 : (loc.isSelected ? 1.5 : 1.2),
+        scale: isHovered ? 2.1 : (loc.isSelected ? 1.7 : 1.35),
         anchor: new window.google.maps.Point(12, 21),
         labelOrigin: new window.google.maps.Point(12, 8),
       };
@@ -394,10 +464,10 @@ function GoogleMapContent({
     return {
       path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
       fillColor: getDayColor(loc.day),
-      fillOpacity: isHighlighted || isHighlighted === null ? 1 : 0.4,
+      fillOpacity: isHighlighted || highlightedDay == null ? 1 : 0.4,
       strokeColor: isHovered ? "#3B82F6" : (isHighlighted ? "#000000" : "#ffffff"),
       strokeWeight: isHovered || isHighlighted ? 2 : 1,
-      scale: isHovered ? 1.8 : (isHighlighted ? 1.7 : 1.3),
+      scale: isHovered ? 2.0 : (isHighlighted ? 1.85 : 1.45),
       anchor: new window.google.maps.Point(12, 21),
       labelOrigin: new window.google.maps.Point(12, 8),
     };
@@ -448,7 +518,7 @@ function GoogleMapContent({
       }}
     >
       {/* Draw polylines connecting locations for each day - only if not in activity selection mode */}
-      {!isActivitySelectionMode && Object.entries(locationsByDay)
+      {isGroupedMode && Object.entries(locationsByDay)
         .filter(([, dayLocations]) => dayLocations.length >= 2)
         .map(([day, dayLocations]) => (
           <Polyline
@@ -470,10 +540,10 @@ function GoogleMapContent({
           icon={getMarkerIcon(loc)}
           label={
             {
-              text: (loc.actIndex + 1).toString(),
+              text: isGroupedMode ? loc.day.toString() : (loc.actIndex + 1).toString(),
               color: "white",
               fontWeight: "bold",
-              fontSize: (loc.activityId === hoveredActivityId || !isActivitySelectionMode) ? "11px" : "10px",
+              fontSize: (loc.activityId === hoveredActivityId || isGroupedMode) ? "11px" : "10px",
             }
           }
           onClick={() => {
@@ -485,6 +555,11 @@ function GoogleMapContent({
           }}
           onMouseOver={() => setHoveredMarker(loc)}
           onMouseOut={() => setHoveredMarker(null)}
+          zIndex={
+            isResearchSelectionMode
+              ? (researchFocusPreference === "all" || (loc.preference || "maybe") === researchFocusPreference ? 2000 : 1000)
+              : 1500
+          }
         />
       ))}
 
