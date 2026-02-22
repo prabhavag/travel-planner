@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
-import { getLLMClient } from "@/lib/services/llm-client";
 import type { SuggestedActivity, GroupedDay, DayGroup } from "@/lib/models/travel-plan";
+import { generateDayTheme } from "@/lib/services/day-grouping";
 
 /**
  * Rebuild GroupedDay objects from DayGroups and activities
@@ -99,20 +99,19 @@ export async function POST(request: NextRequest) {
     sourceDay.activityIds.splice(activityIndex, 1);
     targetDay.activityIds.push(activityId);
 
-    // Regenerate theme for the target day (since it changed)
+    // Regenerate source and target day themes after the move.
     const selectedActivities = session.suggestedActivities.filter((a) =>
       session.selectedActivityIds.includes(a.id)
+    );
+    const sourceActivities = selectedActivities.filter((a) =>
+      sourceDay.activityIds.includes(a.id)
     );
     const targetActivities = selectedActivities.filter((a) =>
       targetDay.activityIds.includes(a.id)
     );
 
-    // Use LLM to regenerate theme
-    const llmClient = getLLMClient();
-    const themeResult = await llmClient.regenerateDayTheme({ activities: targetActivities });
-    if (themeResult.success) {
-      targetDay.theme = themeResult.theme;
-    }
+    sourceDay.theme = generateDayTheme(sourceActivities);
+    targetDay.theme = generateDayTheme(targetActivities);
 
     // Rebuild grouped days
     const groupedDays = buildGroupedDays(updatedDayGroups, selectedActivities);

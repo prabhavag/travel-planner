@@ -17,9 +17,7 @@ import {
   finalize,
   generateResearchBrief,
   confirmResearchBrief,
-  suggestTopActivities,
   selectActivities,
-  groupDays,
   adjustDayGroups,
   confirmDayGrouping,
   getRestaurantSuggestions,
@@ -106,49 +104,6 @@ const EMPTY_TRIP_INFO: TripInfo = {
   activityLevel: "moderate",
   travelers: 1,
   budget: null,
-};
-
-const normalizeActivityValue = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const activityKey = (activity: SuggestedActivity) =>
-  `${normalizeActivityValue(activity.name)}|${normalizeActivityValue(activity.type)}`;
-
-const mergeActivities = (
-  existing: SuggestedActivity[],
-  incoming: SuggestedActivity[]
-): SuggestedActivity[] => {
-  const merged = [...existing];
-  const idToIndex = new Map(merged.map((activity, index) => [activity.id, index]));
-  const keyToIndex = new Map(merged.map((activity, index) => [activityKey(activity), index]));
-
-  for (const nextActivity of incoming) {
-    const idIndex = idToIndex.get(nextActivity.id);
-    const key = activityKey(nextActivity);
-    const keyIndex = keyToIndex.get(key);
-
-    if (idIndex !== undefined) {
-      merged[idIndex] = { ...merged[idIndex], ...nextActivity, id: merged[idIndex].id };
-      continue;
-    }
-
-    if (keyIndex !== undefined) {
-      merged[keyIndex] = { ...merged[keyIndex], ...nextActivity, id: merged[keyIndex].id };
-      idToIndex.set(nextActivity.id, keyIndex);
-      continue;
-    }
-
-    merged.push(nextActivity);
-    const newIndex = merged.length - 1;
-    idToIndex.set(nextActivity.id, newIndex);
-    keyToIndex.set(key, newIndex);
-  }
-
-  return merged;
 };
 
 export default function PlannerPage() {
@@ -385,13 +340,16 @@ export default function PlannerPage() {
     }
   };
 
-  // Suggest top 10 activities (streaming)
-  const handleGenerateResearchBrief = async (depth: "fast" | "deep" = "fast") => {
+  // Generate initial research brief
+  const handleGenerateResearchBrief = async (
+    depth: "fast" | "deep" = "fast",
+    mode: "refresh" | "augment" = "refresh"
+  ) => {
     if (!sessionId) return;
     setLoading(true);
 
     try {
-      const response = await generateResearchBrief(sessionId, depth);
+      const response = await generateResearchBrief(sessionId, depth, mode);
       if (response.success) {
         if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
         if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
@@ -439,16 +397,13 @@ export default function PlannerPage() {
       }
       const selectedIds = response.selectedActivityIds || [];
       setSelectedActivityIds(selectedIds);
-      const groupResponse = await groupDays(sessionId);
-      if (!groupResponse.success) {
-        throw new Error(groupResponse.message);
-      }
-      setWorkflowState(WORKFLOW_STATES.GROUP_DAYS);
-      updateMaxReachedState(WORKFLOW_STATES.GROUP_DAYS);
-      setDayGroups(groupResponse.dayGroups || []);
-      setGroupedDays(groupResponse.groupedDays || []);
+      const nextState = response.workflowState || WORKFLOW_STATES.GROUP_DAYS;
+      setWorkflowState(nextState);
+      updateMaxReachedState(nextState);
+      setDayGroups(response.dayGroups || []);
+      setGroupedDays(response.groupedDays || []);
       setLastGroupedActivityIds([...selectedIds]);
-      setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
+      setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
     } catch (error) {
       console.error("Confirm research brief error:", error);
       const errorMessage = error instanceof Error ? error.message : "Failed to confirm research brief. Please try again.";
@@ -537,54 +492,6 @@ export default function PlannerPage() {
     }
   };
 
-  // Suggest top 10 activities (streaming)
-  const handleSuggestActivities = async (autoProceed = false) => {
-    if (!sessionId) return;
-    setLoading(true);
-
-    try {
-      await suggestTopActivities(
-        sessionId,
-        (activity) => {
-          setSuggestedActivities((prev) => mergeActivities(prev, [activity]));
-        },
-        async (message) => {
-          setChatHistory((prev) => [...prev, { role: "assistant", content: message }]);
-          if (autoProceed) {
-            // Use callback to get the latest activities list
-            setSuggestedActivities((currentActivities) => {
-              const currentIds = new Set(currentActivities.map((a) => a.id));
-              setSelectedActivityIds((prevSelectedIds) => {
-                const preserved = prevSelectedIds.filter((id) => currentIds.has(id));
-                const idsToUse = preserved.length > 0 ? preserved : Array.from(currentIds);
-                handleConfirmActivitySelectionInternal(idsToUse);
-                return idsToUse;
-              });
-              return currentActivities;
-            });
-          } else {
-            setLoading(false);
-          }
-          updateMaxReachedState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
-        },
-        (error) => {
-          console.error("Suggest activities error:", error);
-          alert("Failed to suggest activities. Please try again.");
-          setLoading(false);
-        },
-        (enrichedActivity) => {
-          setSuggestedActivities((prev) =>
-            mergeActivities(prev, [enrichedActivity])
-          );
-        }
-      );
-    } catch (error) {
-      console.error("Suggest activities error:", error);
-      alert("Failed to suggest activities. Please try again.");
-      setLoading(false);
-    }
-  };
-
   const handleConfirmActivitySelectionInternal = async (ids: string[]) => {
     if (!sessionId || ids.length === 0) return;
     setLoading(true);
@@ -594,16 +501,13 @@ export default function PlannerPage() {
       if (!selectResponse.success) {
         throw new Error(selectResponse.message);
       }
-
-      const groupResponse = await groupDays(sessionId);
-      if (groupResponse.success) {
-        setWorkflowState(WORKFLOW_STATES.GROUP_DAYS);
-        updateMaxReachedState(WORKFLOW_STATES.GROUP_DAYS);
-        setDayGroups(groupResponse.dayGroups || []);
-        setGroupedDays(groupResponse.groupedDays || []);
-        setLastGroupedActivityIds([...ids]);
-        setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
-      }
+      const nextState = selectResponse.workflowState || WORKFLOW_STATES.GROUP_DAYS;
+      setWorkflowState(nextState);
+      updateMaxReachedState(nextState);
+      setDayGroups(selectResponse.dayGroups || []);
+      setGroupedDays(selectResponse.groupedDays || []);
+      setLastGroupedActivityIds([...ids]);
+      setChatHistory((prev) => [...prev, { role: "assistant", content: selectResponse.message }]);
     } catch (error) {
       console.error("Group days error:", error);
       alert("Failed to organize activities. Please try again.");
@@ -811,11 +715,6 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleRegenerateActivities = async () => {
-    if (!sessionId) return;
-    handleSuggestActivities();
   };
 
   // Update preferences
@@ -1209,7 +1108,7 @@ export default function PlannerPage() {
                     onSelectionChange={handleResearchSelectionChange}
                     onResolveDurationConflict={handleResolveDurationConflict}
                     hasUnresolvedAssumptionConflicts={hasUnresolvedAssumptionConflicts}
-                    onRegenerate={() => handleGenerateResearchBrief("fast")}
+                    onRegenerate={() => handleGenerateResearchBrief("deep", "augment")}
                     onDeepResearchAll={handleDeepResearchSelected}
                     onDeepResearchOption={handleDeepResearchOption}
                     deepResearchOptionId={deepResearchOptionId}

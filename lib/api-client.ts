@@ -296,41 +296,17 @@ export async function getSession(sessionId: string): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/session/${sessionId}`);
 }
 
-// ==================== TWO-STEP EXPAND DAY FLOW ====================
-
-// Suggest activities only (no meals) - Step 1
-export async function suggestActivities(
-  sessionId: string,
-  dayNumber: number,
-  userMessage = ""
-): Promise<SessionResponse> {
-  return fetchJson(`${BASE_URL}/suggest-activities`, {
-    method: "POST",
-    body: JSON.stringify({ sessionId, dayNumber, userMessage }),
-  });
-}
-
-// Suggest meals nearby selected activities - Step 2
-export async function suggestMealsNearby(
-  sessionId: string,
-  dayNumber: number,
-  selectedActivities: Record<string, string[]>
-): Promise<SessionResponse> {
-  return fetchJson(`${BASE_URL}/suggest-meals-nearby`, {
-    method: "POST",
-    body: JSON.stringify({ sessionId, dayNumber, selectedActivities }),
-  });
-}
-
 export type ResearchDepth = "fast" | "deep";
+export type ResearchGenerationMode = "refresh" | "augment";
 
 export async function generateResearchBrief(
   sessionId: string,
-  depth: ResearchDepth = "fast"
+  depth: ResearchDepth = "fast",
+  mode: ResearchGenerationMode = "refresh"
 ): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/generate-research-brief`, {
     method: "POST",
-    body: JSON.stringify({ sessionId, depth }),
+    body: JSON.stringify({ sessionId, depth, mode }),
   });
 }
 
@@ -427,74 +403,6 @@ export interface GroupedDay {
   restaurants: RestaurantSuggestion[];
 }
 
-// Suggest top 10 activities for the entire trip (streaming)
-export async function suggestTopActivities(
-  sessionId: string,
-  onActivity: (activity: SuggestedActivity) => void,
-  onComplete: (message: string) => void,
-  onError?: (error: string) => void,
-  onEnrichment?: (activity: SuggestedActivity) => void
-): Promise<void> {
-  const response = await fetch(`${BASE_URL}/suggest-activities`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: "Request failed" }));
-    if (onError) onError(error.message || `HTTP ${response.status}`);
-    return;
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    if (onError) onError("No response body");
-    return;
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  const processLine = (line: string) => {
-    if (line.startsWith("data: ")) {
-      try {
-        const data = JSON.parse(line.slice(6));
-        if (data.type === "activity") {
-          onActivity(data.activity);
-        } else if (data.type === "enrichment") {
-          if (onEnrichment) onEnrichment(data.activity);
-        } else if (data.type === "complete") {
-          onComplete(data.message);
-        } else if (data.type === "error") {
-          if (onError) onError(data.message);
-        }
-        // "start" event is intentionally ignored - it's just for signaling
-      } catch (parseError) {
-        console.warn("Failed to parse SSE data:", line, parseError);
-      }
-    }
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || ""; // Keep incomplete line in buffer
-
-    for (const line of lines) {
-      processLine(line);
-    }
-  }
-
-  // Process any remaining content in buffer
-  if (buffer.trim()) {
-    processLine(buffer);
-  }
-}
-
 // Select activities from the top 15
 export async function selectActivities(
   sessionId: string,
@@ -503,14 +411,6 @@ export async function selectActivities(
   return fetchJson(`${BASE_URL}/select-activities`, {
     method: "POST",
     body: JSON.stringify({ sessionId, selectedActivityIds }),
-  });
-}
-
-// Group selected activities into days
-export async function groupDays(sessionId: string): Promise<SessionResponse> {
-  return fetchJson(`${BASE_URL}/group-days`, {
-    method: "POST",
-    body: JSON.stringify({ sessionId }),
   });
 }
 

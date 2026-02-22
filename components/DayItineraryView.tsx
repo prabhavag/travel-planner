@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MapPin, Utensils, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronUp, MapPin, Utensils, ExternalLink } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -41,6 +41,7 @@ export function DayItineraryView({
   const [movingActivity, setMovingActivity] = useState<{ id: string; fromDay: number } | null>(null);
   const [collapsedActivityCards, setCollapsedActivityCards] = useState<Record<string, boolean>>({});
   const [collapsedRestaurantCards, setCollapsedRestaurantCards] = useState<Record<string, boolean>>({});
+  const [activeDayNumber, setActiveDayNumber] = useState<number | null>(groupedDays[0]?.dayNumber ?? null);
 
   const handleScroll = useCallback(() => {
     if (scrollContainerRef.current && onDayChange) {
@@ -48,6 +49,7 @@ export function DayItineraryView({
       const index = Math.round(container.scrollLeft / container.clientWidth);
       const activeDay = groupedDays[index]?.dayNumber;
       if (activeDay) {
+        setActiveDayNumber(activeDay);
         onDayChange(activeDay);
       }
     }
@@ -61,14 +63,27 @@ export function DayItineraryView({
     }
   }, [handleScroll]);
 
-  const scroll = (direction: "left" | "right") => {
+  useEffect(() => {
+    if (groupedDays.length === 0) {
+      setActiveDayNumber(null);
+      return;
+    }
+    if (!activeDayNumber || !groupedDays.some((day) => day.dayNumber === activeDayNumber)) {
+      setActiveDayNumber(groupedDays[0].dayNumber);
+    }
+  }, [groupedDays, activeDayNumber]);
+
+  const scrollToDay = (dayNumber: number) => {
     if (scrollContainerRef.current) {
-      const scrollAmount = scrollContainerRef.current.clientWidth;
-      const currentScroll = scrollContainerRef.current.scrollLeft;
+      const index = groupedDays.findIndex((day) => day.dayNumber === dayNumber);
+      if (index === -1) return;
+      const scrollAmount = scrollContainerRef.current.clientWidth * index;
       scrollContainerRef.current.scrollTo({
-        left: direction === "left" ? currentScroll - scrollAmount : currentScroll + scrollAmount,
+        left: scrollAmount,
         behavior: "smooth",
       });
+      setActiveDayNumber(dayNumber);
+      onDayChange?.(dayNumber);
     }
   };
 
@@ -193,6 +208,7 @@ export function DayItineraryView({
         <ResearchOptionCard
           option={activity.researchOption}
           selection="keep"
+          showPreferenceButtons={false}
           readOnly={true}
           collapsed={isCollapsed}
           onToggleCollapse={() => toggleActivityCollapse(activity.id)}
@@ -305,23 +321,19 @@ export function DayItineraryView({
       <div className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center justify-between mb-4 shrink-0 px-2">
           <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Plan Highlights</h3>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => scroll("left")}
-              className="rounded-full h-8 w-8 hover:bg-primary hover:text-white transition-all shadow-sm"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => scroll("right")}
-              className="rounded-full h-8 w-8 hover:bg-primary hover:text-white transition-all shadow-sm"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
+            {groupedDays.map((day) => (
+              <Button
+                key={day.dayNumber}
+                type="button"
+                variant={activeDayNumber === day.dayNumber ? "default" : "outline"}
+                size="sm"
+                onClick={() => scrollToDay(day.dayNumber)}
+                className="h-8 px-3 whitespace-nowrap"
+              >
+                Day {day.dayNumber}
+              </Button>
+            ))}
           </div>
         </div>
 

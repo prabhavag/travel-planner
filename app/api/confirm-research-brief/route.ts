@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import type { ResearchOptionPreference, ResearchOption, SuggestedActivity } from "@/lib/models/travel-plan";
 import { mergeSuggestedActivities } from "@/lib/services/card-merging";
+import { buildGroupedDays, groupActivitiesByDay } from "@/lib/services/day-grouping";
 
 function mapResearchOptionToSuggestedActivity(option: ResearchOption): SuggestedActivity {
   return {
@@ -73,24 +74,38 @@ export async function POST(request: NextRequest) {
       .map((option) => suggestedActivities.find((activity) => activity.id === option.id)?.id || option.id)
       .filter(Boolean);
 
+    const selectedActivities = suggestedActivities.filter((activity) => selectedActivityIds.includes(activity.id));
+    const dayGroups = groupActivitiesByDay({
+      tripInfo: session.tripInfo,
+      activities: selectedActivities,
+    });
+    const groupedDays = buildGroupedDays({
+      dayGroups,
+      activities: selectedActivities,
+    });
+
     sessionStore.update(sessionId, {
-      workflowState: WORKFLOW_STATES.SELECT_ACTIVITIES,
+      workflowState: WORKFLOW_STATES.GROUP_DAYS,
       researchOptionSelections: parsedSelections,
       suggestedActivities,
       selectedActivityIds,
+      dayGroups,
+      groupedDays,
     });
-    const message = "Great. I used your selected cards and will organize them into days.";
+    const message = "Great. I organized your selected cards into day-by-day groups.";
     sessionStore.addToConversation(sessionId, "assistant", message);
 
     return NextResponse.json({
       success: true,
       sessionId,
-      workflowState: WORKFLOW_STATES.SELECT_ACTIVITIES,
+      workflowState: WORKFLOW_STATES.GROUP_DAYS,
       message,
       tripResearchBrief: session.tripResearchBrief,
       researchOptionSelections: parsedSelections,
       suggestedActivities,
       selectedActivityIds,
+      dayGroups,
+      groupedDays,
     });
   } catch (error) {
     console.error("Error in confirmResearchBrief:", error);

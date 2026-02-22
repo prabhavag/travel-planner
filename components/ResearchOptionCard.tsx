@@ -10,6 +10,7 @@ import type { ResearchOption, ResearchOptionPreference } from "@/lib/api-client"
 interface ResearchOptionCardProps {
   option: ResearchOption;
   selection: ResearchOptionPreference;
+  showPreferenceButtons?: boolean;
   onSelectionChange?: (optionId: string, preference: ResearchOptionPreference) => void;
   onDeepResearch?: (optionId: string) => void;
   deepResearchLoading?: boolean;
@@ -34,6 +35,7 @@ const categoryClassMap: Record<string, string> = {
 export function ResearchOptionCard({
   option,
   selection,
+  showPreferenceButtons = true,
   onSelectionChange,
   onDeepResearch,
   deepResearchLoading = false,
@@ -92,14 +94,20 @@ export function ResearchOptionCard({
           <p className="text-sm text-gray-700">{option.reviewSummary}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {(["keep", "maybe", "reject"] as const).map((choice) => {
+          {showPreferenceButtons && (["keep", "maybe", "reject"] as const).map((choice) => {
             const isActive = selection === choice;
-            const baseClass =
+            const inactiveClass =
               choice === "keep"
                 ? "border-emerald-200 text-emerald-700 hover:bg-emerald-50"
                 : choice === "reject"
                   ? "border-rose-200 text-rose-700 hover:bg-rose-50"
                   : "border-slate-200 text-slate-700 hover:bg-slate-50";
+            const activeClass =
+              choice === "keep"
+                ? "bg-emerald-600 border-emerald-700 text-white hover:bg-emerald-600"
+                : choice === "reject"
+                  ? "bg-rose-600 border-rose-700 text-white hover:bg-rose-600"
+                  : "bg-amber-500 border-amber-600 text-white hover:bg-amber-500";
             return (
               <Button
                 key={`${option.id}-${choice}`}
@@ -108,7 +116,7 @@ export function ResearchOptionCard({
                 size="sm"
                 disabled={readOnly}
                 onClick={() => onSelectionChange?.(option.id, choice)}
-                className={`${baseClass} ${isActive ? "ring-1 ring-current" : ""}`}
+                className={isActive ? activeClass : inactiveClass}
               >
                 {choice === "keep" ? "Keep" : choice === "reject" ? "Reject" : "Maybe"}
               </Button>

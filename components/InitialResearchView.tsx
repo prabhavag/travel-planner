@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useRef, useLayoutEffect } from "react";
+import { useMemo, useState, useRef, useLayoutEffect, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -113,6 +113,14 @@ export function InitialResearchView({
     return true; // "All" or unknown
   };
 
+  const statusLabel = (status: string) => {
+    if (status === "Selected") return "Kept";
+    if (status === "Postponed") return "Maybe'd";
+    if (status === "Rejected") return "Rejected";
+    if (status === "Inbox") return "Inbox";
+    return status;
+  };
+
   const setStatusAndFocus = (status: string) => {
     setActiveStatus(status);
     if (!onStatusFocusChange) return;
@@ -161,10 +169,13 @@ export function InitialResearchView({
   }, [allPreferences, researchBrief.popularOptions]);
 
   const interestCounts = useMemo(() => {
-    const counts: Record<string, number> = { All: researchBrief.popularOptions.length };
+    const optionsInActiveStatus = researchBrief.popularOptions.filter((opt) =>
+      matchesStatus(opt, activeStatus)
+    );
+    const counts: Record<string, number> = { All: optionsInActiveStatus.length };
     interestTabsList.forEach((tab) => {
       if (tab === "All") return;
-      counts[tab] = researchBrief.popularOptions.filter((opt) => {
+      counts[tab] = optionsInActiveStatus.filter((opt) => {
         if (tab === "Other") {
           return !allPreferences.some((pref) => matchesInterest(opt, pref));
         }
@@ -172,7 +183,7 @@ export function InitialResearchView({
       }).length;
     });
     return counts;
-  }, [interestTabsList, researchBrief.popularOptions, allPreferences]);
+  }, [interestTabsList, researchBrief.popularOptions, allPreferences, activeStatus, researchOptionSelections]);
 
   const statusCounts = useMemo(() => {
     // Counts reflect the currently selected interest
@@ -194,6 +205,24 @@ export function InitialResearchView({
     });
     return counts;
   }, [researchBrief.popularOptions, researchOptionSelections, activeInterest, allPreferences]);
+
+  const getStatusCount = (status: string) => {
+    if (status === "Selected") return statusCounts.Selected;
+    if (status === "Postponed") return statusCounts.Postponed;
+    if (status === "Rejected") return statusCounts.Rejected;
+    if (status === "Inbox") return statusCounts.Inbox;
+    return 0;
+  };
+
+  useEffect(() => {
+    if (getStatusCount(activeStatus) > 0) return;
+    const fallbackStatus = ["Selected", "Postponed", "Inbox", "Rejected"].find(
+      (status) => getStatusCount(status) > 0
+    );
+    if (fallbackStatus && fallbackStatus !== activeStatus) {
+      setStatusAndFocus(fallbackStatus);
+    }
+  }, [activeStatus, statusCounts, activeInterest]);
 
   const visibleOptions = useMemo(() => {
     return researchBrief.popularOptions.filter((option) => {
@@ -322,39 +351,39 @@ export function InitialResearchView({
             onClick={() => setStatusAndFocus("Selected")}
             disabled={statusCounts.Selected === 0}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Selected"
-              ? "bg-emerald-50 border-emerald-500 text-emerald-800"
+              ? "bg-emerald-600 border-emerald-700 text-white"
               : statusCounts.Selected > 0
                 ? "bg-emerald-50/30 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
                 : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
               }`}
           >
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            Selected {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Selected}
+            <span className={`w-2 h-2 rounded-full ${activeStatus === "Selected" ? "bg-white/90" : "bg-emerald-500"}`} />
+            Kept {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Selected}
           </button>
           <button
             onClick={() => setStatusAndFocus("Postponed")}
             disabled={statusCounts.Postponed === 0}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Postponed"
-              ? "bg-amber-50 border-amber-500 text-amber-800"
+              ? "bg-amber-500 border-amber-600 text-white"
               : statusCounts.Postponed > 0
                 ? "bg-amber-50/30 border-amber-200 text-amber-700 hover:bg-amber-100"
                 : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
               }`}
           >
-            <span className="w-2 h-2 rounded-full bg-amber-500" />
-            Postponed {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Postponed}
+            <span className={`w-2 h-2 rounded-full ${activeStatus === "Postponed" ? "bg-white/90" : "bg-amber-500"}`} />
+            Maybe'd {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Postponed}
           </button>
           <button
             onClick={() => setStatusAndFocus("Rejected")}
             disabled={statusCounts.Rejected === 0}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Rejected"
-              ? "bg-rose-50 border-rose-500 text-rose-800"
+              ? "bg-rose-600 border-rose-700 text-white"
               : statusCounts.Rejected > 0
                 ? "bg-rose-50/30 border-rose-200 text-rose-700 hover:bg-rose-100"
                 : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
               }`}
           >
-            <span className="w-2 h-2 rounded-full bg-rose-500" />
+            <span className={`w-2 h-2 rounded-full ${activeStatus === "Rejected" ? "bg-white/90" : "bg-rose-500"}`} />
             Rejected {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Rejected}
           </button>
           <button
@@ -373,10 +402,10 @@ export function InitialResearchView({
             size="sm"
             onClick={onDeepResearchAll}
             disabled={isLoading}
-            title="Runs deeper web research for selected and postponed cards only"
+            title="Runs deeper web research for kept and maybe'd cards only"
           >
             <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-            Research selected + postponed
+            Research kept + maybe'd
           </Button>
         </div>
       </div>
@@ -398,7 +427,7 @@ export function InitialResearchView({
           </Button>
         ))}
         <span className="text-xs text-gray-500 ml-auto flex-shrink-0">
-          Showing {visibleOptions.length} of {activeStatus} options
+          Showing {visibleOptions.length} of {statusLabel(activeStatus)} options
         </span>
       </div>
 
@@ -421,7 +450,7 @@ export function InitialResearchView({
         ) : (
           <div className="flex flex-col items-center justify-center p-8 text-center bg-gray-50/50 rounded-lg border border-dashed border-gray-200 h-full">
             <p className="text-gray-500 mb-3">
-              No <span className="font-medium text-gray-700">{activeStatus.toLowerCase()}</span> activities
+              No <span className="font-medium text-gray-700">{statusLabel(activeStatus).toLowerCase()}</span> activities
               {activeInterest !== "All" && (
                 <> for <span className="font-medium text-gray-900">{activeInterest}</span></>
               )}.
@@ -431,12 +460,12 @@ export function InitialResearchView({
               <div className="flex flex-wrap gap-3 justify-center">
                 {statusCounts.Selected > 0 && (
                   <span className="text-emerald-600 font-medium">
-                    {statusCounts.Selected} selected
+                    {statusCounts.Selected} kept
                   </span>
                 )}
                 {statusCounts.Postponed > 0 && (
                   <span className="text-amber-600 font-medium">
-                    {statusCounts.Postponed} postponed
+                    {statusCounts.Postponed} maybe'd
                   </span>
                 )}
                 {statusCounts.Rejected > 0 && (

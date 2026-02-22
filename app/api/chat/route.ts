@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { getLLMClient } from "@/lib/services/llm-client";
-import { mergeResearchBriefAndSelections, mergeSuggestedActivities } from "@/lib/services/card-merging";
+import { mergeResearchBriefAndSelections } from "@/lib/services/card-merging";
 
 export async function POST(request: NextRequest) {
   try {
@@ -150,50 +150,6 @@ export async function POST(request: NextRequest) {
         tripInfo: updatedSession?.tripInfo,
         tripResearchBrief: updatedSession?.tripResearchBrief,
         researchOptionSelections: updatedSession?.researchOptionSelections,
-      });
-    } else if (session.workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES) {
-      const result = await llmClient.chatDuringSuggestActivities({
-        tripInfo: session.tripInfo,
-        suggestedActivities: session.suggestedActivities || [],
-        selectedActivityIds: session.selectedActivityIds || [],
-        userMessage: message,
-      });
-
-      // Update trip info if changed
-      if (result.tripInfo) {
-        sessionStore.update(sessionId, { tripInfo: result.tripInfo });
-      }
-
-      // Merge or replace activities
-      if (result.newActivities && result.newActivities.length > 0) {
-        const existingActivities = result.replaceActivities ? [] : (session.suggestedActivities || []);
-        const mergedActivities = result.replaceActivities
-          ? result.newActivities
-          : mergeSuggestedActivities({
-              existingActivities,
-              incomingActivities: result.newActivities,
-            });
-        const validActivityIds = new Set(mergedActivities.map((activity) => activity.id));
-        const selectedActivityIds = result.replaceActivities
-          ? []
-          : (session.selectedActivityIds || []).filter((id) => validActivityIds.has(id));
-        sessionStore.update(sessionId, {
-          suggestedActivities: mergedActivities,
-          selectedActivityIds,
-        });
-      }
-
-      sessionStore.addToConversation(sessionId, "assistant", result.message);
-      const updatedSession = sessionStore.get(sessionId);
-
-      return NextResponse.json({
-        success: true,
-        sessionId,
-        workflowState: updatedSession?.workflowState,
-        message: result.message,
-        tripInfo: updatedSession?.tripInfo,
-        tripResearchBrief: updatedSession?.tripResearchBrief,
-        suggestedActivities: updatedSession?.suggestedActivities,
       });
     } else if (session.workflowState === WORKFLOW_STATES.REVIEW) {
       const result = await llmClient.reviewPlan({

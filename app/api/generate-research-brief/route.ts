@@ -5,7 +5,7 @@ import { mergeResearchBriefAndSelections } from "@/lib/services/card-merging";
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId, depth } = await request.json();
+    const { sessionId, depth, mode } = await request.json();
 
     if (!sessionId) {
       return NextResponse.json(
@@ -33,9 +33,52 @@ export async function POST(request: NextRequest) {
     }
 
     const llmClient = getLLMClient();
+    const requestDepth = depth === "deep" ? "deep" : "fast";
+    const requestMode = mode === "augment" ? "augment" : "refresh";
+
+    if (requestMode === "augment" && session.tripResearchBrief) {
+      const currentOptionCount = session.tripResearchBrief.popularOptions.length;
+      const refreshedSession = sessionStore.get(sessionId);
+      const result = await llmClient.runInitialResearchDebriefAgent({
+        tripInfo: session.tripInfo,
+        currentBrief: session.tripResearchBrief,
+        researchOptionSelections: session.researchOptionSelections || {},
+        conversationHistory: refreshedSession?.conversationHistory || [],
+        userMessage:
+          "Add 3 to 5 new and distinct research options that fit this trip. Avoid duplicates and keep strong source evidence.",
+      });
+
+      if (result.success) {
+        const addedCount = Math.max(
+          0,
+          (result.tripResearchBrief?.popularOptions.length || 0) - currentOptionCount
+        );
+        const assistantMessage =
+          addedCount > 0
+            ? `Added ${addedCount} new suggestion${addedCount === 1 ? "" : "s"}. ${result.message}`
+            : result.message;
+
+        sessionStore.update(sessionId, {
+          workflowState: WORKFLOW_STATES.INITIAL_RESEARCH,
+          tripResearchBrief: result.tripResearchBrief,
+          researchOptionSelections: result.researchOptionSelections,
+        });
+        sessionStore.addToConversation(sessionId, "assistant", assistantMessage);
+
+        return NextResponse.json({
+          success: true,
+          sessionId,
+          workflowState: WORKFLOW_STATES.INITIAL_RESEARCH,
+          message: assistantMessage,
+          tripResearchBrief: result.tripResearchBrief,
+          researchOptionSelections: result.researchOptionSelections,
+        });
+      }
+    }
+
     const result = await llmClient.generateInitialResearchBrief({
       tripInfo: session.tripInfo,
-      depth: depth === "deep" ? "deep" : "fast",
+      depth: requestDepth,
     });
 
     if (!result.success || !result.tripResearchBrief) {
