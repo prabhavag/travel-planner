@@ -16,6 +16,7 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
     currency: "USD",
     bestTimeOfDay: "any",
     neighborhood: null,
+    coordinates: option.coordinates || null,
     photo_url: option.photoUrls?.[0] || null,
     photo_urls: option.photoUrls || [],
     researchOption: option,

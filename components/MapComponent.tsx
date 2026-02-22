@@ -6,7 +6,6 @@ import {
   useJsApiLoader,
   Marker,
   InfoWindow,
-  Polyline,
   OverlayView,
 } from "@react-google-maps/api";
 import { getConfig } from "@/lib/api-client";
@@ -473,6 +472,46 @@ function GoogleMapContent({
     };
   };
 
+  // Manually manage polylines to work around @react-google-maps/api cleanup bug
+  const polylinesRef = useRef<google.maps.Polyline[]>([]);
+
+  useEffect(() => {
+    // Clear previous polylines
+    polylinesRef.current.forEach((p) => p.setMap(null));
+    polylinesRef.current = [];
+
+    if (!map || !isLoaded || !isGroupedMode) return;
+
+    Object.entries(locationsByDay).forEach(([day, dayLocations]) => {
+      if (dayLocations.length < 2) return;
+      const dayNum = parseInt(day);
+      const isHighlighted = highlightedDay === null || highlightedDay === dayNum;
+      if (!isHighlighted) return;
+
+      const polyline = new window.google.maps.Polyline({
+        path: dayLocations.map((loc) => ({ lat: loc.lat, lng: loc.lng })),
+        strokeColor: getDayColor(dayNum) || "#666666",
+        strokeOpacity: 0.9,
+        strokeWeight: 6,
+        map,
+      });
+      polylinesRef.current.push(polyline);
+    });
+
+    return () => {
+      polylinesRef.current.forEach((p) => p.setMap(null));
+      polylinesRef.current = [];
+    };
+  }, [map, isLoaded, isGroupedMode, locationsByDay, highlightedDay]);
+  const mapCenterLat = locations.length > 0 ? locations[0].lat : undefined;
+  const mapCenterLng = locations.length > 0 ? locations[0].lng : undefined;
+
+  const mapCenter = useMemo(() => {
+    return locations.length > 0
+      ? { lat: locations[0].lat, lng: locations[0].lng }
+      : destinationCenter || { lat: 37.7749, lng: -122.4194 }; // Default to SF
+  }, [mapCenterLat, mapCenterLng, destinationCenter, locations.length]);
+
   if (loadError) {
     return (
       <div className="h-full w-full flex items-center justify-center">
@@ -488,12 +527,6 @@ function GoogleMapContent({
       </div>
     );
   }
-
-  // Determine map center
-  const mapCenter =
-    locations.length > 0
-      ? { lat: locations[0].lat, lng: locations[0].lng }
-      : destinationCenter || { lat: 37.7749, lng: -122.4194 }; // Default to SF
 
   // Show loading if we're waiting for destination geocoding
   if (locations.length === 0 && destination && !destinationCenter) {
@@ -517,20 +550,7 @@ function GoogleMapContent({
         fullscreenControl: true,
       }}
     >
-      {/* Draw polylines connecting locations for each day - only if not in activity selection mode */}
-      {isGroupedMode && Object.entries(locationsByDay)
-        .filter(([, dayLocations]) => dayLocations.length >= 2)
-        .map(([day, dayLocations]) => (
-          <Polyline
-            key={`polyline-day-${day}`}
-            path={dayLocations.map((loc) => ({ lat: loc.lat, lng: loc.lng }))}
-            options={{
-              strokeColor: getDayColor(parseInt(day)) || "#666666",
-              strokeOpacity: highlightedDay === parseInt(day) || highlightedDay === null ? 0.9 : 0.2,
-              strokeWeight: highlightedDay === parseInt(day) ? 6 : 3,
-            }}
-          />
-        ))}
+      {/* Polylines are managed imperatively via useEffect above */}
 
       {/* Draw markers for each location */}
       {locations.map((loc, idx) => (
