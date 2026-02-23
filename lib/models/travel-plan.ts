@@ -224,7 +224,8 @@ export const ResearchSourceSchema = z.object({
 
 export type ResearchSource = z.infer<typeof ResearchSourceSchema>;
 
-export const ResearchOptionPreferenceSchema = z.enum(["keep", "maybe", "reject"]);
+// "selected" is the current frontend model; legacy values remain for compatibility.
+export const ResearchOptionPreferenceSchema = z.enum(["selected", "keep", "maybe", "reject"]);
 export type ResearchOptionPreference = z.infer<typeof ResearchOptionPreferenceSchema>;
 
 export const ResearchOptionSchema = z.object({
@@ -292,11 +293,17 @@ export const RestaurantSuggestionSchema = z.object({
   name: z.string(),
   cuisine: z.string().nullable(),
   rating: z.number().nullable(),
+  user_ratings_total: z.number().nullable().optional(),
   priceRange: z.string().nullable(),
   coordinates: CoordinatesSchema,
   place_id: z.string(),
   vicinity: z.string().nullable(),
+  formatted_address: z.string().nullable().optional(),
+  opening_hours: z.string().nullable().optional(),
+  website: z.string().url().nullable().optional(),
+  editorial_summary: z.string().nullable().optional(),
   photo_url: z.string().nullable().optional(),
+  photo_urls: z.array(z.string()).max(3).optional(),
 });
 
 export type RestaurantSuggestion = z.infer<typeof RestaurantSuggestionSchema>;
@@ -311,3 +318,214 @@ export const GroupedDaySchema = z.object({
 });
 
 export type GroupedDay = z.infer<typeof GroupedDaySchema>;
+
+export const SubAgentStatusSchema = z.enum(["idle", "running", "complete", "error"]);
+export type SubAgentStatus = z.infer<typeof SubAgentStatusSchema>;
+
+export const AccommodationOptionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  neighborhood: z.string().nullable(),
+  nightlyPriceEstimate: z.number().nullable(),
+  currency: z.string().default("USD"),
+  rating: z.number().nullable(),
+  sourceUrl: z.string().url().nullable(),
+  summary: z.string(),
+  pros: z.array(z.string()).default([]),
+  cons: z.array(z.string()).default([]),
+});
+export type AccommodationOption = z.infer<typeof AccommodationOptionSchema>;
+
+export const FlightOptionSchema = z.object({
+  id: z.string(),
+  airline: z.string(),
+  routeSummary: z.string(),
+  departureWindow: z.string().nullable(),
+  arrivalWindow: z.string().nullable(),
+  duration: z.string().nullable(),
+  stops: z.number().int().nonnegative().nullable(),
+  totalPriceEstimate: z.number().nullable(),
+  currency: z.string().default("USD"),
+  sourceUrl: z.string().url().nullable(),
+  summary: z.string(),
+  baggageNotes: z.string().nullable(),
+});
+export type FlightOption = z.infer<typeof FlightOptionSchema>;
+
+// ============================================
+// Agent Loop Orchestration Schemas
+// ============================================
+
+export const LoopIdSchema = z.enum(["SUPERVISOR", "PLANNING_LOOP", "HOSPITALITY_REVIEW_LOOP"]);
+export type LoopId = z.infer<typeof LoopIdSchema>;
+
+export const StopReasonSchema = z.enum([
+  "completed_stage",
+  "needs_user_input",
+  "tool_error_recovered",
+  "low_confidence_noop",
+  "terminal",
+]);
+export type StopReason = z.infer<typeof StopReasonSchema>;
+
+export const AgentTurnTriggerSchema = z.enum(["user_message", "ui_action", "auto"]);
+export type AgentTurnTrigger = z.infer<typeof AgentTurnTriggerSchema>;
+
+export const UiActionSchema = z.object({
+  type: z.string().min(1),
+  payload: z.record(z.string(), z.unknown()).optional(),
+});
+export type UiAction = z.infer<typeof UiActionSchema>;
+
+export const AgentTurnRequestSchema = z.object({
+  sessionId: z.string().min(1),
+  trigger: AgentTurnTriggerSchema,
+  message: z.string().optional(),
+  uiAction: UiActionSchema.optional(),
+});
+export type AgentTurnRequest = z.infer<typeof AgentTurnRequestSchema>;
+
+export const UserAssistantMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+});
+
+export const LoopContextSchema = z.object({
+  workflowState: WorkflowStateSchema,
+  tripInfo: TripInfoSchema,
+  researchOptionSelections: z.record(z.string(), ResearchOptionPreferenceSchema),
+  suggestedActivities: z.array(SuggestedActivitySchema),
+  selectedActivityIds: z.array(z.string()),
+  dayGroups: z.array(DayGroupSchema),
+  groupedDays: z.array(GroupedDaySchema),
+  restaurantSuggestions: z.array(RestaurantSuggestionSchema),
+  selectedRestaurantIds: z.array(z.string()),
+  accommodationStatus: SubAgentStatusSchema,
+  flightStatus: SubAgentStatusSchema,
+  accommodationOptions: z.array(AccommodationOptionSchema),
+  flightOptions: z.array(FlightOptionSchema),
+  selectedAccommodationOptionId: z.string().nullable().optional(),
+  selectedFlightOptionId: z.string().nullable().optional(),
+  wantsAccommodation: z.boolean().nullable().optional(),
+  wantsFlight: z.boolean().nullable().optional(),
+  conversationTail: z.array(UserAssistantMessageSchema),
+});
+export type LoopContext = z.infer<typeof LoopContextSchema>;
+
+const SelectActivitiesActionSchema = z.object({
+  tool: z.literal("select_activities"),
+  input: z.object({
+    selectedActivityIds: z.array(z.string()),
+  }),
+});
+
+const AdjustDayGroupsActionSchema = z.object({
+  tool: z.literal("adjust_day_groups"),
+  input: z.object({
+    activityId: z.string(),
+    fromDay: z.number(),
+    toDay: z.number(),
+  }),
+});
+
+const ConfirmDayGroupingActionSchema = z.object({
+  tool: z.literal("confirm_day_grouping"),
+  input: z.object({}),
+});
+
+const GetRestaurantSuggestionsActionSchema = z.object({
+  tool: z.literal("get_restaurant_suggestions"),
+  input: z.object({}),
+});
+
+const SetMealPreferencesActionSchema = z.object({
+  tool: z.literal("set_meal_preferences"),
+  input: z.object({
+    wantsRestaurants: z.boolean(),
+    selectedRestaurantIds: z.array(z.string()).optional(),
+  }),
+});
+
+const ReviewPatchGroupedDaysActionSchema = z.object({
+  tool: z.literal("review_patch_grouped_days"),
+  input: z.object({
+    modifications: z.record(z.string(), z.record(z.string(), z.unknown())),
+  }),
+});
+
+const FinalizeActionSchema = z.object({
+  tool: z.literal("finalize"),
+  input: z.object({}),
+});
+
+const SelectAccommodationActionSchema = z.object({
+  tool: z.literal("select_accommodation"),
+  input: z.object({
+    optionId: z.string().min(1),
+  }),
+});
+
+const SelectFlightActionSchema = z.object({
+  tool: z.literal("select_flight"),
+  input: z.object({
+    optionId: z.string().min(1),
+  }),
+});
+
+const SkipAccommodationActionSchema = z.object({
+  tool: z.literal("skip_accommodation"),
+  input: z.object({}),
+});
+
+const SkipFlightActionSchema = z.object({
+  tool: z.literal("skip_flight"),
+  input: z.object({}),
+});
+
+const SearchAccommodationActionSchema = z.object({
+  tool: z.literal("search_accommodation"),
+  input: z.object({}),
+});
+
+const SearchFlightsActionSchema = z.object({
+  tool: z.literal("search_flights"),
+  input: z.object({}),
+});
+
+const RefreshAccommodationSearchActionSchema = z.object({
+  tool: z.literal("refresh_accommodation_search"),
+  input: z.object({}),
+});
+
+const RefreshFlightSearchActionSchema = z.object({
+  tool: z.literal("refresh_flight_search"),
+  input: z.object({}),
+});
+
+export const ToolActionSchema = z.discriminatedUnion("tool", [
+  SelectActivitiesActionSchema,
+  AdjustDayGroupsActionSchema,
+  ConfirmDayGroupingActionSchema,
+  GetRestaurantSuggestionsActionSchema,
+  SetMealPreferencesActionSchema,
+  ReviewPatchGroupedDaysActionSchema,
+  FinalizeActionSchema,
+  SelectAccommodationActionSchema,
+  SelectFlightActionSchema,
+  SkipAccommodationActionSchema,
+  SkipFlightActionSchema,
+  SearchAccommodationActionSchema,
+  SearchFlightsActionSchema,
+  RefreshAccommodationSearchActionSchema,
+  RefreshFlightSearchActionSchema,
+]);
+export type ToolAction = z.infer<typeof ToolActionSchema>;
+
+export const LoopResultSchema = z.object({
+  assistantMessage: z.string(),
+  confidence: z.number().min(0).max(1),
+  actions: z.array(ToolActionSchema),
+  proposedTransition: WorkflowStateSchema.optional(),
+  stopReason: StopReasonSchema,
+});
+export type LoopResult = z.infer<typeof LoopResultSchema>;

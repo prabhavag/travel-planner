@@ -4,14 +4,13 @@ import { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, Loader2, Search, ChevronDown, ChevronUp } from "lucide-react";
-import type { ResearchOption, ResearchOptionPreference } from "@/lib/api-client";
+import { Check, ExternalLink, Loader2, Search, ChevronDown, ChevronUp } from "lucide-react";
+import type { ResearchOption } from "@/lib/api-client";
 
 interface ResearchOptionCardProps {
   option: ResearchOption;
-  selection: ResearchOptionPreference;
-  showPreferenceButtons?: boolean;
-  onSelectionChange?: (optionId: string, preference: ResearchOptionPreference) => void;
+  isSelected: boolean;
+  onToggleSelect?: (optionId: string) => void;
   onDeepResearch?: (optionId: string) => void;
   deepResearchLoading?: boolean;
   deepResearchDisabled?: boolean;
@@ -34,9 +33,8 @@ const categoryClassMap: Record<string, string> = {
 
 export function ResearchOptionCard({
   option,
-  selection,
-  showPreferenceButtons = true,
-  onSelectionChange,
+  isSelected,
+  onToggleSelect,
   onDeepResearch,
   deepResearchLoading = false,
   deepResearchDisabled = false,
@@ -56,7 +54,12 @@ export function ResearchOptionCard({
     : null;
 
   return (
-    <Card className="border-gray-200">
+    <Card
+      className={`cursor-pointer transition-all hover:shadow-md ${isSelected ? "ring-2 ring-primary bg-primary/5" : "border-gray-200"}`}
+      onClick={() => {
+        if (!readOnly) onToggleSelect?.(option.id);
+      }}
+    >
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base flex-1">{option.title}</CardTitle>
@@ -64,124 +67,104 @@ export function ResearchOptionCard({
             <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>
               {option.category}
             </Badge>
-            {onToggleCollapse && (
+            {isSelected ? (
+              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white">
+                <Check className="h-4 w-4" />
+              </div>
+            ) : null}
+            {onToggleCollapse ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={onToggleCollapse}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCollapse();
+                }}
                 className="h-6 w-6 p-0 text-gray-400 hover:text-primary"
                 title={collapsed ? "Expand card" : "Collapse card"}
               >
                 {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
               </Button>
-            )}
+            ) : null}
           </div>
         </div>
       </CardHeader>
-      {!collapsed && (
-      <CardContent className="space-y-3">
-        <div>
-          <p className="text-xs text-gray-500 mb-1">Why it matches</p>
-          <p className="text-sm text-gray-700">{option.whyItMatches}</p>
-        </div>
-        <div>
-          <p className="text-xs text-gray-500 mb-1">Date fit</p>
-          <p className="text-sm text-gray-700">{option.bestForDates}</p>
-        </div>
-        <div>
-          <p className="text-xs text-gray-500 mb-1">Review summary</p>
-          <p className="text-sm text-gray-700">{option.reviewSummary}</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {showPreferenceButtons && (["keep", "maybe", "reject"] as const).map((choice) => {
-            const isActive = selection === choice;
-            const inactiveClass =
-              choice === "keep"
-                ? "border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                : choice === "reject"
-                  ? "border-rose-200 text-rose-700 hover:bg-rose-50"
-                  : "border-slate-200 text-slate-700 hover:bg-slate-50";
-            const activeClass =
-              choice === "keep"
-                ? "bg-emerald-600 border-emerald-700 text-white hover:bg-emerald-600"
-                : choice === "reject"
-                  ? "bg-rose-600 border-rose-700 text-white hover:bg-rose-600"
-                  : "bg-amber-500 border-amber-600 text-white hover:bg-amber-500";
-            return (
-              <Button
-                key={`${option.id}-${choice}`}
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={readOnly}
-                onClick={() => onSelectionChange?.(option.id, choice)}
-                className={isActive ? activeClass : inactiveClass}
-              >
-                {choice === "keep" ? "Keep" : choice === "reject" ? "Reject" : "Maybe"}
-              </Button>
-            );
-          })}
-          {onDeepResearch && (
-            <div className="flex flex-col gap-1">
+      {!collapsed ? (
+        <CardContent className="space-y-3">
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Why it matches</p>
+            <p className="text-sm text-gray-700">{option.whyItMatches}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Date fit</p>
+            <p className="text-sm text-gray-700">{option.bestForDates}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Review summary</p>
+            <p className="text-sm text-gray-700">{option.reviewSummary}</p>
+          </div>
+          {onDeepResearch ? (
+            <div className="flex flex-col gap-1" onClick={(e) => e.stopPropagation()}>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 disabled={readOnly || deepResearchDisabled || deepResearchLoading}
                 onClick={() => onDeepResearch(option.id)}
-                className="border-blue-200 text-blue-700 hover:bg-blue-50"
+                className="w-fit border-blue-200 text-blue-700 hover:bg-blue-50"
               >
-                {deepResearchLoading ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Search className="w-3.5 h-3.5 mr-1.5" />}
+                {deepResearchLoading ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Search className="w-3.5 h-3.5 mr-1.5" />
+                )}
                 Research
               </Button>
               {formattedLastDeepResearchAt ? (
                 <span className="text-[11px] text-gray-500">Last researched {formattedLastDeepResearchAt}</span>
               ) : null}
             </div>
-          )}
-        </div>
-        {option.sourceLinks.length > 0 && (
-          <div className="space-y-2">
-            <p className="text-xs text-gray-500">Sources</p>
-            {option.sourceLinks.map((source, idx) => (
-              <a
-                key={`${option.id}-${source.url}-${idx}`}
-                href={source.url}
-                target="_blank"
-                rel="noreferrer"
-                className="block rounded-md border border-blue-100 bg-blue-50/60 px-2 py-1.5 hover:bg-blue-100 transition-colors"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm text-blue-800 line-clamp-1">{source.title}</span>
-                  <ExternalLink className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
-                </div>
-                {source.snippet && (
-                  <p className="text-xs text-blue-700 mt-1 line-clamp-2">{source.snippet}</p>
-                )}
-              </a>
-            ))}
-          </div>
-        )}
-        {Array.isArray(option.photoUrls) && option.photoUrls.length > 0 && (
-          <div className="space-y-2">
-            <p className="text-xs text-gray-500">Thumbnails</p>
-            <div className="grid grid-cols-3 gap-2">
-              {option.photoUrls.slice(0, 3).map((url, idx) => (
-                <img
-                  key={`${option.id}-photo-${idx}`}
-                  src={url}
-                  alt={`${option.title} thumbnail ${idx + 1}`}
-                  className="h-24 w-full rounded-md border border-gray-200 object-cover"
-                  loading="lazy"
-                />
+          ) : null}
+          {option.sourceLinks.length > 0 ? (
+            <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
+              <p className="text-xs text-gray-500">Sources</p>
+              {option.sourceLinks.map((source, idx) => (
+                <a
+                  key={`${option.id}-${source.url}-${idx}`}
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block rounded-md border border-blue-100 bg-blue-50/60 px-2 py-1.5 hover:bg-blue-100 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm text-blue-800 line-clamp-1">{source.title}</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
+                  </div>
+                  {source.snippet ? <p className="text-xs text-blue-700 mt-1 line-clamp-2">{source.snippet}</p> : null}
+                </a>
               ))}
             </div>
-          </div>
-        )}
-        {extraContent}
-      </CardContent>
-      )}
+          ) : null}
+          {Array.isArray(option.photoUrls) && option.photoUrls.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500">Thumbnails</p>
+              <div className="grid grid-cols-3 gap-2">
+                {option.photoUrls.slice(0, 3).map((url, idx) => (
+                  <img
+                    key={`${option.id}-photo-${idx}`}
+                    src={url}
+                    alt={`${option.title} thumbnail ${idx + 1}`}
+                    className="h-24 w-full rounded-md border border-gray-200 object-cover"
+                    loading="lazy"
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {extraContent}
+        </CardContent>
+      ) : null}
     </Card>
   );
 }

@@ -1,18 +1,17 @@
 "use client";
 
-import { useMemo, useState, useRef, useLayoutEffect, useEffect } from "react";
+import { useMemo, useState, useRef, useLayoutEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
-import type { ResearchOption, ResearchOptionPreference, TripInfo, TripResearchBrief } from "@/lib/api-client";
+import type { ResearchOption, TripInfo, TripResearchBrief } from "@/lib/api-client";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
 
 interface InitialResearchViewProps {
   tripInfo: TripInfo | null;
   researchBrief: TripResearchBrief | null;
-  researchOptionSelections: Record<string, ResearchOptionPreference>;
-  onSelectionChange: (optionId: string, preference: ResearchOptionPreference) => void;
+  selectedOptionIds: string[];
+  onSelectionChange: (optionId: string, selected: boolean) => void;
   onResolveDurationConflict: (mode: "use_date_range" | "keep_requested_duration") => void;
   hasUnresolvedAssumptionConflicts: boolean;
   onRegenerate: () => void;
@@ -22,14 +21,13 @@ interface InitialResearchViewProps {
   lastDeepResearchAtByOptionId?: Record<string, string>;
   onProceed: () => void;
   canProceed?: boolean;
-  onStatusFocusChange?: (status: "all" | "keep" | "maybe" | "reject") => void;
   isLoading?: boolean;
 }
 
 export function InitialResearchView({
   tripInfo,
   researchBrief,
-  researchOptionSelections,
+  selectedOptionIds,
   onSelectionChange,
   onResolveDurationConflict,
   hasUnresolvedAssumptionConflicts,
@@ -40,12 +38,11 @@ export function InitialResearchView({
   lastDeepResearchAtByOptionId = {},
   onProceed,
   canProceed = true,
-  onStatusFocusChange,
   isLoading = false,
 }: InitialResearchViewProps) {
   const [showAssumptions, setShowAssumptions] = useState(false);
+  const [activeInterest, setActiveInterest] = useState<string>("All");
 
-  // Preserve scroll position when switching interest chips to prevent layout-shift scroll jumps
   const scrollYRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (scrollYRef.current !== null) {
@@ -86,8 +83,8 @@ export function InitialResearchView({
   const dietaryHints = allPreferences.filter((item) =>
     /vegetarian|vegan|no meat|no seafood|halal|kosher|gluten/i.test(item)
   );
-  const [activeStatus, setActiveStatus] = useState<string>("Postponed");
-  const [activeInterest, setActiveInterest] = useState<string>("All");
+  const selectedSet = new Set(selectedOptionIds);
+
   const overviewOpening = useMemo(() => {
     if (!researchBrief.summary) return "";
     const parts = researchBrief.summary
@@ -104,53 +101,15 @@ export function InitialResearchView({
       .replace(/\s+/g, " ")
       .trim();
 
-  const matchesStatus = (option: ResearchOption, status: string) => {
-    const selection = researchOptionSelections[option.id];
-    if (status === "Inbox") return !selection;
-    if (status === "Selected") return selection === "keep";
-    if (status === "Postponed") return selection === "maybe";
-    if (status === "Rejected") return selection === "reject";
-    return true; // "All" or unknown
-  };
-
-  const statusLabel = (status: string) => {
-    if (status === "Selected") return "Kept";
-    if (status === "Postponed") return "Maybe'd";
-    if (status === "Rejected") return "Rejected";
-    if (status === "Inbox") return "Inbox";
-    return status;
-  };
-
-  const setStatusAndFocus = (status: string) => {
-    setActiveStatus(status);
-    if (!onStatusFocusChange) return;
-    if (status === "Selected") {
-      onStatusFocusChange("keep");
-    } else if (status === "Postponed") {
-      onStatusFocusChange("maybe");
-    } else if (status === "Rejected") {
-      onStatusFocusChange("reject");
-    } else {
-      onStatusFocusChange("all");
-    }
-  };
-
   const matchesInterest = (option: ResearchOption, interest: string) => {
-    if (interest === "All" || interest === "Other") return true; // Other is special
+    if (interest === "All" || interest === "Other") return true;
     const normalizedPref = normalize(interest);
     const category = normalize(option.category);
     const why = normalize(option.whyItMatches || "");
-    return (
-      category.includes(normalizedPref) ||
-      normalizedPref.includes(category) ||
-      why.includes(normalizedPref)
-    );
+    return category.includes(normalizedPref) || normalizedPref.includes(category) || why.includes(normalizedPref);
   };
 
-
-
   const interestTabsList = useMemo(() => {
-    // Show all interest tabs that exist in the entire research brief
     const tabs = new Set<string>(["All"]);
     researchBrief.popularOptions.forEach((option) => {
       allPreferences.forEach((pref) => {
@@ -169,13 +128,10 @@ export function InitialResearchView({
   }, [allPreferences, researchBrief.popularOptions]);
 
   const interestCounts = useMemo(() => {
-    const optionsInActiveStatus = researchBrief.popularOptions.filter((opt) =>
-      matchesStatus(opt, activeStatus)
-    );
-    const counts: Record<string, number> = { All: optionsInActiveStatus.length };
+    const counts: Record<string, number> = { All: researchBrief.popularOptions.length };
     interestTabsList.forEach((tab) => {
       if (tab === "All") return;
-      counts[tab] = optionsInActiveStatus.filter((opt) => {
+      counts[tab] = researchBrief.popularOptions.filter((opt) => {
         if (tab === "Other") {
           return !allPreferences.some((pref) => matchesInterest(opt, pref));
         }
@@ -183,66 +139,24 @@ export function InitialResearchView({
       }).length;
     });
     return counts;
-  }, [interestTabsList, researchBrief.popularOptions, allPreferences, activeStatus, researchOptionSelections]);
-
-  const statusCounts = useMemo(() => {
-    // Counts reflect the currently selected interest
-    const counts = { Inbox: 0, Selected: 0, Postponed: 0, Rejected: 0 };
-    researchBrief.popularOptions.forEach((opt) => {
-      // Filter by interest first
-      if (activeInterest !== "All") {
-        if (activeInterest === "Other") {
-          if (allPreferences.some((pref) => matchesInterest(opt, pref))) return;
-        } else if (!matchesInterest(opt, activeInterest)) {
-          return;
-        }
-      }
-
-      if (!researchOptionSelections[opt.id]) counts.Inbox++;
-      else if (researchOptionSelections[opt.id] === "keep") counts.Selected++;
-      else if (researchOptionSelections[opt.id] === "maybe") counts.Postponed++;
-      else if (researchOptionSelections[opt.id] === "reject") counts.Rejected++;
-    });
-    return counts;
-  }, [researchBrief.popularOptions, researchOptionSelections, activeInterest, allPreferences]);
-
-  const getStatusCount = (status: string) => {
-    if (status === "Selected") return statusCounts.Selected;
-    if (status === "Postponed") return statusCounts.Postponed;
-    if (status === "Rejected") return statusCounts.Rejected;
-    if (status === "Inbox") return statusCounts.Inbox;
-    return 0;
-  };
-
-  useEffect(() => {
-    if (getStatusCount(activeStatus) > 0) return;
-    const fallbackStatus = ["Selected", "Postponed", "Inbox", "Rejected"].find(
-      (status) => getStatusCount(status) > 0
-    );
-    if (fallbackStatus && fallbackStatus !== activeStatus) {
-      setStatusAndFocus(fallbackStatus);
-    }
-  }, [activeStatus, statusCounts, activeInterest]);
+  }, [interestTabsList, researchBrief.popularOptions, allPreferences]);
 
   const visibleOptions = useMemo(() => {
     return researchBrief.popularOptions.filter((option) => {
-      if (!matchesStatus(option, activeStatus)) return false;
       if (activeInterest === "All") return true;
       if (activeInterest === "Other") {
         return !allPreferences.some((pref) => matchesInterest(option, pref));
       }
       return matchesInterest(option, activeInterest);
     });
-  }, [activeStatus, activeInterest, researchBrief.popularOptions, researchOptionSelections, allPreferences]);
+  }, [activeInterest, researchBrief.popularOptions, allPreferences]);
 
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between bg-white py-2 px-4">
         <div>
-          <h2 className="text-lg font-semibold">Let's plan your trip together</h2>
-          <p className="text-sm text-gray-500">
-            Review and refine your selections, then proceed to organize your trip by day.
-          </p>
+          <h2 className="text-lg font-semibold">Let&apos;s plan your trip together</h2>
+          <p className="text-sm text-gray-500">Select the cards that fit your trip, then continue to day grouping.</p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -267,9 +181,7 @@ export function InitialResearchView({
           <CardTitle className="text-base">Trip Overview</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-gray-700">
-          {overviewOpening && (
-            <p className="text-sm leading-relaxed text-gray-800">{overviewOpening}</p>
-          )}
+          {overviewOpening ? <p className="text-sm leading-relaxed text-gray-800">{overviewOpening}</p> : null}
           <p>
             <span className="text-gray-500">Dates:</span>{" "}
             {tripInfo?.startDate && tripInfo?.endDate ? `${tripInfo.startDate} to ${tripInfo.endDate}` : "Not set"}
@@ -286,7 +198,7 @@ export function InitialResearchView({
             <span className="text-gray-500">Dietary constraints:</span>{" "}
             {dietaryHints.length > 0 ? dietaryHints.join(", ") : allPreferences.join(", ") || "None specified"}
           </p>
-          {researchBrief.assumptions.length > 0 && (
+          {researchBrief.assumptions.length > 0 ? (
             <div className="pt-2">
               <button
                 type="button"
@@ -296,7 +208,7 @@ export function InitialResearchView({
                 {showAssumptions ? "Hide assumptions" : "View assumptions"}
                 {showAssumptions ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
               </button>
-              {showAssumptions && (
+              {showAssumptions ? (
                 <ul className="mt-2 space-y-1">
                   {researchBrief.assumptions.map((item, idx) => (
                     <li key={`${item}-${idx}`} className="text-sm text-gray-600 flex gap-1.5">
@@ -305,15 +217,13 @@ export function InitialResearchView({
                     </li>
                   ))}
                 </ul>
-              )}
+              ) : null}
             </div>
-          )}
+          ) : null}
 
-          {hasDurationConflict && (
+          {hasDurationConflict ? (
             <div className="pt-2">
-              <p className="text-amber-800 font-medium">
-                Resolve duration conflict before generating activities.
-              </p>
+              <p className="text-amber-800 font-medium">Resolve duration conflict before generating activities.</p>
               <div className="flex flex-wrap gap-2 mt-2">
                 <Button
                   variant="outline"
@@ -333,7 +243,7 @@ export function InitialResearchView({
                 </Button>
               </div>
             </div>
-          )}
+          ) : null}
         </CardContent>
       </Card>
 
@@ -341,71 +251,22 @@ export function InitialResearchView({
         <div className="space-y-1">
           <h3 className="text-sm font-medium text-gray-900">Suggestions for you</h3>
           <p className="text-xs text-gray-500 leading-relaxed">
-            Select <strong>Keep</strong> for places you love, <strong>Maybe</strong> for those you're considering,
-            or <strong>Reject</strong> for ones that don't fit. Your choices help refine our AI's understanding
-            to create a better personalized itinerary.
+            Tap cards to select the places you want included in your itinerary.
           </p>
         </div>
-        <div className="flex flex-wrap gap-4 pt-2 items-center">
-          <button
-            onClick={() => setStatusAndFocus("Selected")}
-            disabled={statusCounts.Selected === 0}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Selected"
-              ? "bg-emerald-600 border-emerald-700 text-white"
-              : statusCounts.Selected > 0
-                ? "bg-emerald-50/30 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
-                : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
-              }`}
-          >
-            <span className={`w-2 h-2 rounded-full ${activeStatus === "Selected" ? "bg-white/90" : "bg-emerald-500"}`} />
-            Kept {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Selected}
-          </button>
-          <button
-            onClick={() => setStatusAndFocus("Postponed")}
-            disabled={statusCounts.Postponed === 0}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Postponed"
-              ? "bg-amber-500 border-amber-600 text-white"
-              : statusCounts.Postponed > 0
-                ? "bg-amber-50/30 border-amber-200 text-amber-700 hover:bg-amber-100"
-                : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
-              }`}
-          >
-            <span className={`w-2 h-2 rounded-full ${activeStatus === "Postponed" ? "bg-white/90" : "bg-amber-500"}`} />
-            Maybe'd {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Postponed}
-          </button>
-          <button
-            onClick={() => setStatusAndFocus("Rejected")}
-            disabled={statusCounts.Rejected === 0}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${activeStatus === "Rejected"
-              ? "bg-rose-600 border-rose-700 text-white"
-              : statusCounts.Rejected > 0
-                ? "bg-rose-50/30 border-rose-200 text-rose-700 hover:bg-rose-100"
-                : "bg-gray-50 border-gray-100 text-gray-400 cursor-not-allowed"
-              }`}
-          >
-            <span className={`w-2 h-2 rounded-full ${activeStatus === "Rejected" ? "bg-white/90" : "bg-rose-500"}`} />
-            Rejected {activeInterest !== "All" ? activeInterest : ""}: {statusCounts.Rejected}
-          </button>
-          <button
-            onClick={() => setStatusAndFocus("Inbox")}
-            className={`ml-auto flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${activeStatus === "Inbox"
-              ? "bg-blue-600 border-blue-700 text-white"
-              : statusCounts.Inbox > 0
-                ? "bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 animate-pulse"
-                : "bg-gray-50 border-gray-100 text-gray-400"
-              }`}
-          >
-            {statusCounts.Inbox} {activeInterest !== "All" ? activeInterest : ""} inbox
-          </button>
+        <div className="flex flex-wrap gap-3 items-center">
+          <div className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700">
+            {selectedOptionIds.length} selected
+          </div>
           <Button
             variant="outline"
             size="sm"
             onClick={onDeepResearchAll}
             disabled={isLoading}
-            title="Runs deeper web research for kept and maybe'd cards only"
+            title="Runs deeper web research for selected cards"
           >
             <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-            Research kept + maybe'd
+            Research selected
           </Button>
         </div>
       </div>
@@ -426,9 +287,7 @@ export function InitialResearchView({
             {tab} ({interestCounts[tab] || 0})
           </Button>
         ))}
-        <span className="text-xs text-gray-500 ml-auto flex-shrink-0">
-          Showing {visibleOptions.length} of {statusLabel(activeStatus)} options
-        </span>
+        <span className="text-xs text-gray-500 ml-auto flex-shrink-0">Showing {visibleOptions.length} options</span>
       </div>
 
       <div className="min-h-[200px]">
@@ -438,8 +297,8 @@ export function InitialResearchView({
               <ResearchOptionCard
                 key={option.id}
                 option={option}
-                selection={researchOptionSelections[option.id] || "maybe"}
-                onSelectionChange={onSelectionChange}
+                isSelected={selectedSet.has(option.id)}
+                onToggleSelect={(id) => onSelectionChange(id, !selectedSet.has(id))}
                 onDeepResearch={onDeepResearchOption}
                 deepResearchLoading={isLoading && deepResearchOptionId === option.id}
                 deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
@@ -450,43 +309,11 @@ export function InitialResearchView({
         ) : (
           <div className="flex flex-col items-center justify-center p-8 text-center bg-gray-50/50 rounded-lg border border-dashed border-gray-200 h-full">
             <p className="text-gray-500 mb-3">
-              No <span className="font-medium text-gray-700">{statusLabel(activeStatus).toLowerCase()}</span> activities
-              {activeInterest !== "All" && (
-                <> for <span className="font-medium text-gray-900">{activeInterest}</span></>
-              )}.
+              No activities for <span className="font-medium text-gray-900">{activeInterest}</span>.
             </p>
-            <div className="text-sm text-gray-400 space-y-2">
-              <p>{activeInterest !== "All" ? `${activeInterest} breakdown:` : "Activity breakdown:"}</p>
-              <div className="flex flex-wrap gap-3 justify-center">
-                {statusCounts.Selected > 0 && (
-                  <span className="text-emerald-600 font-medium">
-                    {statusCounts.Selected} kept
-                  </span>
-                )}
-                {statusCounts.Postponed > 0 && (
-                  <span className="text-amber-600 font-medium">
-                    {statusCounts.Postponed} maybe'd
-                  </span>
-                )}
-                {statusCounts.Rejected > 0 && (
-                  <span className="text-rose-600 font-medium">
-                    {statusCounts.Rejected} rejected
-                  </span>
-                )}
-                {statusCounts.Inbox > 0 && (
-                  <span className="text-blue-600 font-medium">
-                    {statusCounts.Inbox} in inbox
-                  </span>
-                )}
-                {statusCounts.Selected === 0 && statusCounts.Postponed === 0 && statusCounts.Rejected === 0 && statusCounts.Inbox === 0 && (
-                  <span className="text-gray-400">No activities in this category</span>
-                )}
-              </div>
-            </div>
           </div>
         )}
       </div>
-
     </div>
   );
 }

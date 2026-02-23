@@ -9,31 +9,33 @@ import { Loader2, Send, MessageSquare, Heart, ChevronLeft, ChevronRight, Refresh
 import MapComponent from "@/components/MapComponent";
 import { InitialResearchView } from "@/components/InitialResearchView";
 import { DayGroupingView } from "@/components/DayGroupingView";
-import { RestaurantSelectionView } from "@/components/RestaurantSelectionView";
 import { DayItineraryView } from "@/components/DayItineraryView";
+import { RestaurantSelectionView } from "@/components/RestaurantSelectionView";
+import { AccommodationSuggestionsView } from "@/components/AccommodationSuggestionsView";
+import { FlightSuggestionsView } from "@/components/FlightSuggestionsView";
 import {
   startSession,
-  chat,
-  finalize,
+  agentTurn,
   generateResearchBrief,
   confirmResearchBrief,
   selectActivities,
   adjustDayGroups,
-  confirmDayGrouping,
-  getRestaurantSuggestions,
   setMealPreferences,
   updateTripInfo,
   updateWorkflowState,
   deepResearchOption,
   deepResearchSelectedOptions,
   enrichResearchPhotos,
+  type SessionResponse,
   type TripInfo,
   type SuggestedActivity,
   type GroupedDay,
-  type ResearchOptionPreference,
-  type RestaurantSuggestion,
   type DayGroup,
   type TripResearchBrief,
+  type RestaurantSuggestion,
+  type SubAgentStatus,
+  type AccommodationOption,
+  type FlightOption,
 } from "@/lib/api-client";
 import { InterestsPreferencesView } from "@/components/InterestsPreferencesView";
 
@@ -64,8 +66,8 @@ const UI_STAGE_LABELS = [
   "Trip Basics",
   "Select Your Activities",
   "Organize Your Days",
-  "Accommodation Suggestions",
-  "Add Hotels & Flights",
+  "Restaurants",
+  "Hotels & Flights",
   "Final Review",
 ];
 
@@ -75,7 +77,7 @@ const WORKFLOW_TO_UI_STAGE: Record<string, number> = {
   [WORKFLOW_STATES.SUGGEST_ACTIVITIES]: 1,
   [WORKFLOW_STATES.SELECT_ACTIVITIES]: 1,
   [WORKFLOW_STATES.GROUP_DAYS]: 2,
-  [WORKFLOW_STATES.DAY_ITINERARY]: 2,
+  [WORKFLOW_STATES.DAY_ITINERARY]: 3,
   [WORKFLOW_STATES.MEAL_PREFERENCES]: 3,
   [WORKFLOW_STATES.REVIEW]: 4,
   [WORKFLOW_STATES.FINALIZE]: 5,
@@ -85,7 +87,7 @@ const UI_STAGE_TO_WORKFLOW: Record<number, string> = {
   0: WORKFLOW_STATES.INFO_GATHERING,
   1: WORKFLOW_STATES.INITIAL_RESEARCH,
   2: WORKFLOW_STATES.GROUP_DAYS,
-  3: WORKFLOW_STATES.MEAL_PREFERENCES,
+  3: WORKFLOW_STATES.DAY_ITINERARY,
   4: WORKFLOW_STATES.REVIEW,
   5: WORKFLOW_STATES.FINALIZE,
 };
@@ -114,8 +116,7 @@ export default function PlannerPage() {
   // Trip data
   const [tripInfo, setTripInfo] = useState<TripInfo>(EMPTY_TRIP_INFO);
   const [tripResearchBrief, setTripResearchBrief] = useState<TripResearchBrief | null>(null);
-  const [researchOptionSelections, setResearchOptionSelections] = useState<Record<string, ResearchOptionPreference>>({});
-  const [researchMapFocusPreference, setResearchMapFocusPreference] = useState<"all" | "keep" | "maybe" | "reject">("all");
+  const [selectedResearchOptionIds, setSelectedResearchOptionIds] = useState<string[]>([]);
 
   // New activity-first flow state
   const [suggestedActivities, setSuggestedActivities] = useState<SuggestedActivity[]>([]);
@@ -124,6 +125,20 @@ export default function PlannerPage() {
   const [groupedDays, setGroupedDays] = useState<GroupedDay[]>([]);
   const [restaurantSuggestions, setRestaurantSuggestions] = useState<RestaurantSuggestion[]>([]);
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState<string[]>([]);
+  const [wantsRestaurants, setWantsRestaurants] = useState<boolean | null>(null);
+  const [accommodationStatus, setAccommodationStatus] = useState<SubAgentStatus>("idle");
+  const [flightStatus, setFlightStatus] = useState<SubAgentStatus>("idle");
+  const [accommodationError, setAccommodationError] = useState<string | null>(null);
+  const [flightError, setFlightError] = useState<string | null>(null);
+  const [accommodationOptions, setAccommodationOptions] = useState<AccommodationOption[]>([]);
+  const [flightOptions, setFlightOptions] = useState<FlightOption[]>([]);
+  const [selectedAccommodationOptionId, setSelectedAccommodationOptionId] = useState<string | null>(null);
+  const [selectedFlightOptionId, setSelectedFlightOptionId] = useState<string | null>(null);
+  const [wantsAccommodation, setWantsAccommodation] = useState<boolean | null>(null);
+  const [wantsFlight, setWantsFlight] = useState<boolean | null>(null);
+  const [reviewOfferTab, setReviewOfferTab] = useState<"hotels" | "flights">("hotels");
+  const [accommodationLastSearchedAt, setAccommodationLastSearchedAt] = useState<string | null>(null);
+  const [flightLastSearchedAt, setFlightLastSearchedAt] = useState<string | null>(null);
   const [maxReachedState, setMaxReachedState] = useState(WORKFLOW_STATES.INFO_GATHERING);
   const [lastGroupedActivityIds, setLastGroupedActivityIds] = useState<string[]>([]);
 
@@ -181,17 +196,14 @@ export default function PlannerPage() {
 
   useEffect(() => {
     if (!tripResearchBrief) {
-      setResearchOptionSelections({});
+      setSelectedResearchOptionIds([]);
       setLastDeepResearchAtByOptionId({});
       return;
     }
 
-    setResearchOptionSelections((prev) => {
-      const next: Record<string, ResearchOptionPreference> = {};
-      for (const option of tripResearchBrief.popularOptions) {
-        next[option.id] = prev[option.id] || "maybe";
-      }
-      return next;
+    setSelectedResearchOptionIds((prev) => {
+      const validIds = new Set(tripResearchBrief.popularOptions.map((option) => option.id));
+      return prev.filter((id) => validIds.has(id));
     });
 
     // Keep timestamps only for currently visible options.
@@ -208,6 +220,20 @@ export default function PlannerPage() {
   useEffect(() => {
     setTripBasicsPreferencesInput((tripInfo.preferences || []).join(", "));
   }, [tripInfo.preferences]);
+
+  useEffect(() => {
+    if (selectedAccommodationOptionId && !accommodationOptions.some((option) => option.id === selectedAccommodationOptionId)) {
+      setSelectedAccommodationOptionId(null);
+      if (wantsAccommodation) setWantsAccommodation(null);
+    }
+  }, [accommodationOptions, selectedAccommodationOptionId, wantsAccommodation]);
+
+  useEffect(() => {
+    if (selectedFlightOptionId && !flightOptions.some((option) => option.id === selectedFlightOptionId)) {
+      setSelectedFlightOptionId(null);
+      if (wantsFlight) setWantsFlight(null);
+    }
+  }, [flightOptions, selectedFlightOptionId, wantsFlight]);
 
   const triggerPhotoEnrichment = useCallback(async () => {
     if (!sessionId || !tripResearchBrief || photoEnrichmentInProgress) return;
@@ -279,6 +305,53 @@ export default function PlannerPage() {
     }
   };
 
+  const applySessionResponse = (response: SessionResponse, appendMessage = true) => {
+    if (response.researchOptionSelections) {
+      const selectedIds = Object.entries(response.researchOptionSelections)
+        .filter(([, value]) => value === "selected" || value === "keep")
+        .map(([id]) => id);
+      setSelectedResearchOptionIds(selectedIds);
+    }
+    if (response.tripInfo) setTripInfo(response.tripInfo);
+    if ("tripResearchBrief" in response) {
+      setTripResearchBrief(response.tripResearchBrief ?? null);
+    }
+    if (response.suggestedActivities !== undefined) setSuggestedActivities(response.suggestedActivities);
+    if (response.selectedActivityIds !== undefined) setSelectedActivityIds(response.selectedActivityIds);
+    if (response.dayGroups !== undefined) setDayGroups(response.dayGroups);
+    if (response.groupedDays !== undefined) setGroupedDays(response.groupedDays);
+    if (response.restaurantSuggestions !== undefined) setRestaurantSuggestions(response.restaurantSuggestions);
+    if (response.selectedRestaurantIds !== undefined) setSelectedRestaurantIds(response.selectedRestaurantIds);
+    if (response.wantsRestaurants !== undefined) setWantsRestaurants(response.wantsRestaurants);
+    if (response.accommodationStatus !== undefined) setAccommodationStatus(response.accommodationStatus);
+    if (response.flightStatus !== undefined) setFlightStatus(response.flightStatus);
+    if (response.accommodationError !== undefined) setAccommodationError(response.accommodationError ?? null);
+    if (response.flightError !== undefined) setFlightError(response.flightError ?? null);
+    if (response.accommodationOptions !== undefined) setAccommodationOptions(response.accommodationOptions);
+    if (response.flightOptions !== undefined) setFlightOptions(response.flightOptions);
+    if (response.selectedAccommodationOptionId !== undefined) {
+      setSelectedAccommodationOptionId(response.selectedAccommodationOptionId ?? null);
+    }
+    if (response.selectedFlightOptionId !== undefined) {
+      setSelectedFlightOptionId(response.selectedFlightOptionId ?? null);
+    }
+    if (response.wantsAccommodation !== undefined) {
+      setWantsAccommodation(response.wantsAccommodation ?? null);
+    }
+    if (response.wantsFlight !== undefined) {
+      setWantsFlight(response.wantsFlight ?? null);
+    }
+    if (response.accommodationLastSearchedAt !== undefined) setAccommodationLastSearchedAt(response.accommodationLastSearchedAt ?? null);
+    if (response.flightLastSearchedAt !== undefined) setFlightLastSearchedAt(response.flightLastSearchedAt ?? null);
+    if (response.workflowState) {
+      setWorkflowState(response.workflowState);
+      updateMaxReachedState(response.workflowState);
+    }
+    if (appendMessage && response.message) {
+      setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+    }
+  };
+
   // Handle chat messages
   const handleChat = async () => {
     if (!chatInput.trim() || !sessionId) return;
@@ -289,17 +362,11 @@ export default function PlannerPage() {
     setLoading(true);
 
     try {
-      const response = await chat(sessionId, userMessage);
+      const response = await agentTurn(sessionId, "user_message", userMessage);
       if (response.success) {
+        applySessionResponse(response, true);
+      } else {
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
-        if (response.tripInfo) setTripInfo(response.tripInfo);
-        if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
-        if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
-        if (response.suggestedActivities) setSuggestedActivities(response.suggestedActivities);
-        if (response.workflowState) {
-          setWorkflowState(response.workflowState);
-          updateMaxReachedState(response.workflowState);
-        }
       }
     } catch (error) {
       console.error("Chat error:", error);
@@ -322,12 +389,11 @@ export default function PlannerPage() {
     setLoading(true);
 
     try {
-      const response = await chat(sessionId, userMessage);
+      const response = await agentTurn(sessionId, "user_message", userMessage);
       if (response.success) {
+        applySessionResponse(response, true);
+      } else {
         setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
-        if (response.tripInfo) setTripInfo(response.tripInfo);
-        if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
-        if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
       }
     } catch (error) {
       console.error("Suggestion chat error:", error);
@@ -352,7 +418,12 @@ export default function PlannerPage() {
       const response = await generateResearchBrief(sessionId, depth, mode);
       if (response.success) {
         if (response.tripResearchBrief) setTripResearchBrief(response.tripResearchBrief);
-        if (response.researchOptionSelections) setResearchOptionSelections(response.researchOptionSelections);
+        if (response.researchOptionSelections) {
+          const selectedIds = Object.entries(response.researchOptionSelections)
+            .filter(([, value]) => value === "selected" || value === "keep")
+            .map(([id]) => id);
+          setSelectedResearchOptionIds(selectedIds);
+        }
         if (depth === "deep" && response.tripResearchBrief) {
           const timestamp = new Date().toISOString();
           const ids = response.tripResearchBrief.popularOptions.map((option) => option.id);
@@ -379,29 +450,21 @@ export default function PlannerPage() {
 
   const handleProceedFromResearch = async () => {
     if (!sessionId || hasUnresolvedAssumptionConflicts) return;
-    const confirmedSelectedActivityIds = Object.entries(researchOptionSelections)
-      .filter(([, preference]) => preference === "keep")
-      .map(([optionId]) => optionId);
+    const confirmedSelectedActivityIds = [...selectedResearchOptionIds];
     if (confirmedSelectedActivityIds.length === 0) {
-      alert("Select at least one activity with Keep before organizing your trip.");
+      alert("Select at least one activity before organizing your trip.");
       return;
     }
     setLoading(true);
     try {
-      const response = await confirmResearchBrief(sessionId, researchOptionSelections);
+      const response = await confirmResearchBrief(sessionId, {
+        selectedResearchOptionIds: confirmedSelectedActivityIds,
+      });
       if (!response.success) {
         throw new Error(response.message);
       }
-      if (response.suggestedActivities) {
-        setSuggestedActivities(response.suggestedActivities);
-      }
+      applySessionResponse(response, false);
       const selectedIds = response.selectedActivityIds || [];
-      setSelectedActivityIds(selectedIds);
-      const nextState = response.workflowState || WORKFLOW_STATES.GROUP_DAYS;
-      setWorkflowState(nextState);
-      updateMaxReachedState(nextState);
-      setDayGroups(response.dayGroups || []);
-      setGroupedDays(response.groupedDays || []);
       setLastGroupedActivityIds([...selectedIds]);
       setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
     } catch (error) {
@@ -501,13 +564,8 @@ export default function PlannerPage() {
       if (!selectResponse.success) {
         throw new Error(selectResponse.message);
       }
-      const nextState = selectResponse.workflowState || WORKFLOW_STATES.GROUP_DAYS;
-      setWorkflowState(nextState);
-      updateMaxReachedState(nextState);
-      setDayGroups(selectResponse.dayGroups || []);
-      setGroupedDays(selectResponse.groupedDays || []);
+      applySessionResponse(selectResponse, true);
       setLastGroupedActivityIds([...ids]);
-      setChatHistory((prev) => [...prev, { role: "assistant", content: selectResponse.message }]);
     } catch (error) {
       console.error("Group days error:", error);
       alert("Failed to organize activities. Please try again.");
@@ -516,11 +574,14 @@ export default function PlannerPage() {
     }
   };
 
-  const handleResearchSelectionChange = (optionId: string, preference: ResearchOptionPreference) => {
-    setResearchOptionSelections((prev) => ({
-      ...prev,
-      [optionId]: preference,
-    }));
+  const handleResearchSelectionChange = (optionId: string, selected: boolean) => {
+    setSelectedResearchOptionIds((prev) => {
+      if (selected) {
+        if (prev.includes(optionId)) return prev;
+        return [...prev, optionId];
+      }
+      return prev.filter((id) => id !== optionId);
+    });
   };
 
   const getDerivedDurationFromDates = (info: TripInfo | null): number | null => {
@@ -539,7 +600,7 @@ export default function PlannerPage() {
     tripInfo.durationDays > 0 &&
     Math.abs(derivedDuration - tripInfo.durationDays) > 1;
   const hasUnresolvedAssumptionConflicts = workflowState === WORKFLOW_STATES.INITIAL_RESEARCH && hasDurationConflict;
-  const hasAnyKeptResearchOption = Object.values(researchOptionSelections).some((preference) => preference === "keep");
+  const hasAnySelectedResearchOption = selectedResearchOptionIds.length > 0;
 
   const handleResolveDurationConflict = async (mode: "use_date_range" | "keep_requested_duration") => {
     if (!sessionId || !tripInfo) return;
@@ -609,12 +670,11 @@ export default function PlannerPage() {
     setLoading(true);
 
     try {
-      const response = await confirmDayGrouping(sessionId);
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "confirm_grouping",
+      });
       if (response.success) {
-        setWorkflowState(WORKFLOW_STATES.DAY_ITINERARY);
-        updateMaxReachedState(WORKFLOW_STATES.DAY_ITINERARY);
-        setGroupedDays(response.groupedDays || []);
-        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+        applySessionResponse(response, true);
       }
     } catch (error) {
       console.error("Confirm grouping error:", error);
@@ -624,74 +684,172 @@ export default function PlannerPage() {
     }
   };
 
-  // Get restaurant suggestions
-  const handleGetRestaurants = async () => {
+  const handleRefreshAccommodationSearch = async () => {
     if (!sessionId) return;
     setLoading(true);
-
     try {
-      const response = await getRestaurantSuggestions(sessionId);
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "refresh_accommodation_search",
+      });
       if (response.success) {
-        setWorkflowState(WORKFLOW_STATES.MEAL_PREFERENCES);
-        updateMaxReachedState(WORKFLOW_STATES.MEAL_PREFERENCES);
-        setRestaurantSuggestions(response.restaurantSuggestions || []);
-        setSelectedRestaurantIds([]);
-        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+        applySessionResponse(response, true);
       }
     } catch (error) {
-      console.error("Get restaurants error:", error);
-      alert("Failed to find restaurants. Please try again.");
+      console.error("Refresh accommodation error:", error);
+      alert("Failed to refresh accommodation search. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Handle restaurant selection change
+  const handleContinueToRestaurants = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "continue_to_restaurants",
+      });
+      if (response.success) {
+        applySessionResponse(response, true);
+      }
+    } catch (error) {
+      console.error("Continue to restaurants error:", error);
+      alert("Failed to load restaurant suggestions. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSkipRestaurantsFromStage = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await setMealPreferences(sessionId, false, []);
+      if (response.success) {
+        applySessionResponse(response, true);
+      }
+    } catch (error) {
+      console.error("Skip restaurants error:", error);
+      alert("Failed to skip restaurants. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRestaurantSelectionChange = (ids: string[]) => {
     setSelectedRestaurantIds(ids);
   };
 
-  // Handle meal preferences (add restaurants or skip)
-  const handleMealPreferences = async (wantsRestaurants: boolean) => {
+  const handleMealPreferences = async (shouldAddRestaurants: boolean) => {
     if (!sessionId) return;
     setLoading(true);
-
     try {
-      const response = await setMealPreferences(
-        sessionId,
-        wantsRestaurants,
-        wantsRestaurants ? selectedRestaurantIds : undefined
-      );
+      const response = await agentTurn(sessionId, "ui_action", undefined, shouldAddRestaurants
+        ? {
+            type: "add_restaurants",
+            payload: { selectedRestaurantIds },
+          }
+        : {
+            type: "skip_restaurants",
+          });
       if (response.success) {
-        setWorkflowState(WORKFLOW_STATES.REVIEW);
-        updateMaxReachedState(WORKFLOW_STATES.REVIEW);
-        setGroupedDays(response.groupedDays || []);
-        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+        applySessionResponse(response, true);
       }
     } catch (error) {
-      console.error("Meal preferences error:", error);
-      alert("Failed to save preferences. Please try again.");
+      console.error("Set meal preferences error:", error);
+      alert("Failed to save restaurant selection. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Skip restaurants and go to review
-  const handleSkipRestaurants = async () => {
+  const handleRefreshFlightSearch = async () => {
     if (!sessionId) return;
     setLoading(true);
-
     try {
-      const response = await setMealPreferences(sessionId, false);
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "refresh_flight_search",
+      });
       if (response.success) {
-        setWorkflowState(WORKFLOW_STATES.REVIEW);
-        updateMaxReachedState(WORKFLOW_STATES.REVIEW);
-        setGroupedDays(response.groupedDays || []);
-        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+        applySessionResponse(response, true);
       }
     } catch (error) {
-      console.error("Skip restaurants error:", error);
-      alert("Failed to proceed. Please try again.");
+      console.error("Refresh flights error:", error);
+      alert("Failed to refresh flight search. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectAccommodation = async (optionId: string) => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "select_accommodation",
+        payload: { optionId },
+      });
+      if (response.success) {
+        applySessionResponse(response, true);
+      }
+    } catch (error) {
+      console.error("Select accommodation error:", error);
+      alert("Failed to save hotel selection. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSkipAccommodation = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "skip_accommodation",
+      });
+      if (response.success) {
+        applySessionResponse(response, true);
+      }
+    } catch (error) {
+      console.error("Skip accommodation error:", error);
+      alert("Failed to skip hotels. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectFlight = async (optionId: string) => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "select_flight",
+        payload: { optionId },
+      });
+      if (response.success) {
+        applySessionResponse(response, true);
+      }
+    } catch (error) {
+      console.error("Select flight error:", error);
+      alert("Failed to save flight selection. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSkipFlight = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "skip_flight",
+      });
+      if (response.success) {
+        applySessionResponse(response, true);
+      }
+    } catch (error) {
+      console.error("Skip flight error:", error);
+      alert("Failed to skip flights. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -703,11 +861,11 @@ export default function PlannerPage() {
     setLoading(true);
 
     try {
-      const response = await finalize(sessionId);
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "finalize_trip",
+      });
       if (response.success) {
-        setWorkflowState(WORKFLOW_STATES.FINALIZE);
-        updateMaxReachedState(WORKFLOW_STATES.FINALIZE);
-        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+        applySessionResponse(response, true);
       }
     } catch (error) {
       console.error("Finalize error:", error);
@@ -797,6 +955,23 @@ export default function PlannerPage() {
     });
   };
 
+  const accommodationDecisionMade = wantsAccommodation === false || selectedAccommodationOptionId != null;
+  const flightDecisionMade = wantsFlight === false || selectedFlightOptionId != null;
+  const travelOfferReadyForFinalize = accommodationDecisionMade && flightDecisionMade;
+
+  const requiresTravelOfferCompletion = (state: string) =>
+    state === WORKFLOW_STATES.FINALIZE;
+
+  const selectedAccommodationOption =
+    selectedAccommodationOptionId != null
+      ? accommodationOptions.find((option) => option.id === selectedAccommodationOptionId) || null
+      : null;
+
+  const selectedFlightOption =
+    selectedFlightOptionId != null
+      ? flightOptions.find((option) => option.id === selectedFlightOptionId) || null
+      : null;
+
   const handleGoBack = async () => {
     if (!sessionId) return;
     const currentIndex = WORKFLOW_ORDER.indexOf(workflowState);
@@ -804,7 +979,7 @@ export default function PlannerPage() {
       const prevState = WORKFLOW_ORDER[currentIndex - 1];
       setLoading(true);
       try {
-        await updateWorkflowState(sessionId, prevState);
+        await updateWorkflowState(sessionId, prevState, { transitionOwner: "UI" });
         setWorkflowState(prevState);
       } catch (error) {
         console.error("Go back error:", error);
@@ -820,9 +995,13 @@ export default function PlannerPage() {
     const maxIndex = WORKFLOW_ORDER.indexOf(maxReachedState);
     if (currentIndex < maxIndex) {
       const nextState = WORKFLOW_ORDER[currentIndex + 1];
+      if (requiresTravelOfferCompletion(nextState) && !travelOfferReadyForFinalize) {
+        alert("Select or skip one hotel and one flight before continuing.");
+        return;
+      }
       setLoading(true);
       try {
-        await updateWorkflowState(sessionId, nextState);
+        await updateWorkflowState(sessionId, nextState, { transitionOwner: "UI" });
         setWorkflowState(nextState);
       } catch (error) {
         console.error("Go forward error:", error);
@@ -858,10 +1037,14 @@ export default function PlannerPage() {
 
     const targetState = UI_STAGE_TO_WORKFLOW[stageIndex];
     if (!targetState || targetState === workflowState) return;
+    if (requiresTravelOfferCompletion(targetState) && !travelOfferReadyForFinalize) {
+      alert("Select or skip one hotel and one flight before moving to this stage.");
+      return;
+    }
 
     setLoading(true);
     try {
-      await updateWorkflowState(sessionId, targetState);
+      await updateWorkflowState(sessionId, targetState, { transitionOwner: "UI" });
       setWorkflowState(targetState);
     } catch (error) {
       console.error("Jump to stage error:", error);
@@ -880,7 +1063,10 @@ export default function PlannerPage() {
     const currentIndex = WORKFLOW_ORDER.indexOf(workflowState);
     const maxIndex = WORKFLOW_ORDER.indexOf(maxReachedState);
     const canGoBack = currentIndex > 1; // Don't go back to info gathering via buttons
-    const canGoForward = currentIndex < maxIndex;
+    const rawCanGoForward = currentIndex < maxIndex;
+    const nextState = rawCanGoForward ? WORKFLOW_ORDER[currentIndex + 1] : null;
+    const canGoForward =
+      rawCanGoForward && (!nextState || !requiresTravelOfferCompletion(nextState) || travelOfferReadyForFinalize);
 
     const selectionsChanged =
       (workflowState === WORKFLOW_STATES.GROUP_DAYS || workflowState === WORKFLOW_STATES.DAY_ITINERARY) &&
@@ -917,6 +1103,11 @@ export default function PlannerPage() {
                 <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                 Selections changed – Reorganize?
               </Button>
+            )}
+            {rawCanGoForward && !canGoForward && (
+              <span className="text-xs text-amber-700">
+                Complete accommodation and flight searches to continue.
+              </span>
             )}
           </div>
         )}
@@ -1104,7 +1295,7 @@ export default function PlannerPage() {
                   <InitialResearchView
                     tripInfo={tripInfo}
                     researchBrief={tripResearchBrief}
-                    researchOptionSelections={researchOptionSelections}
+                    selectedOptionIds={selectedResearchOptionIds}
                     onSelectionChange={handleResearchSelectionChange}
                     onResolveDurationConflict={handleResolveDurationConflict}
                     hasUnresolvedAssumptionConflicts={hasUnresolvedAssumptionConflicts}
@@ -1114,8 +1305,7 @@ export default function PlannerPage() {
                     deepResearchOptionId={deepResearchOptionId}
                     lastDeepResearchAtByOptionId={lastDeepResearchAtByOptionId}
                     onProceed={handleProceedFromResearch}
-                    canProceed={hasAnyKeptResearchOption}
-                    onStatusFocusChange={setResearchMapFocusPreference}
+                    canProceed={hasAnySelectedResearchOption}
                     isLoading={loading}
                   />
                 );
@@ -1135,6 +1325,28 @@ export default function PlannerPage() {
                   </div>
                 );
 
+              case WORKFLOW_STATES.DAY_ITINERARY:
+                return (
+                  <div className="p-4">
+                    <div className="rounded-xl border border-gray-200 bg-white p-4 flex flex-col gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">Restaurants</p>
+                        <p className="text-xs text-gray-600">
+                          Add nearby restaurants before moving to Hotels & Flights.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button onClick={handleContinueToRestaurants} disabled={loading}>
+                          Find nearby restaurants
+                        </Button>
+                        <Button variant="outline" onClick={handleSkipRestaurantsFromStage} disabled={loading}>
+                          Skip restaurants
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+
               case WORKFLOW_STATES.MEAL_PREFERENCES:
                 return (
                   <div className="p-4">
@@ -1148,18 +1360,97 @@ export default function PlannerPage() {
                   </div>
                 );
 
-              case WORKFLOW_STATES.DAY_ITINERARY:
               case WORKFLOW_STATES.REVIEW:
+                return (
+                  <div className="p-4 h-full flex flex-col gap-3">
+                    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                      <h2 className="text-lg font-semibold text-gray-900">Hotels & Flights</h2>
+                      <p className="mt-1 text-sm text-gray-600">
+                        Review accommodation and flight suggestions for your trip, one tab at a time.
+                      </p>
+                      <div className="mt-3 flex items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={reviewOfferTab === "hotels" ? "default" : "outline"}
+                          onClick={() => setReviewOfferTab("hotels")}
+                          disabled={loading}
+                        >
+                          Hotels
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={reviewOfferTab === "flights" ? "default" : "outline"}
+                          onClick={() => setReviewOfferTab("flights")}
+                          disabled={loading}
+                        >
+                          Flights
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                      {reviewOfferTab === "hotels" ? (
+                        <AccommodationSuggestionsView
+                          status={accommodationStatus}
+                          error={accommodationError}
+                          options={accommodationOptions}
+                          selectedOptionId={selectedAccommodationOptionId}
+                          wantsAccommodation={wantsAccommodation}
+                          lastSearchedAt={accommodationLastSearchedAt}
+                          onRefresh={handleRefreshAccommodationSearch}
+                          onConfirmSelection={handleSelectAccommodation}
+                          onSkip={handleSkipAccommodation}
+                          isLoading={loading}
+                        />
+                      ) : (
+                        <FlightSuggestionsView
+                          status={flightStatus}
+                          error={flightError}
+                          options={flightOptions}
+                          selectedOptionId={selectedFlightOptionId}
+                          wantsFlight={wantsFlight}
+                          lastSearchedAt={flightLastSearchedAt}
+                          onRefresh={handleRefreshFlightSearch}
+                          onConfirmSelection={handleSelectFlight}
+                          onSkip={handleSkipFlight}
+                          isLoading={loading}
+                        />
+                      )}
+                    </div>
+                    <div>
+                      <Button onClick={handleFinalize} disabled={loading || !travelOfferReadyForFinalize}>
+                        Continue to Final Review
+                      </Button>
+                      {!travelOfferReadyForFinalize ? (
+                        <p className="mt-2 text-xs text-amber-700">
+                          Select or skip one hotel and one flight before final review.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+
               case WORKFLOW_STATES.FINALIZE:
                 return (
-                  <div className="p-4 overflow-hidden">
-                    <DayItineraryView
-                      groupedDays={groupedDays}
-                      tripInfo={tripInfo || undefined}
-                      onActivityHover={setHoveredActivityId}
-                      onMoveActivity={handleMoveActivity}
-                      onDayChange={setActiveDay}
-                    />
+                  <div className="p-4 overflow-hidden h-full flex flex-col gap-3">
+                    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                      <h2 className="text-lg font-semibold text-gray-900">Final Review</h2>
+                      <p className="mt-1 text-sm text-gray-600">
+                        Your itinerary includes {accommodationOptions.length} accommodation options and {flightOptions.length} flight options.
+                      </p>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-hidden">
+                      <DayItineraryView
+                        groupedDays={groupedDays}
+                        selectedAccommodation={selectedAccommodationOption}
+                        selectedFlight={selectedFlightOption}
+                        tripInfo={tripInfo || undefined}
+                        onActivityHover={setHoveredActivityId}
+                        onMoveActivity={handleMoveActivity}
+                        onDayChange={setActiveDay}
+                      />
+                    </div>
                   </div>
                 );
 
@@ -1198,13 +1489,19 @@ export default function PlannerPage() {
                   width: `calc((100% - 3rem) * ${getCurrentUiStageIndex() / (UI_STAGE_LABELS.length - 1)})`,
                 }}
               />
-              <div className="relative grid grid-cols-6">
+              <div
+                className="relative grid"
+                style={{ gridTemplateColumns: `repeat(${UI_STAGE_LABELS.length}, minmax(0, 1fr))` }}
+              >
                 {UI_STAGE_LABELS.map((label, index) => {
                   const current = getCurrentUiStageIndex();
                   const maxReached = getMaxReachedUiStageIndex();
                   const isCompleted = index < current;
                   const isCurrent = index === current;
-                  const isClickable = index <= maxReached && !loading;
+                  const candidateState = UI_STAGE_TO_WORKFLOW[index];
+                  const blockedBySearch =
+                    candidateState && requiresTravelOfferCompletion(candidateState) && !travelOfferReadyForFinalize;
+                  const isClickable = index <= maxReached && !loading && !blockedBySearch;
                   return (
                     <button
                       key={label}
@@ -1250,8 +1547,9 @@ export default function PlannerPage() {
             <MapComponent
               destination={tripInfo?.destination}
               tripResearchBrief={tripResearchBrief}
-              researchOptionSelections={researchOptionSelections}
-              researchFocusPreference={researchMapFocusPreference}
+              researchOptionSelections={Object.fromEntries(
+                selectedResearchOptionIds.map((id) => [id, "selected" as const])
+              )}
               suggestedActivities={suggestedActivities}
               selectedActivityIds={selectedActivityIds}
               groupedDays={

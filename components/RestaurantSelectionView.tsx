@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, Star, MapPin, DollarSign } from "lucide-react";
+import { Check, Star, MapPin, Clock, ExternalLink, Globe } from "lucide-react";
 import type { RestaurantSuggestion } from "@/lib/api-client";
 
 interface RestaurantSelectionViewProps {
@@ -23,6 +23,9 @@ export function RestaurantSelectionView({
   isLoading = false,
 }: RestaurantSelectionViewProps) {
   const [localSelectedIds, setLocalSelectedIds] = useState<Set<string>>(new Set(selectedIds));
+  useEffect(() => {
+    setLocalSelectedIds(new Set(selectedIds));
+  }, [selectedIds]);
 
   const toggleRestaurant = (id: string) => {
     const newSelected = new Set(localSelectedIds);
@@ -67,6 +70,19 @@ export function RestaurantSelectionView({
     return colors[cuisine.toLowerCase()] || "bg-gray-100 text-gray-800";
   };
 
+  const openInMaps = (restaurant: RestaurantSuggestion) => {
+    if (!restaurant.coordinates) return;
+    const { lat, lng } = restaurant.coordinates;
+    window.open(
+      `https://www.google.com/maps/search/?api=1&query=${lat},${lng}&query_place_id=${restaurant.place_id || ""}`,
+      "_blank"
+    );
+  };
+
+  const getLocationText = (restaurant: RestaurantSuggestion) => {
+    return restaurant.formatted_address || restaurant.vicinity || "";
+  };
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -108,6 +124,20 @@ export function RestaurantSelectionView({
               onClick={() => toggleRestaurant(restaurant.id)}
             >
               <CardHeader className="pb-2">
+                <div className="mb-3 overflow-hidden rounded-lg border border-gray-200 bg-gray-100">
+                  {restaurant.photo_url ? (
+                    <img
+                      src={restaurant.photo_url}
+                      alt={restaurant.name}
+                      className="h-40 w-full object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-40 w-full items-center justify-center text-xs text-gray-500">
+                      No photo available
+                    </div>
+                  )}
+                </div>
                 <div className="flex items-start justify-between">
                   <CardTitle className="text-base line-clamp-1">{restaurant.name}</CardTitle>
                   {isSelected && (
@@ -129,19 +159,58 @@ export function RestaurantSelectionView({
                   )}
                 </div>
               </CardHeader>
-              <CardContent className="pt-0">
+              <CardContent className="pt-0 space-y-2">
                 <div className="flex flex-wrap gap-3 text-sm text-gray-500">
                   {restaurant.rating && (
                     <div className="flex items-center gap-1">
                       <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
                       <span>{restaurant.rating.toFixed(1)}</span>
+                      {typeof restaurant.user_ratings_total === "number" && restaurant.user_ratings_total > 0 && (
+                        <span className="text-xs text-gray-400">({restaurant.user_ratings_total})</span>
+                      )}
                     </div>
                   )}
-                  {restaurant.vicinity && (
+                  {getLocationText(restaurant) && (
                     <div className="flex items-center gap-1">
                       <MapPin className="w-4 h-4" />
-                      <span className="truncate max-w-[180px]">{restaurant.vicinity}</span>
+                      <span className="truncate max-w-[180px]">{getLocationText(restaurant)}</span>
                     </div>
+                  )}
+                </div>
+
+                {restaurant.opening_hours && (
+                  <div className="flex items-start gap-1.5 text-xs text-gray-600">
+                    <Clock className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                    <span className="line-clamp-1">{restaurant.opening_hours}</span>
+                  </div>
+                )}
+
+                {restaurant.editorial_summary && (
+                  <p className="text-xs text-gray-600 line-clamp-2">{restaurant.editorial_summary}</p>
+                )}
+
+                <div className="flex gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => openInMaps(restaurant)}
+                  >
+                    <ExternalLink className="w-3 h-3 mr-1" />
+                    Open in Maps
+                  </Button>
+                  {restaurant.website && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => window.open(restaurant.website || "", "_blank")}
+                    >
+                      <Globe className="w-3 h-3 mr-1" />
+                      Website
+                    </Button>
                   )}
                 </div>
               </CardContent>

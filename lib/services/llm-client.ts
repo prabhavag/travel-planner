@@ -1,6 +1,8 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import {
+  type AccommodationOption,
+  type FlightOption,
   type TripInfo,
   type SuggestedActivity,
   type GroupedDay,
@@ -147,6 +149,90 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
               snippet: { type: ["string", "null"] },
             },
           },
+        },
+      },
+    },
+  },
+};
+
+const ACCOMMODATION_SEARCH_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["message", "options"],
+  properties: {
+    message: { type: "string" },
+    options: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "id",
+          "name",
+          "neighborhood",
+          "nightlyPriceEstimate",
+          "currency",
+          "rating",
+          "sourceUrl",
+          "summary",
+          "pros",
+          "cons",
+        ],
+        properties: {
+          id: { type: "string" },
+          name: { type: "string" },
+          neighborhood: { type: ["string", "null"] },
+          nightlyPriceEstimate: { type: ["number", "null"] },
+          currency: { type: "string" },
+          rating: { type: ["number", "null"] },
+          sourceUrl: { type: ["string", "null"] },
+          summary: { type: "string" },
+          pros: { type: "array", items: { type: "string" } },
+          cons: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+  },
+};
+
+const FLIGHT_SEARCH_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["message", "options"],
+  properties: {
+    message: { type: "string" },
+    options: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "id",
+          "airline",
+          "routeSummary",
+          "departureWindow",
+          "arrivalWindow",
+          "duration",
+          "stops",
+          "totalPriceEstimate",
+          "currency",
+          "sourceUrl",
+          "summary",
+          "baggageNotes",
+        ],
+        properties: {
+          id: { type: "string" },
+          airline: { type: "string" },
+          routeSummary: { type: "string" },
+          departureWindow: { type: ["string", "null"] },
+          arrivalWindow: { type: ["string", "null"] },
+          duration: { type: ["string", "null"] },
+          stops: { type: ["number", "null"] },
+          totalPriceEstimate: { type: ["number", "null"] },
+          currency: { type: "string" },
+          sourceUrl: { type: ["string", "null"] },
+          summary: { type: "string" },
+          baggageNotes: { type: ["string", "null"] },
         },
       },
     },
@@ -934,12 +1020,41 @@ class LLMClient {
       };
     }
 
+    // Additional-options generation often reuses generic ids (e.g., opt1..opt4).
+    // If a reused id points to a different title/category, treat it as a new card by assigning a new id.
+    const existingById = new Map(
+      state.tripResearchBrief.popularOptions.map((option) => [option.id, option])
+    );
+    const seenIds = new Set(state.tripResearchBrief.popularOptions.map((option) => option.id));
+    const withStableUniqueIds = generation.options.map((option, index) => {
+      const existing = existingById.get(option.id);
+      const sameEntity =
+        Boolean(existing) &&
+        existing?.category === option.category &&
+        this._normalizeLookupText(existing?.title || "") === this._normalizeLookupText(option.title);
+
+      if (!seenIds.has(option.id) || sameEntity) {
+        seenIds.add(option.id);
+        return option;
+      }
+
+      const base = option.id.trim() || `opt${state.tripResearchBrief.popularOptions.length + index + 1}`;
+      let nextId = `${base}-add1`;
+      let suffix = 1;
+      while (seenIds.has(nextId)) {
+        suffix += 1;
+        nextId = `${base}-add${suffix}`;
+      }
+      seenIds.add(nextId);
+      return { ...option, id: nextId };
+    });
+
     const merged = mergeResearchBriefAndSelections({
       currentBrief: state.tripResearchBrief,
       currentSelections: state.researchOptionSelections,
       incomingBrief: {
         ...state.tripResearchBrief,
-        popularOptions: generation.options,
+        popularOptions: withStableUniqueIds,
       },
     });
 
@@ -950,8 +1065,8 @@ class LLMClient {
         status: "success",
         message: generation.message,
         details: {
-          addedCount: generation.options.length,
-          addedOptionIds: generation.options.map((option) => option.id),
+          addedCount: withStableUniqueIds.length,
+          addedOptionIds: withStableUniqueIds.map((option) => option.id),
         },
       },
       nextState: {
@@ -1311,6 +1426,198 @@ class LLMClient {
         message: "Sorry, I had trouble processing your feedback. Please try again.",
         modifications: null,
         readyToFinalize: false,
+      };
+    }
+  }
+
+  async searchAccommodationOffers({
+    tripInfo,
+    selectedActivities,
+  }: {
+    tripInfo: TripInfo;
+    selectedActivities: SuggestedActivity[];
+  }): Promise<{
+    success: boolean;
+    message: string;
+    options: AccommodationOption[];
+  }> {
+    if (!tripInfo.destination || !tripInfo.startDate || !tripInfo.endDate) {
+      return {
+        success: false,
+        message: "Destination and travel dates are required before searching accommodations.",
+        options: [],
+      };
+    }
+
+    const activityHints = selectedActivities
+      .slice(0, 8)
+      .map((activity) => `${activity.name}${activity.neighborhood ? ` (${activity.neighborhood})` : ""}`)
+      .join(", ");
+
+    const input = `Find up-to-date accommodation options for this trip using web search.
+
+Return exactly up to 5 options in JSON.
+Trip:
+- Destination: ${tripInfo.destination}
+- Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
+- Travelers: ${tripInfo.travelers}
+- Budget: ${tripInfo.budget || "Not specified"}
+- Preferences: ${(tripInfo.preferences || []).join(", ") || "General"}
+- Selected activities for area relevance: ${activityHints || "None provided"}
+
+Rules:
+- Focus on options realistically bookable for these dates.
+- Prefer reputable sources and include a source URL per option when available.
+- Include clear tradeoffs in pros/cons.
+- Keep summaries concise and practical.`;
+
+    try {
+      const response = await this.openai.responses.create({
+        model: this.model,
+        input,
+        temperature: this.temperature,
+        tools: [{ type: "web_search_preview", search_context_size: "high" }],
+        tool_choice: "auto",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "accommodation_search_response",
+            strict: true,
+            schema: ACCOMMODATION_SEARCH_JSON_SCHEMA,
+          },
+        },
+      });
+      const parsed = this._parseResearchResponseJson(response);
+      const optionsRaw = Array.isArray(parsed.options) ? parsed.options : [];
+      const options: AccommodationOption[] = optionsRaw.slice(0, 5).map((raw, index) => {
+        const option = (raw || {}) as Record<string, unknown>;
+        return {
+          id: typeof option.id === "string" && option.id.trim() ? option.id.trim() : `acc-${index + 1}`,
+          name: typeof option.name === "string" ? option.name : `Accommodation ${index + 1}`,
+          neighborhood: typeof option.neighborhood === "string" ? option.neighborhood : null,
+          nightlyPriceEstimate:
+            typeof option.nightlyPriceEstimate === "number" ? option.nightlyPriceEstimate : null,
+          currency: typeof option.currency === "string" ? option.currency : "USD",
+          rating: typeof option.rating === "number" ? option.rating : null,
+          sourceUrl: typeof option.sourceUrl === "string" ? option.sourceUrl : null,
+          summary: typeof option.summary === "string" ? option.summary : "",
+          pros: Array.isArray(option.pros)
+            ? option.pros.filter((value): value is string => typeof value === "string").slice(0, 4)
+            : [],
+          cons: Array.isArray(option.cons)
+            ? option.cons.filter((value): value is string => typeof value === "string").slice(0, 4)
+            : [],
+        };
+      });
+
+      return {
+        success: true,
+        message:
+          typeof parsed.message === "string" && parsed.message.trim()
+            ? parsed.message
+            : `Found ${options.length} accommodation options for ${tripInfo.destination}.`,
+        options,
+      };
+    } catch (error) {
+      console.error("Error in searchAccommodationOffers:", error);
+      return {
+        success: false,
+        message: "I couldn't search accommodation options right now. Please try again.",
+        options: [],
+      };
+    }
+  }
+
+  async searchFlightOffers({
+    tripInfo,
+    selectedActivities,
+  }: {
+    tripInfo: TripInfo;
+    selectedActivities: SuggestedActivity[];
+  }): Promise<{
+    success: boolean;
+    message: string;
+    options: FlightOption[];
+  }> {
+    if (!tripInfo.destination || !tripInfo.startDate || !tripInfo.endDate) {
+      return {
+        success: false,
+        message: "Destination and travel dates are required before searching flights.",
+        options: [],
+      };
+    }
+
+    const activityHints = selectedActivities
+      .slice(0, 5)
+      .map((activity) => activity.name)
+      .join(", ");
+
+    const input = `Find up-to-date flight options for this trip using web search.
+
+Return exactly up to 5 options in JSON.
+Trip:
+- Destination: ${tripInfo.destination}
+- Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
+- Travelers: ${tripInfo.travelers}
+- Budget: ${tripInfo.budget || "Not specified"}
+- Preferences: ${(tripInfo.preferences || []).join(", ") || "General"}
+- Planned activities context: ${activityHints || "None provided"}
+
+Rules:
+- Include realistic routes and fare estimates with source URLs where possible.
+- Include baggage/fare caveats when source indicates restrictions.
+- Summaries should explain core tradeoffs (price vs duration vs stops).`;
+
+    try {
+      const response = await this.openai.responses.create({
+        model: this.model,
+        input,
+        temperature: this.temperature,
+        tools: [{ type: "web_search_preview", search_context_size: "high" }],
+        tool_choice: "auto",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "flight_search_response",
+            strict: true,
+            schema: FLIGHT_SEARCH_JSON_SCHEMA,
+          },
+        },
+      });
+      const parsed = this._parseResearchResponseJson(response);
+      const optionsRaw = Array.isArray(parsed.options) ? parsed.options : [];
+      const options: FlightOption[] = optionsRaw.slice(0, 5).map((raw, index) => {
+        const option = (raw || {}) as Record<string, unknown>;
+        return {
+          id: typeof option.id === "string" && option.id.trim() ? option.id.trim() : `flt-${index + 1}`,
+          airline: typeof option.airline === "string" ? option.airline : "Unknown Airline",
+          routeSummary: typeof option.routeSummary === "string" ? option.routeSummary : "",
+          departureWindow: typeof option.departureWindow === "string" ? option.departureWindow : null,
+          arrivalWindow: typeof option.arrivalWindow === "string" ? option.arrivalWindow : null,
+          duration: typeof option.duration === "string" ? option.duration : null,
+          stops: typeof option.stops === "number" ? Math.max(0, Math.floor(option.stops)) : null,
+          totalPriceEstimate: typeof option.totalPriceEstimate === "number" ? option.totalPriceEstimate : null,
+          currency: typeof option.currency === "string" ? option.currency : "USD",
+          sourceUrl: typeof option.sourceUrl === "string" ? option.sourceUrl : null,
+          summary: typeof option.summary === "string" ? option.summary : "",
+          baggageNotes: typeof option.baggageNotes === "string" ? option.baggageNotes : null,
+        };
+      });
+
+      return {
+        success: true,
+        message:
+          typeof parsed.message === "string" && parsed.message.trim()
+            ? parsed.message
+            : `Found ${options.length} flight options for ${tripInfo.destination}.`,
+        options,
+      };
+    } catch (error) {
+      console.error("Error in searchFlightOffers:", error);
+      return {
+        success: false,
+        message: "I couldn't search flight options right now. Please try again.",
+        options: [],
       };
     }
   }

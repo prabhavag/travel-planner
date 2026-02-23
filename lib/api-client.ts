@@ -54,6 +54,10 @@ export interface SessionResponse {
   sessionId: string;
   workflowState: string;
   message: string;
+  activeLoop?: "SUPERVISOR" | "PLANNING_LOOP" | "HOSPITALITY_REVIEW_LOOP";
+  loopResult?: LoopResult | null;
+  lastTurnId?: string;
+  recoveryHints?: string[];
   tripInfo?: TripInfo;
   skeleton?: Skeleton;
   expandedDays?: Record<number, ExpandedDay>;
@@ -76,7 +80,59 @@ export interface SessionResponse {
   restaurantSuggestions?: RestaurantSuggestion[];
   selectedRestaurantIds?: string[];
   wantsRestaurants?: boolean;
+  accommodationStatus?: SubAgentStatus;
+  flightStatus?: SubAgentStatus;
+  accommodationError?: string | null;
+  flightError?: string | null;
+  accommodationOptions?: AccommodationOption[];
+  flightOptions?: FlightOption[];
+  selectedAccommodationOptionId?: string | null;
+  selectedFlightOptionId?: string | null;
+  wantsAccommodation?: boolean | null;
+  wantsFlight?: boolean | null;
+  accommodationLastSearchedAt?: string | null;
+  flightLastSearchedAt?: string | null;
   deepResearchedOptionIds?: string[];
+}
+
+export type AgentTurnTrigger = "user_message" | "ui_action" | "auto";
+
+export interface AgentUiAction {
+  type: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface ToolAction {
+  tool:
+    | "select_activities"
+    | "adjust_day_groups"
+    | "confirm_day_grouping"
+    | "get_restaurant_suggestions"
+    | "set_meal_preferences"
+    | "review_patch_grouped_days"
+    | "finalize"
+    | "select_accommodation"
+    | "select_flight"
+    | "skip_accommodation"
+    | "skip_flight"
+    | "search_accommodation"
+    | "search_flights"
+    | "refresh_accommodation_search"
+    | "refresh_flight_search";
+  input: Record<string, unknown>;
+}
+
+export interface LoopResult {
+  assistantMessage: string;
+  confidence: number;
+  actions: ToolAction[];
+  proposedTransition?: string;
+  stopReason:
+    | "completed_stage"
+    | "needs_user_input"
+    | "tool_error_recovered"
+    | "low_confidence_noop"
+    | "terminal";
 }
 
 export interface TripInfo {
@@ -109,7 +165,7 @@ export interface ResearchOption {
   place_id?: string | null;
 }
 
-export type ResearchOptionPreference = "keep" | "maybe" | "reject";
+export type ResearchOptionPreference = "selected" | "keep" | "maybe" | "reject";
 
 export interface TripResearchBrief {
   summary?: string;
@@ -231,6 +287,19 @@ export async function chat(sessionId: string, message: string): Promise<SessionR
   });
 }
 
+// Unified supervisor + sub-loop orchestration turn
+export async function agentTurn(
+  sessionId: string,
+  trigger: AgentTurnTrigger,
+  message?: string,
+  uiAction?: AgentUiAction
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/agent-turn`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, trigger, message, uiAction }),
+  });
+}
+
 // Generate skeleton itinerary (day themes)
 export async function generateSkeleton(sessionId: string): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/generate-skeleton`, {
@@ -312,11 +381,13 @@ export async function generateResearchBrief(
 
 export async function confirmResearchBrief(
   sessionId: string,
-  researchOptionSelections: Record<string, ResearchOptionPreference>
+  data:
+    | { selectedResearchOptionIds: string[] }
+    | { researchOptionSelections: Record<string, ResearchOptionPreference> }
 ): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/confirm-research-brief`, {
     method: "POST",
-    body: JSON.stringify({ sessionId, researchOptionSelections }),
+    body: JSON.stringify({ sessionId, ...data }),
   });
 }
 
@@ -388,11 +459,17 @@ export interface RestaurantSuggestion {
   name: string;
   cuisine: string | null;
   rating: number | null;
+  user_ratings_total?: number | null;
   priceRange: string | null;
   coordinates: { lat: number; lng: number };
   place_id: string;
   vicinity: string | null;
+  formatted_address?: string | null;
+  opening_hours?: string | null;
+  website?: string | null;
+  editorial_summary?: string | null;
   photo_url?: string | null;
+  photo_urls?: string[];
 }
 
 export interface GroupedDay {
@@ -401,6 +478,36 @@ export interface GroupedDay {
   theme: string;
   activities: SuggestedActivity[];
   restaurants: RestaurantSuggestion[];
+}
+
+export type SubAgentStatus = "idle" | "running" | "complete" | "error";
+
+export interface AccommodationOption {
+  id: string;
+  name: string;
+  neighborhood: string | null;
+  nightlyPriceEstimate: number | null;
+  currency: string;
+  rating: number | null;
+  sourceUrl: string | null;
+  summary: string;
+  pros: string[];
+  cons: string[];
+}
+
+export interface FlightOption {
+  id: string;
+  airline: string;
+  routeSummary: string;
+  departureWindow: string | null;
+  arrivalWindow: string | null;
+  duration: string | null;
+  stops: number | null;
+  totalPriceEstimate: number | null;
+  currency: string;
+  sourceUrl: string | null;
+  summary: string;
+  baggageNotes: string | null;
 }
 
 // Select activities from the top 15
@@ -469,10 +576,11 @@ export async function updateTripInfo(
 // Update workflow state manually (e.g. for navigation)
 export async function updateWorkflowState(
   sessionId: string,
-  workflowState: string
+  workflowState: string,
+  options?: { transitionOwner?: "UI" | "SUPERVISOR" }
 ): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/session/${sessionId}/update-state`, {
     method: "POST",
-    body: JSON.stringify({ workflowState }),
+    body: JSON.stringify({ workflowState, transitionOwner: options?.transitionOwner ?? "UI" }),
   });
 }

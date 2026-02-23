@@ -148,8 +148,7 @@ export function DayGroupingView({
       return (
         <ResearchOptionCard
           option={activity.researchOption}
-          selection="keep"
-          showPreferenceButtons={false}
+          isSelected={true}
           readOnly={true}
           extraContent={moveControls}
         />

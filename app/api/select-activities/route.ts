@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { buildGroupedDays, groupActivitiesByDay } from "@/lib/services/day-grouping";
+import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
 
 export async function POST(request: NextRequest) {
   try {
@@ -76,10 +77,48 @@ export async function POST(request: NextRequest) {
       selectedActivityIds: selectedActivityIds,
       dayGroups,
       groupedDays,
+      accommodationStatus: "running",
+      flightStatus: "running",
+      accommodationError: null,
+      flightError: null,
+      accommodationOptions: [],
+      flightOptions: [],
+      selectedAccommodationOptionId: null,
+      selectedFlightOptionId: null,
+      wantsAccommodation: null,
+      wantsFlight: null,
+      accommodationLastSearchedAt: null,
+      flightLastSearchedAt: null,
+    });
+
+    const refreshed = sessionStore.get(sessionId);
+    if (!refreshed) {
+      throw new Error("Session not found after update");
+    }
+
+    const [accommodationResult, flightResult] = await Promise.all([
+      runAccommodationSearch({ session: refreshed }),
+      runFlightSearch({ session: refreshed }),
+    ]);
+
+    const now = new Date().toISOString();
+    sessionStore.update(sessionId, {
+      accommodationStatus: accommodationResult.success ? "complete" : "error",
+      flightStatus: flightResult.success ? "complete" : "error",
+      accommodationError: accommodationResult.success ? null : accommodationResult.message,
+      flightError: flightResult.success ? null : flightResult.message,
+      accommodationOptions: accommodationResult.options,
+      flightOptions: flightResult.options,
+      accommodationLastSearchedAt: now,
+      flightLastSearchedAt: now,
     });
 
     const selectedCount = selectedActivityIds.length;
     const message = `Updated ${selectedCount} activit${selectedCount === 1 ? "y" : "ies"} and regrouped your itinerary by day.`;
+    const updatedSession = sessionStore.get(sessionId);
+    if (!updatedSession) {
+      throw new Error("Session not found after sub-agent run");
+    }
 
     return NextResponse.json({
       success: true,
@@ -90,6 +129,18 @@ export async function POST(request: NextRequest) {
       selectedCount,
       dayGroups,
       groupedDays,
+      accommodationStatus: updatedSession.accommodationStatus,
+      flightStatus: updatedSession.flightStatus,
+      accommodationError: updatedSession.accommodationError,
+      flightError: updatedSession.flightError,
+      accommodationOptions: updatedSession.accommodationOptions,
+      flightOptions: updatedSession.flightOptions,
+      selectedAccommodationOptionId: updatedSession.selectedAccommodationOptionId,
+      selectedFlightOptionId: updatedSession.selectedFlightOptionId,
+      wantsAccommodation: updatedSession.wantsAccommodation,
+      wantsFlight: updatedSession.wantsFlight,
+      accommodationLastSearchedAt: updatedSession.accommodationLastSearchedAt,
+      flightLastSearchedAt: updatedSession.flightLastSearchedAt,
     });
   } catch (error) {
     console.error("Error in selectActivities:", error);

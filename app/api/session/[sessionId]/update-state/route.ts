@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore } from "@/lib/services/session-store";
+import { isWorkflowState, validateWorkflowTransition, type TransitionOwner } from "@/lib/services/workflow-transition";
 
 export async function POST(
     request: NextRequest,
@@ -7,7 +8,7 @@ export async function POST(
 ) {
     try {
         const { sessionId } = await params;
-        const { workflowState } = await request.json();
+        const { workflowState, transitionOwner } = await request.json();
 
         if (!sessionId || !workflowState) {
             return NextResponse.json(
@@ -21,6 +22,26 @@ export async function POST(
             return NextResponse.json(
                 { success: false, message: "Session not found" },
                 { status: 404 }
+            );
+        }
+
+        if (!isWorkflowState(workflowState)) {
+            return NextResponse.json(
+                { success: false, message: `Invalid workflow state: ${workflowState}` },
+                { status: 400 }
+            );
+        }
+
+        const owner: TransitionOwner = transitionOwner === "SUPERVISOR" ? "SUPERVISOR" : "UI";
+        const transitionCheck = validateWorkflowTransition({
+            from: session.workflowState,
+            to: workflowState,
+            owner,
+        });
+        if (!transitionCheck.ok) {
+            return NextResponse.json(
+                { success: false, message: transitionCheck.reason },
+                { status: 400 }
             );
         }
 

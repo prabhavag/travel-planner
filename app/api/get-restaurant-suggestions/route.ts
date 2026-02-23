@@ -4,6 +4,21 @@ import { getPlacesClient } from "@/lib/services/places-client";
 import type { RestaurantSuggestion, Coordinates } from "@/lib/models/travel-plan";
 import { getPriceRangeSymbol } from "@/lib/utils/currency";
 
+const RESTAURANT_TYPE_TOKENS = [
+  "italian_restaurant",
+  "chinese_restaurant",
+  "mexican_restaurant",
+  "japanese_restaurant",
+  "indian_restaurant",
+  "thai_restaurant",
+  "french_restaurant",
+  "american_restaurant",
+  "mediterranean_restaurant",
+  "vietnamese_restaurant",
+  "korean_restaurant",
+  "greek_restaurant",
+];
+
 /**
  * Get centroid of coordinates
  */
@@ -19,6 +34,16 @@ function getCentroid(coordinates: Coordinates[]): Coordinates {
     lat: sum.lat / coordinates.length,
     lng: sum.lng / coordinates.length,
   };
+}
+
+function dedupePlacesById<T extends { place_id: string }>(places: T[]): T[] {
+  const byId = new Map<string, T>();
+  for (const place of places) {
+    if (!byId.has(place.place_id)) {
+      byId.set(place.place_id, place);
+    }
+  }
+  return Array.from(byId.values());
 }
 
 /**
@@ -109,36 +134,84 @@ export async function POST(request: NextRequest) {
     // Get currency from session activities
     const currency = getCurrencyFromSession(session);
 
-    // Search for restaurants near the centroid
-    const searchRadius = 3000; // 3km radius
-    const places = await placesClient.searchPlaces(
-      "restaurant",
-      centroid,
-      searchRadius,
-      "restaurant"
-    );
+    // Primary pass: centroid search.
+    let places = await placesClient.searchPlaces("restaurant", centroid, 3000, "restaurant");
+
+    // Fallback 1: broader centroid radius.
+    if (places.length === 0) {
+      places = await placesClient.searchPlaces("restaurant", centroid, 12000, "restaurant");
+    }
+
+    // Fallback 2: search around each activity coordinate and merge.
+    if (places.length === 0) {
+      const perActivityResults = await Promise.all(
+        allCoordinates.slice(0, 8).map((coord) =>
+          placesClient.searchPlaces("restaurant", coord, 6000, "restaurant")
+        )
+      );
+      places = dedupePlacesById(perActivityResults.flat());
+    }
+
+    // Fallback 3: destination text search.
+    if (places.length === 0 && session.tripInfo.destination) {
+      places = await placesClient.searchPlaces(
+        `restaurants in ${session.tripInfo.destination}`,
+        null,
+        5000,
+        "restaurant"
+      );
+    }
 
     // Convert to RestaurantSuggestion format with photos
     const restaurants: RestaurantSuggestion[] = await Promise.all(
-      places.slice(0, 15).map(async (place, index) => {
-        // Fetch photo URL for each restaurant
-        let photoUrl: string | null = null;
-        if (place.place_id) {
-          photoUrl = await placesClient.getPlacePhotoUrlFromId(place.place_id, 200);
+      places.slice(0, 10).map(async (place, index) => {
+        try {
+          const details = place.place_id ? await placesClient.getPlaceDetails(place.place_id) : null;
+          const photoUrls =
+            details?.photos
+              ?.slice(0, 3)
+              .map((photo) => placesClient.getPlacePhotoUrl(photo.photo_reference, 300))
+              .filter((url): url is string => Boolean(url)) || [];
+          return {
+            id: `rest${index + 1}`,
+            name: place.name,
+            cuisine:
+              place.types.find((t) => RESTAURANT_TYPE_TOKENS.includes(t))?.replace("_restaurant", "").replace("_", " ") ||
+              null,
+            rating: details?.rating ?? place.rating ?? null,
+            user_ratings_total: details?.user_ratings_total ?? null,
+            priceRange: getPriceRangeSymbol(details?.price_level ?? place.price_level, currency),
+            coordinates: place.location,
+            place_id: place.place_id,
+            vicinity: place.vicinity || null,
+            formatted_address: details?.formatted_address ?? null,
+            opening_hours: details?.opening_hours_text ?? null,
+            website: details?.website ?? null,
+            editorial_summary: details?.editorial_summary ?? null,
+            photo_url: photoUrls[0] ?? null,
+            photo_urls: photoUrls,
+          };
+        } catch {
+          return {
+            id: `rest${index + 1}`,
+            name: place.name,
+            cuisine:
+              place.types.find((t) => RESTAURANT_TYPE_TOKENS.includes(t))?.replace("_restaurant", "").replace("_", " ") ||
+              null,
+            rating: place.rating || null,
+            user_ratings_total: null,
+            priceRange: getPriceRangeSymbol(place.price_level, currency),
+            coordinates: place.location,
+            place_id: place.place_id,
+            vicinity: place.vicinity || null,
+            formatted_address: null,
+            opening_hours: null,
+            website: null,
+            editorial_summary: null,
+            photo_url: null,
+            photo_urls: [],
+          };
         }
-        return {
-          id: `rest${index + 1}`,
-          name: place.name,
-          cuisine: place.types.find((t) =>
-            ["italian_restaurant", "chinese_restaurant", "mexican_restaurant", "japanese_restaurant", "indian_restaurant", "thai_restaurant", "french_restaurant", "american_restaurant", "mediterranean_restaurant", "vietnamese_restaurant", "korean_restaurant", "greek_restaurant"].includes(t)
-          )?.replace("_restaurant", "").replace("_", " ") || null,
-          rating: place.rating || null,
-          priceRange: getPriceRangeSymbol(place.price_level, currency),
-          coordinates: place.location,
-          place_id: place.place_id,
-          vicinity: place.vicinity || null,
-          photo_url: photoUrl,
-        };
       })
     );
 

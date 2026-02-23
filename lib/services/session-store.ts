@@ -1,5 +1,8 @@
 import { randomUUID } from "crypto";
 import type {
+  AccommodationOption,
+  FlightOption,
+  SubAgentStatus,
   TripInfo,
   TravelPlan,
   SuggestedActivity,
@@ -8,6 +11,8 @@ import type {
   RestaurantSuggestion,
   TripResearchBrief,
   ResearchOptionPreference,
+  LoopId,
+  LoopResult,
 } from "@/lib/models/travel-plan";
 
 export const WORKFLOW_STATES = {
@@ -34,6 +39,10 @@ export interface Session {
   createdAt: number;
   lastAccessed: number;
   workflowState: WorkflowState;
+  activeLoop: LoopId;
+  lastTurnId: string;
+  lastLoopResult: LoopResult | null;
+  recoveryHints: string[];
   tripInfo: TripInfo;
   conversationHistory: ConversationMessage[];
   finalPlan: TravelPlan | null;
@@ -48,6 +57,18 @@ export interface Session {
   restaurantSuggestions: RestaurantSuggestion[];
   selectedRestaurantIds: string[];
   wantsRestaurants: boolean | null;
+  accommodationStatus: SubAgentStatus;
+  flightStatus: SubAgentStatus;
+  accommodationError: string | null;
+  flightError: string | null;
+  accommodationOptions: AccommodationOption[];
+  flightOptions: FlightOption[];
+  selectedAccommodationOptionId: string | null;
+  selectedFlightOptionId: string | null;
+  wantsAccommodation: boolean | null;
+  wantsFlight: boolean | null;
+  accommodationLastSearchedAt: string | null;
+  flightLastSearchedAt: string | null;
 }
 
 class SessionStore {
@@ -69,6 +90,10 @@ class SessionStore {
       createdAt: now,
       lastAccessed: now,
       workflowState: WORKFLOW_STATES.INFO_GATHERING,
+      activeLoop: "SUPERVISOR",
+      lastTurnId: randomUUID(),
+      lastLoopResult: null,
+      recoveryHints: [],
       tripInfo: {
         destination: null,
         startDate: null,
@@ -92,6 +117,18 @@ class SessionStore {
       restaurantSuggestions: [],
       selectedRestaurantIds: [],
       wantsRestaurants: null,
+      accommodationStatus: "idle",
+      flightStatus: "idle",
+      accommodationError: null,
+      flightError: null,
+      accommodationOptions: [],
+      flightOptions: [],
+      selectedAccommodationOptionId: null,
+      selectedFlightOptionId: null,
+      wantsAccommodation: null,
+      wantsFlight: null,
+      accommodationLastSearchedAt: null,
+      flightLastSearchedAt: null,
     };
 
     this.sessions.set(sessionId, session);

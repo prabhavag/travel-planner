@@ -13,7 +13,6 @@ import type {
   SuggestedActivity,
   GroupedDay,
   TripResearchBrief,
-  ResearchOptionPreference,
 } from "@/lib/api-client";
 import { Loader2 } from "lucide-react";
 import { getDayColor, SELECTED_COLOR, UNSELECTED_COLOR } from "@/lib/constants";
@@ -54,7 +53,6 @@ interface Location {
   day: number;
   desc: string;
   isSelected?: boolean;
-  preference?: ResearchOptionPreference;
   activityId?: string;
   photoUrl?: string | null;
   mode: "research" | "suggested" | "grouped" | "legacy";
@@ -65,8 +63,7 @@ interface MapComponentProps {
   destination?: string | null;
   // New activity-first flow props
   tripResearchBrief?: TripResearchBrief | null;
-  researchOptionSelections?: Record<string, ResearchOptionPreference>;
-  researchFocusPreference?: "all" | "keep" | "maybe" | "reject";
+  researchOptionSelections?: Record<string, "selected" | "keep" | "maybe" | "reject">;
   suggestedActivities?: SuggestedActivity[];
   selectedActivityIds?: string[];
   groupedDays?: GroupedDay[];
@@ -82,7 +79,6 @@ export default function MapComponent({
   destination,
   tripResearchBrief,
   researchOptionSelections,
-  researchFocusPreference = "all",
   suggestedActivities,
   selectedActivityIds,
   groupedDays,
@@ -151,7 +147,7 @@ export default function MapComponent({
     else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
       tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
         if (!option.coordinates?.lat || !option.coordinates?.lng) return;
-        const preference = researchOptionSelections?.[option.id] || "maybe";
+        const preference = researchOptionSelections?.[option.id] || null;
         locs.push({
           name: option.title,
           lat: option.coordinates.lat,
@@ -163,7 +159,7 @@ export default function MapComponent({
           desc: `${option.category}`,
           activityId: option.id,
           photoUrl: option.photoUrls?.[0] || null,
-          preference,
+          isSelected: preference === "selected" || preference === "keep",
           mode: "research",
         });
       });
@@ -266,7 +262,6 @@ export default function MapComponent({
         destination={destination}
         isGroupedMode={isGroupedMode}
         isResearchSelectionMode={isResearchSelectionMode}
-        researchFocusPreference={researchFocusPreference}
         isActivitySelectionMode={isActivitySelectionMode}
         onActivityClick={onActivityClick}
         hoveredActivityId={hoveredActivityId}
@@ -283,7 +278,6 @@ interface GoogleMapContentProps {
   destination?: string | null;
   isGroupedMode?: boolean;
   isResearchSelectionMode?: boolean;
-  researchFocusPreference?: "all" | "keep" | "maybe" | "reject";
   isActivitySelectionMode?: boolean;
   onActivityClick?: (activityId: string) => void;
   hoveredActivityId?: string | null;
@@ -338,7 +332,6 @@ function GoogleMapContent({
   destination,
   isGroupedMode,
   isResearchSelectionMode,
-  researchFocusPreference = "all",
   isActivitySelectionMode,
   onActivityClick,
   hoveredActivityId,
@@ -427,18 +420,14 @@ function GoogleMapContent({
     const isHovered = loc.activityId === hoveredActivityId;
 
     if (isResearchSelectionMode) {
-      const preference = loc.preference || "maybe";
-      const isFocusedCategory = researchFocusPreference === "all" || preference === researchFocusPreference;
-      const fillColor =
-        preference === "keep" ? "#22C55E" : preference === "reject" ? "#EF4444" : "#FACC15";
-      const baseOpacity = isFocusedCategory ? 0.96 : 0.34;
+      const fillColor = loc.isSelected ? "#3B82F6" : "#9CA3AF";
       return {
         path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
         fillColor,
-        fillOpacity: isHovered ? Math.min(baseOpacity + 0.18, 1) : baseOpacity,
+        fillOpacity: loc.isSelected || isHovered ? 1 : 0.6,
         strokeColor: isHovered ? "#1F2937" : "#ffffff",
         strokeWeight: isHovered ? 2 : 1,
-        scale: isHovered ? (isFocusedCategory ? 2.1 : 1.6) : (isFocusedCategory ? 1.75 : 1.25),
+        scale: isHovered ? 2.1 : (loc.isSelected ? 1.75 : 1.3),
         anchor: new window.google.maps.Point(12, 21),
         labelOrigin: new window.google.maps.Point(12, 8),
       };
@@ -576,9 +565,7 @@ function GoogleMapContent({
           onMouseOver={() => setHoveredMarker(loc)}
           onMouseOut={() => setHoveredMarker(null)}
           zIndex={
-            isResearchSelectionMode
-              ? (researchFocusPreference === "all" || (loc.preference || "maybe") === researchFocusPreference ? 2000 : 1000)
-              : 1500
+            isResearchSelectionMode ? (loc.isSelected ? 2000 : 1000) : 1500
           }
         />
       ))}

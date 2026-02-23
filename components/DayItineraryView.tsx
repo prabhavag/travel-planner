@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp, MapPin, Utensils, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronUp, MapPin, Utensils, ExternalLink, Clock, Star, Plane, Building2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -11,13 +11,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { GroupedDay, SuggestedActivity, RestaurantSuggestion } from "@/lib/api-client";
+import type {
+  GroupedDay,
+  SuggestedActivity,
+  RestaurantSuggestion,
+  AccommodationOption,
+  FlightOption,
+} from "@/lib/api-client";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
 import { ActivityCard } from "@/components/ActivityCard";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
 
 interface DayItineraryViewProps {
   groupedDays: GroupedDay[];
+  selectedAccommodation?: AccommodationOption | null;
+  selectedFlight?: FlightOption | null;
   tripInfo?: {
     destination: string | null;
     startDate: string | null;
@@ -28,6 +36,8 @@ interface DayItineraryViewProps {
 
 export function DayItineraryView({
   groupedDays,
+  selectedAccommodation,
+  selectedFlight,
   tripInfo,
   onActivityHover,
   onMoveActivity,
@@ -37,55 +47,25 @@ export function DayItineraryView({
   onMoveActivity?: (activityId: string, fromDay: number, toDay: number) => void;
   onDayChange?: (dayNumber: number) => void;
 }) {
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [movingActivity, setMovingActivity] = useState<{ id: string; fromDay: number } | null>(null);
   const [collapsedActivityCards, setCollapsedActivityCards] = useState<Record<string, boolean>>({});
   const [collapsedRestaurantCards, setCollapsedRestaurantCards] = useState<Record<string, boolean>>({});
-  const [activeDayNumber, setActiveDayNumber] = useState<number | null>(groupedDays[0]?.dayNumber ?? null);
 
-  const handleScroll = useCallback(() => {
-    if (scrollContainerRef.current && onDayChange) {
-      const container = scrollContainerRef.current;
-      const index = Math.round(container.scrollLeft / container.clientWidth);
-      const activeDay = groupedDays[index]?.dayNumber;
-      if (activeDay) {
-        setActiveDayNumber(activeDay);
-        onDayChange(activeDay);
+  useEffect(() => {
+    const nextCollapsedActivities: Record<string, boolean> = {};
+    const nextCollapsedRestaurants: Record<string, boolean> = {};
+    for (const day of groupedDays) {
+      for (const activity of day.activities) {
+        nextCollapsedActivities[activity.id] = true;
+      }
+      for (const restaurant of day.restaurants) {
+        nextCollapsedRestaurants[restaurant.id] = true;
       }
     }
+    setCollapsedActivityCards(nextCollapsedActivities);
+    setCollapsedRestaurantCards(nextCollapsedRestaurants);
+    if (groupedDays[0]?.dayNumber) onDayChange?.(groupedDays[0].dayNumber);
   }, [groupedDays, onDayChange]);
-
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (container) {
-      container.addEventListener("scroll", handleScroll);
-      return () => container.removeEventListener("scroll", handleScroll);
-    }
-  }, [handleScroll]);
-
-  useEffect(() => {
-    if (groupedDays.length === 0) {
-      setActiveDayNumber(null);
-      return;
-    }
-    if (!activeDayNumber || !groupedDays.some((day) => day.dayNumber === activeDayNumber)) {
-      setActiveDayNumber(groupedDays[0].dayNumber);
-    }
-  }, [groupedDays, activeDayNumber]);
-
-  const scrollToDay = (dayNumber: number) => {
-    if (scrollContainerRef.current) {
-      const index = groupedDays.findIndex((day) => day.dayNumber === dayNumber);
-      if (index === -1) return;
-      const scrollAmount = scrollContainerRef.current.clientWidth * index;
-      scrollContainerRef.current.scrollTo({
-        left: scrollAmount,
-        behavior: "smooth",
-      });
-      setActiveDayNumber(dayNumber);
-      onDayChange?.(dayNumber);
-    }
-  };
 
   const formatDate = (dateStr: string): string => {
     const date = new Date(dateStr);
@@ -207,8 +187,7 @@ export function DayItineraryView({
       return (
         <ResearchOptionCard
           option={activity.researchOption}
-          selection="keep"
-          showPreferenceButtons={false}
+          isSelected={true}
           readOnly={true}
           collapsed={isCollapsed}
           onToggleCollapse={() => toggleActivityCollapse(activity.id)}
@@ -232,68 +211,96 @@ export function DayItineraryView({
 
   const RestaurantItem = ({ restaurant }: { restaurant: RestaurantSuggestion }) => {
     const isCollapsed = collapsedRestaurantCards[restaurant.id] || false;
+    const locationText = restaurant.formatted_address || restaurant.vicinity;
     return (
-    <div className="p-4 rounded-xl border border-amber-100 bg-amber-50/20 mb-3 hover:shadow-sm transition-all">
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <Badge variant="secondary" className="bg-amber-100 text-amber-800 text-[10px] h-5">
-              Restaurant
-            </Badge>
-          </div>
-          <h4 className="text-sm font-bold text-gray-900 line-clamp-1 flex items-center gap-2">
-            <Utensils className="w-3.5 h-3.5 text-amber-600" />
-            {restaurant.name}
-          </h4>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => toggleRestaurantCollapse(restaurant.id)}
-            className="h-7 w-7 text-gray-400 hover:text-amber-600 shrink-0"
-            title={isCollapsed ? "Expand card" : "Collapse card"}
-          >
-            {isCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => openRestaurantInMaps(restaurant)}
-            className="h-7 w-7 text-gray-400 hover:text-amber-600 shrink-0"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-          </Button>
-        </div>
-      </div>
-
-      {!isCollapsed && (
-        <>
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {restaurant.cuisine && (
-              <Badge variant="outline" className="text-[9px] h-4 py-0">
-                {restaurant.cuisine}
+      <div className="p-4 rounded-xl border border-amber-100 bg-amber-50/20 mb-3 hover:shadow-sm transition-all">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <Badge variant="secondary" className="bg-amber-100 text-amber-800 text-[10px] h-5">
+                Restaurant
               </Badge>
-            )}
-            {restaurant.priceRange && (
-              <Badge
-                variant="outline"
-                className="text-[9px] h-4 py-0 text-green-700 border-green-200 bg-green-50"
-              >
-                {restaurant.priceRange}
-              </Badge>
-            )}
-          </div>
-
-          {restaurant.vicinity && (
-            <div className="flex items-start gap-1.5 text-[10px] text-gray-500">
-              <MapPin className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" />
-              <span className="line-clamp-1">{restaurant.vicinity}</span>
             </div>
-          )}
-        </>
-      )}
-    </div>
+            <h4 className="text-sm font-bold text-gray-900 line-clamp-1 flex items-center gap-2">
+              <Utensils className="w-3.5 h-3.5 text-amber-600" />
+              {restaurant.name}
+            </h4>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => toggleRestaurantCollapse(restaurant.id)}
+              className="h-7 w-7 text-gray-400 hover:text-amber-600 shrink-0"
+              title={isCollapsed ? "Expand card" : "Collapse card"}
+            >
+              {isCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => openRestaurantInMaps(restaurant)}
+              className="h-7 w-7 text-gray-400 hover:text-amber-600 shrink-0"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+
+        {!isCollapsed && (
+          <>
+            {restaurant.photo_url && (
+              <div className="mb-2 overflow-hidden rounded-md border border-amber-100 bg-amber-50">
+                <img
+                  src={restaurant.photo_url}
+                  alt={restaurant.name}
+                  className="h-28 w-full object-cover"
+                  loading="lazy"
+                />
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {restaurant.cuisine && (
+                <Badge variant="outline" className="text-[9px] h-4 py-0">
+                  {restaurant.cuisine}
+                </Badge>
+              )}
+              {restaurant.priceRange && (
+                <Badge
+                  variant="outline"
+                  className="text-[9px] h-4 py-0 text-green-700 border-green-200 bg-green-50"
+                >
+                  {restaurant.priceRange}
+                </Badge>
+              )}
+              {restaurant.rating && (
+                <Badge variant="outline" className="text-[9px] h-4 py-0 text-amber-700 border-amber-200 bg-amber-50">
+                  <Star className="w-2.5 h-2.5 mr-1 fill-amber-500 text-amber-500" />
+                  {restaurant.rating.toFixed(1)}
+                  {typeof restaurant.user_ratings_total === "number" && restaurant.user_ratings_total > 0
+                    ? ` (${restaurant.user_ratings_total})`
+                    : ""}
+                </Badge>
+              )}
+            </div>
+
+            {locationText && (
+              <div className="flex items-start gap-1.5 text-[10px] text-gray-500">
+                <MapPin className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" />
+                <span className="line-clamp-1">{locationText}</span>
+              </div>
+            )}
+
+            {restaurant.opening_hours && (
+              <div className="mt-1 flex items-start gap-1.5 text-[10px] text-gray-500">
+                <Clock className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" />
+                <span className="line-clamp-1">{restaurant.opening_hours}</span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     );
   };
 
@@ -304,7 +311,7 @@ export function DayItineraryView({
           <h2 className="text-2xl font-bold text-gray-900">{tripInfo.destination}</h2>
           {tripInfo.startDate && tripInfo.endDate && (
             <p className="text-sm font-medium text-gray-600 mt-1 uppercase tracking-wider">
-              {formatDate(tripInfo.startDate)} — {formatDate(tripInfo.endDate)}
+              {formatDate(tripInfo.startDate)} - {formatDate(tripInfo.endDate)}
             </p>
           )}
           <div className="flex items-center gap-3 mt-4">
@@ -318,33 +325,52 @@ export function DayItineraryView({
         </div>
       )}
 
+      {(selectedAccommodation || selectedFlight) && (
+        <div className="grid gap-3 md:grid-cols-2 shrink-0">
+          {selectedAccommodation && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 uppercase tracking-wider">
+                <Building2 className="h-4 w-4" />
+                Selected Hotel
+              </div>
+              <p className="mt-2 text-sm font-semibold text-gray-900">{selectedAccommodation.name}</p>
+              <p className="text-xs text-gray-600">{selectedAccommodation.neighborhood || "Area not specified"}</p>
+              <p className="mt-1 text-xs text-gray-700">
+                {selectedAccommodation.nightlyPriceEstimate != null
+                  ? `${selectedAccommodation.currency} ${selectedAccommodation.nightlyPriceEstimate}/night`
+                  : "Price unavailable"}
+              </p>
+            </div>
+          )}
+          {selectedFlight && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 uppercase tracking-wider">
+                <Plane className="h-4 w-4" />
+                Selected Flight
+              </div>
+              <p className="mt-2 text-sm font-semibold text-gray-900">{selectedFlight.airline}</p>
+              <p className="text-xs text-gray-600">{selectedFlight.routeSummary}</p>
+              <p className="mt-1 text-xs text-gray-700">
+                {selectedFlight.totalPriceEstimate != null
+                  ? `${selectedFlight.currency} ${selectedFlight.totalPriceEstimate}`
+                  : "Price unavailable"}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center justify-between mb-4 shrink-0 px-2">
-          <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Plan Highlights</h3>
-          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
-            {groupedDays.map((day) => (
-              <Button
-                key={day.dayNumber}
-                type="button"
-                variant={activeDayNumber === day.dayNumber ? "default" : "outline"}
-                size="sm"
-                onClick={() => scrollToDay(day.dayNumber)}
-                className="h-8 px-3 whitespace-nowrap"
-              >
-                Day {day.dayNumber}
-              </Button>
-            ))}
-          </div>
+          <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Daily Itinerary</h3>
+          {groupedDays.length > 0 ? <span className="text-xs text-gray-500">All days (collapsed by default)</span> : null}
         </div>
 
-        <div
-          ref={scrollContainerRef}
-          className="flex-1 flex overflow-x-auto snap-x snap-mandatory scrollbar-none"
-          style={{ scrollBehavior: "smooth" }}
-        >
-          {groupedDays.map((day) => (
-              <div key={day.dayNumber} className="w-full flex-shrink-0 snap-center px-2">
-                <Card className="h-full border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
+        {groupedDays.length > 0 ? (
+          <ScrollArea className="flex-1 min-h-0 px-2">
+            <div className="space-y-4 pb-6">
+              {groupedDays.map((day) => (
+                <Card key={day.dayNumber} className="border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
                   <CardHeader className="pb-3 shrink-0">
                     <div className="flex items-center justify-between gap-3">
                       <div className="space-y-1">
@@ -376,8 +402,8 @@ export function DayItineraryView({
                       </Button>
                     </div>
                   </CardHeader>
-                  <CardContent className="flex-1 overflow-hidden p-0">
-                    <ScrollArea className="h-full px-4 pb-6">
+                  <CardContent className="p-0">
+                    <div className="px-4 pb-6">
                       <div className="space-y-1">
                         {day.activities.map((activity, index) => (
                           <ActivityItem
@@ -391,19 +417,18 @@ export function DayItineraryView({
                           <RestaurantItem key={restaurant.id} restaurant={restaurant} />
                         ))}
                       </div>
-                    </ScrollArea>
+                    </div>
                   </CardContent>
                 </Card>
-              </div>
-          ))}
-
-          {groupedDays.length === 0 && (
-            <div className="w-full py-12 flex flex-col items-center justify-center text-gray-400 bg-gray-50 rounded-xl border border-dashed mx-2">
-              <MapPin className="w-8 h-8 mb-2 opacity-20" />
-              <p>No activities planned yet</p>
+              ))}
             </div>
-          )}
-        </div>
+          </ScrollArea>
+        ) : (
+          <div className="w-full py-12 flex flex-col items-center justify-center text-gray-400 bg-gray-50 rounded-xl border border-dashed mx-2">
+            <MapPin className="w-8 h-8 mb-2 opacity-20" />
+            <p>No activities planned yet</p>
+          </div>
+        )}
       </div>
     </div>
   );

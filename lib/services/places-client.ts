@@ -20,6 +20,8 @@ export interface PlaceDetails {
   rating?: number;
   user_ratings_total?: number;
   opening_hours?: unknown;
+  opening_hours_text?: string;
+  editorial_summary?: string;
   price_level?: number;
   types?: string[];
   geometry?: unknown;
@@ -121,6 +123,13 @@ class PlacesClient {
 
       const result = response.data.result;
       if (!result) return null;
+      const weekdayText = Array.isArray(result.opening_hours?.weekday_text)
+        ? result.opening_hours.weekday_text.filter((value): value is string => typeof value === "string")
+        : [];
+      const editorialSummary =
+        result.editorial_summary && typeof result.editorial_summary.overview === "string"
+          ? result.editorial_summary.overview
+          : undefined;
 
       return {
         name: result.name || "",
@@ -130,6 +139,8 @@ class PlacesClient {
         rating: result.rating,
         user_ratings_total: result.user_ratings_total,
         opening_hours: result.opening_hours,
+        opening_hours_text: weekdayText[0],
+        editorial_summary: editorialSummary,
         price_level: result.price_level,
         types: result.types,
         geometry: result.geometry,

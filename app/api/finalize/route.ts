@@ -19,7 +19,6 @@ export async function POST(request: NextRequest) {
         { status: 404 }
       );
     }
-
     // For the new activity-first flow, the data is already enriched
     // Just transition to FINALIZE state
     const message = `Your itinerary for ${session.tripInfo.destination} is finalized! You have ${session.groupedDays.length} days planned with ${session.groupedDays.reduce((sum, d) => sum + d.activities.length, 0)} activities${session.groupedDays.reduce((sum, d) => sum + d.restaurants.length, 0) > 0 ? ` and ${session.groupedDays.reduce((sum, d) => sum + d.restaurants.length, 0)} restaurants` : ""}. Have a great trip!`;
@@ -36,6 +35,18 @@ export async function POST(request: NextRequest) {
       message,
       groupedDays: session.groupedDays,
       tripInfo: session.tripInfo,
+      accommodationStatus: session.accommodationStatus,
+      flightStatus: session.flightStatus,
+      accommodationError: session.accommodationError,
+      flightError: session.flightError,
+      accommodationOptions: session.accommodationOptions,
+      flightOptions: session.flightOptions,
+      selectedAccommodationOptionId: session.selectedAccommodationOptionId,
+      selectedFlightOptionId: session.selectedFlightOptionId,
+      wantsAccommodation: session.wantsAccommodation,
+      wantsFlight: session.wantsFlight,
+      accommodationLastSearchedAt: session.accommodationLastSearchedAt,
+      flightLastSearchedAt: session.flightLastSearchedAt,
     });
   } catch (error) {
     console.error("Error in finalize:", error);
