@@ -15,9 +15,16 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
     estimatedDuration: "2-4 hours",
     estimatedCost: null,
     currency: "USD",
-    bestTimeOfDay: "any",
+    bestTimeOfDay: option.bestTimeOfDay || "any",
+    timeReason: option.timeReason || null,
+    timeSourceLinks: option.timeSourceLinks || [],
     neighborhood: null,
-    coordinates: option.coordinates || null,
+    locationMode: option.locationMode || "point",
+    startCoordinates: option.startCoordinates || null,
+    endCoordinates: option.endCoordinates || null,
+    coordinates:
+      option.coordinates ||
+      (option.locationMode === "route" ? option.startCoordinates || null : null),
     photo_url: option.photoUrls?.[0] || null,
     photo_urls: option.photoUrls || [],
     researchOption: option,

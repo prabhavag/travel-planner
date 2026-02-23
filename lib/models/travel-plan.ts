@@ -237,6 +237,12 @@ export const ResearchOptionSchema = z.object({
   reviewSummary: z.string(),
   sourceLinks: z.array(ResearchSourceSchema).default([]),
   photoUrls: z.array(z.string()).max(3).default([]),
+  bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]).optional(),
+  timeReason: z.string().optional().nullable(),
+  timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
+  locationMode: z.enum(["point", "route", "area"]).optional(),
+  startCoordinates: CoordinatesSchema.optional().nullable(),
+  endCoordinates: CoordinatesSchema.optional().nullable(),
   coordinates: CoordinatesSchema.optional().nullable(),
   place_id: z.string().optional().nullable(),
 });
@@ -264,7 +270,12 @@ export const SuggestedActivitySchema = z.object({
   estimatedCost: z.number().nullable(),
   currency: z.string().default("USD"), // Currency code (e.g., "USD", "EUR", "JPY")
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]),
+  timeReason: z.string().nullable().optional(),
+  timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
   neighborhood: z.string().nullable().optional(),
+  locationMode: z.enum(["point", "route", "area"]).optional(),
+  startCoordinates: CoordinatesSchema.nullable().optional(),
+  endCoordinates: CoordinatesSchema.nullable().optional(),
   // Enriched from Places API:
   coordinates: CoordinatesSchema.nullable().optional(),
   rating: z.number().nullable().optional(),

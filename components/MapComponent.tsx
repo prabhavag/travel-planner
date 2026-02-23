@@ -108,11 +108,15 @@ export default function MapComponent({
     if (groupedDays && groupedDays.length > 0) {
       groupedDays.forEach((day) => {
         day.activities.forEach((activity, actIndex) => {
-          if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
+          const markerCoordinates =
+            activity.locationMode === "route" && activity.startCoordinates
+              ? activity.startCoordinates
+              : activity.coordinates;
+          if (markerCoordinates && markerCoordinates.lat && markerCoordinates.lng) {
             locs.push({
               name: activity.name,
-              lat: activity.coordinates.lat,
-              lng: activity.coordinates.lng,
+              lat: markerCoordinates.lat,
+              lng: markerCoordinates.lng,
               slot: activity.bestTimeOfDay || "any",
               slotIndex: actIndex,
               actIndex: actIndex,
@@ -146,12 +150,16 @@ export default function MapComponent({
     // Mode 2: Initial research recommendations
     else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
       tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
-        if (!option.coordinates?.lat || !option.coordinates?.lng) return;
-        const preference = researchOptionSelections?.[option.id] || null;
+        const markerCoordinates =
+          option.locationMode === "route" && option.startCoordinates
+            ? option.startCoordinates
+            : option.coordinates;
+        if (!markerCoordinates?.lat || !markerCoordinates?.lng) return;
+        const preference = researchOptionSelections?.[option.id] || "maybe";
         locs.push({
           name: option.title,
-          lat: option.coordinates.lat,
-          lng: option.coordinates.lng,
+          lat: markerCoordinates.lat,
+          lng: markerCoordinates.lng,
           slot: option.category,
           slotIndex: 0,
           actIndex: optionIndex,
@@ -168,11 +176,15 @@ export default function MapComponent({
     else if (suggestedActivities && suggestedActivities.length > 0) {
       suggestedActivities.forEach((activity, actIndex) => {
         if (!selectedSet.has(activity.id)) return;
-        if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
+        const markerCoordinates =
+          activity.locationMode === "route" && activity.startCoordinates
+            ? activity.startCoordinates
+            : activity.coordinates;
+        if (markerCoordinates && markerCoordinates.lat && markerCoordinates.lng) {
           locs.push({
             name: activity.name,
-            lat: activity.coordinates.lat,
-            lng: activity.coordinates.lng,
+            lat: markerCoordinates.lat,
+            lng: markerCoordinates.lng,
             slot: activity.bestTimeOfDay || "any",
             slotIndex: 0,
             actIndex: actIndex,

@@ -53,6 +53,40 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
               whyItMatches: { type: "string" },
               bestForDates: { type: "string" },
               reviewSummary: { type: "string" },
+              bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+              timeReason: { type: ["string", "null"] },
+              timeSourceLinks: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["title", "url", "snippet"],
+                  properties: {
+                    title: { type: "string" },
+                    url: { type: "string" },
+                    snippet: { type: ["string", "null"] },
+                  },
+                },
+              },
+              locationMode: { type: "string", enum: ["point", "route", "area"] },
+              startCoordinates: {
+                type: ["object", "null"],
+                additionalProperties: false,
+                required: ["lat", "lng"],
+                properties: {
+                  lat: { type: "number" },
+                  lng: { type: "number" },
+                },
+              },
+              endCoordinates: {
+                type: ["object", "null"],
+                additionalProperties: false,
+                required: ["lat", "lng"],
+                properties: {
+                  lat: { type: "number" },
+                  lng: { type: "number" },
+                },
+              },
               sourceLinks: {
                 type: "array",
                 items: {
@@ -101,6 +135,40 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
           whyItMatches: { type: "string" },
           bestForDates: { type: "string" },
           reviewSummary: { type: "string" },
+          bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+          timeReason: { type: ["string", "null"] },
+          timeSourceLinks: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["title", "url", "snippet"],
+              properties: {
+                title: { type: "string" },
+                url: { type: "string" },
+                snippet: { type: ["string", "null"] },
+              },
+            },
+          },
+          locationMode: { type: "string", enum: ["point", "route", "area"] },
+          startCoordinates: {
+            type: ["object", "null"],
+            additionalProperties: false,
+            required: ["lat", "lng"],
+            properties: {
+              lat: { type: "number" },
+              lng: { type: "number" },
+            },
+          },
+          endCoordinates: {
+            type: ["object", "null"],
+            additionalProperties: false,
+            required: ["lat", "lng"],
+            properties: {
+              lat: { type: "number" },
+              lng: { type: "number" },
+            },
+          },
           sourceLinks: {
             type: "array",
             items: {
@@ -137,6 +205,40 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
         whyItMatches: { type: "string" },
         bestForDates: { type: "string" },
         reviewSummary: { type: "string" },
+        bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+        timeReason: { type: ["string", "null"] },
+        timeSourceLinks: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "url", "snippet"],
+            properties: {
+              title: { type: "string" },
+              url: { type: "string" },
+              snippet: { type: ["string", "null"] },
+            },
+          },
+        },
+        locationMode: { type: "string", enum: ["point", "route", "area"] },
+        startCoordinates: {
+          type: ["object", "null"],
+          additionalProperties: false,
+          required: ["lat", "lng"],
+          properties: {
+            lat: { type: "number" },
+            lng: { type: "number" },
+          },
+        },
+        endCoordinates: {
+          type: ["object", "null"],
+          additionalProperties: false,
+          required: ["lat", "lng"],
+          properties: {
+            lat: { type: "number" },
+            lng: { type: "number" },
+          },
+        },
         sourceLinks: {
           type: "array",
           items: {
@@ -718,6 +820,126 @@ class LLMClient {
     };
   }
 
+  private _asCoordinates(value: unknown): { lat: number; lng: number } | null {
+    const raw = (value || null) as Record<string, unknown> | null;
+    const lat = raw && typeof raw.lat === "number" ? raw.lat : null;
+    const lng = raw && typeof raw.lng === "number" ? raw.lng : null;
+    return lat != null && lng != null ? { lat, lng } : null;
+  }
+
+  private _inferLocationMode(option: { title: string; category: string }): "point" | "route" | "area" {
+    const text = `${option.title} ${option.category}`.toLowerCase();
+    if (/(road to|scenic drive|drive|highway|route|loop drive)/i.test(text)) {
+      return "route";
+    }
+    if (/(region|district|neighborhood|old town|national park|state park)/i.test(text)) {
+      return "area";
+    }
+    return "point";
+  }
+
+  private _normalizeBestTimeOfDay(value: unknown): "morning" | "afternoon" | "evening" | "any" {
+    return value === "morning" || value === "afternoon" || value === "evening" || value === "any"
+      ? value
+      : "any";
+  }
+
+  private _selectTimeSourceLinks({
+    sourceLinks,
+    bestTimeOfDay,
+  }: {
+    sourceLinks: Array<{ title: string; url: string; snippet?: string | null }>;
+    bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
+  }): Array<{ title: string; url: string; snippet?: string | null }> {
+    if (!sourceLinks.length) return [];
+    if (bestTimeOfDay === "any") return sourceLinks.slice(0, 2);
+
+    const keywords: Record<"morning" | "afternoon" | "evening", string[]> = {
+      morning: ["morning", "early", "sunrise", "calm", "before noon"],
+      afternoon: ["afternoon", "midday", "noon"],
+      evening: ["evening", "sunset", "night"],
+    };
+    const matched = sourceLinks.filter((link) => {
+      const text = `${link.title} ${link.snippet || ""}`.toLowerCase();
+      return keywords[bestTimeOfDay].some((keyword) => text.includes(keyword));
+    });
+
+    return (matched.length > 0 ? matched : sourceLinks).slice(0, 2);
+  }
+
+  private _inferTimeHints({
+    title,
+    category,
+    whyItMatches,
+    bestForDates,
+    reviewSummary,
+    sourceLinks,
+  }: {
+    title: string;
+    category: string;
+    whyItMatches: string;
+    bestForDates: string;
+    reviewSummary: string;
+    sourceLinks: Array<{ title: string; url: string; snippet?: string | null }>;
+  }): {
+    bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
+    timeReason: string | null;
+    timeSourceLinks: Array<{ title: string; url: string; snippet?: string | null }>;
+  } {
+    const text = `${title} ${category} ${whyItMatches} ${bestForDates} ${reviewSummary}`.toLowerCase();
+
+    let bestTimeOfDay: "morning" | "afternoon" | "evening" | "any" = "any";
+    let timeReason: string | null = null;
+
+    if (/(sunrise|early|before noon|quiet morning|calm water|avoid crowds early)/i.test(text)) {
+      bestTimeOfDay = "morning";
+      timeReason = "Best done early for calmer conditions and lower crowds.";
+    } else if (/(sunset|night|stargazing|evening show|dinner)/i.test(text)) {
+      bestTimeOfDay = "evening";
+      timeReason = "Best done later in the day for sunset/night conditions.";
+    } else if (/(snorkel|snorkeling|hike|trail|road to hana|scenic drive)/i.test(text)) {
+      bestTimeOfDay = "morning";
+      timeReason = "Typically better in the morning for weather, water, and traffic.";
+    } else if (/(museum|gallery|market|shopping|city walk)/i.test(text)) {
+      bestTimeOfDay = "afternoon";
+      timeReason = "Usually easiest to fit in the afternoon.";
+    }
+
+    return {
+      bestTimeOfDay,
+      timeReason,
+      timeSourceLinks: this._selectTimeSourceLinks({ sourceLinks, bestTimeOfDay }),
+    };
+  }
+
+  private async _deriveRouteEndpoints({
+    geocodingService,
+    optionTitle,
+    destinationName,
+  }: {
+    geocodingService: ReturnType<typeof getGeocodingService>;
+    optionTitle: string;
+    destinationName: string;
+  }): Promise<{ startCoordinates: { lat: number; lng: number } | null; endCoordinates: { lat: number; lng: number } | null }> {
+    const normalizedTitle = optionTitle.toLowerCase();
+    const isRoadToHana =
+      normalizedTitle.includes("road to hana") || normalizedTitle.includes("hana highway");
+
+    const startQuery = isRoadToHana
+      ? `Kahului Airport, Maui`
+      : `${optionTitle} start point, ${destinationName}`;
+    const endQuery = isRoadToHana
+      ? `Hana, Maui`
+      : `${optionTitle} end point, ${destinationName}`;
+
+    const [startCoordinates, endCoordinates] = await Promise.all([
+      geocodingService.geocode(startQuery),
+      geocodingService.geocode(endQuery),
+    ]);
+
+    return { startCoordinates, endCoordinates };
+  }
+
   private async _enrichResearchBriefWithPlacePhotos({
     brief,
     destination,
@@ -735,17 +957,29 @@ class LLMClient {
       return brief;
     }
 
+    let geocodingService: ReturnType<typeof getGeocodingService> | null = null;
     let destinationCoords: { lat: number; lng: number } | null = null;
     try {
-      const geocodingService = getGeocodingService();
+      geocodingService = getGeocodingService();
       destinationCoords = await geocodingService.geocode(destinationName);
     } catch {
+      geocodingService = null;
       destinationCoords = null;
     }
 
     const popularOptions = await Promise.all(
       brief.popularOptions.map(async (option) => {
         try {
+          const inferredLocationMode = option.locationMode || this._inferLocationMode(option);
+          const inferredTime = this._inferTimeHints({
+            title: option.title,
+            category: option.category,
+            whyItMatches: option.whyItMatches,
+            bestForDates: option.bestForDates,
+            reviewSummary: option.reviewSummary,
+            sourceLinks: option.sourceLinks || [],
+          });
+
           const searchQuery = `${option.title}, ${destinationName}`;
           let places = await placesClient.searchPlaces(searchQuery, destinationCoords, 50000);
           if (!places.length) {
@@ -753,18 +987,47 @@ class LLMClient {
           }
 
           const placeId = places[0]?.place_id || null;
+          let startCoordinates = option.startCoordinates || null;
+          let endCoordinates = option.endCoordinates || null;
+          if (inferredLocationMode === "route" && geocodingService) {
+            const derived = await this._deriveRouteEndpoints({
+              geocodingService,
+              optionTitle: option.title,
+              destinationName,
+            });
+            startCoordinates = startCoordinates || derived.startCoordinates;
+            endCoordinates = endCoordinates || derived.endCoordinates;
+          }
+
           if (!placeId) {
             return {
               ...option,
               photoUrls: option.photoUrls || [],
+              bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
+              timeReason: option.timeReason || inferredTime.timeReason,
+              timeSourceLinks: option.timeSourceLinks || inferredTime.timeSourceLinks,
+              locationMode: inferredLocationMode,
+              startCoordinates,
+              endCoordinates,
+              coordinates: option.coordinates || (inferredLocationMode === "route" ? startCoordinates : null),
             };
           }
 
           const photoUrls = await placesClient.getPlacePhotoUrlsFromId(placeId, 320);
+          const placeCoordinates = places[0]?.location || null;
           return {
             ...option,
             photoUrls: photoUrls.slice(0, 3),
-            coordinates: places[0]?.location || null,
+            bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
+            timeReason: option.timeReason || inferredTime.timeReason,
+            timeSourceLinks: option.timeSourceLinks || inferredTime.timeSourceLinks,
+            locationMode: inferredLocationMode,
+            startCoordinates,
+            endCoordinates,
+            coordinates:
+              inferredLocationMode === "route"
+                ? startCoordinates || placeCoordinates || null
+                : placeCoordinates || option.coordinates || null,
             place_id: placeId,
           };
         } catch {
@@ -807,9 +1070,47 @@ class LLMClient {
               .map((url) => url.trim())
               .slice(0, 3)
             : [];
-          const coordinatesRaw = (opt.coordinates || null) as Record<string, unknown> | null;
-          const lat = coordinatesRaw && typeof coordinatesRaw.lat === "number" ? coordinatesRaw.lat : null;
-          const lng = coordinatesRaw && typeof coordinatesRaw.lng === "number" ? coordinatesRaw.lng : null;
+          const coordinates = this._asCoordinates(opt.coordinates);
+          const startCoordinates = this._asCoordinates(opt.startCoordinates);
+          const endCoordinates = this._asCoordinates(opt.endCoordinates);
+          const rawLocationMode = typeof opt.locationMode === "string" ? opt.locationMode : null;
+          const inferredLocationMode = this._inferLocationMode({
+            title: typeof opt.title === "string" ? opt.title : "",
+            category: typeof opt.category === "string" ? opt.category : "other",
+          });
+          const locationMode =
+            rawLocationMode === "route" || rawLocationMode === "area" || rawLocationMode === "point"
+              ? rawLocationMode
+              : inferredLocationMode;
+          const sourceLinksForTiming = sourceLinks;
+          const inferredTime = this._inferTimeHints({
+            title: typeof opt.title === "string" ? opt.title : "",
+            category: typeof opt.category === "string" ? opt.category : "other",
+            whyItMatches: typeof opt.whyItMatches === "string" ? opt.whyItMatches : "",
+            bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
+            reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
+            sourceLinks: sourceLinksForTiming,
+          });
+          const rawBestTimeOfDay = opt.bestTimeOfDay;
+          const hasExplicitBestTimeOfDay =
+            rawBestTimeOfDay === "morning" ||
+            rawBestTimeOfDay === "afternoon" ||
+            rawBestTimeOfDay === "evening" ||
+            rawBestTimeOfDay === "any";
+          const bestTimeOfDay = this._normalizeBestTimeOfDay(rawBestTimeOfDay);
+          const timeSourceLinksRaw = Array.isArray(opt.timeSourceLinks) ? opt.timeSourceLinks : [];
+          const timeSourceLinks = timeSourceLinksRaw
+            .map((source) => {
+              const s = (source || {}) as Record<string, unknown>;
+              if (typeof s.url !== "string" || !s.url.trim()) return null;
+              return {
+                title: typeof s.title === "string" && s.title.trim() ? s.title.trim() : "Source",
+                url: s.url.trim(),
+                snippet: typeof s.snippet === "string" ? s.snippet.trim() : null,
+              };
+            })
+            .filter((value): value is { title: string; url: string; snippet: string | null } => Boolean(value))
+            .slice(0, 3);
 
           return {
             id: typeof opt.id === "string" && opt.id.trim() ? opt.id.trim() : `opt${index + 1}`,
@@ -824,7 +1125,18 @@ class LLMClient {
             reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
             sourceLinks,
             photoUrls,
-            coordinates: lat != null && lng != null ? { lat, lng } : null,
+            bestTimeOfDay: hasExplicitBestTimeOfDay ? bestTimeOfDay : inferredTime.bestTimeOfDay,
+            timeReason:
+              typeof opt.timeReason === "string" && opt.timeReason.trim()
+                ? opt.timeReason.trim()
+                : inferredTime.timeReason,
+            timeSourceLinks: timeSourceLinks.length > 0 ? timeSourceLinks : inferredTime.timeSourceLinks,
+            locationMode,
+            startCoordinates,
+            endCoordinates,
+            coordinates:
+              coordinates ||
+              (locationMode === "route" ? startCoordinates : null),
             place_id: typeof opt.place_id === "string" ? opt.place_id : null,
           };
         })

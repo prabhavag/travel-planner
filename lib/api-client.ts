@@ -161,6 +161,12 @@ export interface ResearchOption {
   reviewSummary: string;
   sourceLinks: ResearchSource[];
   photoUrls?: string[];
+  bestTimeOfDay?: "morning" | "afternoon" | "evening" | "any";
+  timeReason?: string | null;
+  timeSourceLinks?: ResearchSource[];
+  locationMode?: "point" | "route" | "area";
+  startCoordinates?: { lat: number; lng: number } | null;
+  endCoordinates?: { lat: number; lng: number } | null;
   coordinates?: { lat: number; lng: number } | null;
   place_id?: string | null;
 }
@@ -437,7 +443,12 @@ export interface SuggestedActivity {
   estimatedCost: number | null;
   currency?: string;
   bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
+  timeReason?: string | null;
+  timeSourceLinks?: ResearchSource[];
   neighborhood?: string | null;
+  locationMode?: "point" | "route" | "area";
+  startCoordinates?: { lat: number; lng: number } | null;
+  endCoordinates?: { lat: number; lng: number } | null;
   coordinates?: { lat: number; lng: number } | null;
   rating?: number | null;
   place_id?: string | null;

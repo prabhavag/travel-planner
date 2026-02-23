@@ -87,6 +87,8 @@ RESPONSE FORMAT (JSON):
         "whyItMatches": "Detailed explanation of why this fits user context/preferences",
         "bestForDates": "How this option fits the exact travel dates",
         "reviewSummary": "What reviews repeatedly praise/caution",
+        "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
+        "timeReason": "Short reason for bestTimeOfDay (optional)",
         "sourceLinks": [
           {
             "title": "Source title",
@@ -133,6 +135,8 @@ RESPONSE FORMAT (JSON):
         "whyItMatches": "Why this matches, explicitly tied to user interests/preferences",
         "bestForDates": "Date-specific fit",
         "reviewSummary": "Review synthesis",
+        "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
+        "timeReason": "Short reason for bestTimeOfDay (optional)",
         "sourceLinks": [
           {
             "title": "Source title",
@@ -209,6 +213,8 @@ Output must be strict JSON with this shape:
       "whyItMatches": "Why it fits user request and preferences",
       "bestForDates": "Date-specific fit",
       "reviewSummary": "What reviews commonly praise/caution",
+      "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
+      "timeReason": "Short reason for bestTimeOfDay (optional)",
       "sourceLinks": [
         {
           "title": "Source title",
