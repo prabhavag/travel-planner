@@ -4,7 +4,7 @@ import { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, ExternalLink, Loader2, Search, ChevronDown, ChevronUp } from "lucide-react";
+import { Check, ExternalLink, Loader2, Search, ChevronDown, ChevronUp, X } from "lucide-react";
 import type { ResearchOption } from "@/lib/api-client";
 
 interface ResearchOptionCardProps {
@@ -16,6 +16,7 @@ interface ResearchOptionCardProps {
   deepResearchDisabled?: boolean;
   lastDeepResearchAt?: string;
   readOnly?: boolean;
+  onRemove?: (optionId: string) => void;
   extraContent?: ReactNode;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -40,6 +41,7 @@ export function ResearchOptionCard({
   deepResearchDisabled = false,
   lastDeepResearchAt,
   readOnly = false,
+  onRemove,
   extraContent,
   collapsed = false,
   onToggleCollapse,
@@ -85,6 +87,21 @@ export function ResearchOptionCard({
                 title={collapsed ? "Expand card" : "Collapse card"}
               >
                 {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+              </Button>
+            ) : null}
+            {onRemove ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove(option.id);
+                }}
+                className="h-6 w-6 p-0 text-gray-400 hover:text-red-600"
+                title="Remove card"
+              >
+                <X className="w-4 h-4" />
               </Button>
             ) : null}
           </div>

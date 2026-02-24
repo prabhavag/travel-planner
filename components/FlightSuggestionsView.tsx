@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import type { FlightOption, SubAgentStatus } from "@/lib/api-client";
-import { Check, ChevronDown, ChevronUp, Clock, ExternalLink, Loader2, Plane, Timer } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Clock, ExternalLink, Loader2, Plane, Timer, X } from "lucide-react";
 
 interface FlightSuggestionsViewProps {
   status: SubAgentStatus;
@@ -15,6 +15,7 @@ interface FlightSuggestionsViewProps {
   lastSearchedAt: string | null;
   onRefresh: () => void;
   onConfirmSelection: (optionId: string) => void;
+  onRemoveOption?: (optionId: string) => void;
   onSkip: () => void;
   isLoading: boolean;
 }
@@ -28,6 +29,7 @@ export function FlightSuggestionsView({
   lastSearchedAt,
   onRefresh,
   onConfirmSelection,
+  onRemoveOption,
   onSkip,
   isLoading,
 }: FlightSuggestionsViewProps) {
@@ -141,6 +143,21 @@ export function FlightSuggestionsView({
                   >
                     {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
                   </Button>
+                  {onRemoveOption ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 text-gray-400 hover:text-red-600"
+                      title="Remove card"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveOption(option.id);
+                      }}
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  ) : null}
                 </div>
               </div>
 

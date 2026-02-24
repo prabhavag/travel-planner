@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import type { AccommodationOption, SubAgentStatus } from "@/lib/api-client";
-import { Check, ChevronDown, ChevronUp, ExternalLink, Loader2, MapPin, Star } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ExternalLink, Loader2, MapPin, Star, X } from "lucide-react";
 
 interface AccommodationSuggestionsViewProps {
   status: SubAgentStatus;
@@ -15,6 +15,7 @@ interface AccommodationSuggestionsViewProps {
   lastSearchedAt: string | null;
   onRefresh: () => void;
   onConfirmSelection: (optionId: string) => void;
+  onRemoveOption?: (optionId: string) => void;
   onSkip: () => void;
   isLoading: boolean;
 }
@@ -28,6 +29,7 @@ export function AccommodationSuggestionsView({
   lastSearchedAt,
   onRefresh,
   onConfirmSelection,
+  onRemoveOption,
   onSkip,
   isLoading,
 }: AccommodationSuggestionsViewProps) {
@@ -137,6 +139,21 @@ export function AccommodationSuggestionsView({
                   >
                     {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
                   </Button>
+                  {onRemoveOption ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 text-gray-400 hover:text-red-600"
+                      title="Remove card"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveOption(option.id);
+                      }}
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  ) : null}
                 </div>
               </div>
 

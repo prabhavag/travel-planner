@@ -4,13 +4,14 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, Star, MapPin, Clock, ExternalLink, Globe } from "lucide-react";
+import { Check, Star, MapPin, Clock, ExternalLink, Globe, X } from "lucide-react";
 import type { RestaurantSuggestion } from "@/lib/api-client";
 
 interface RestaurantSelectionViewProps {
   restaurants: RestaurantSuggestion[];
   selectedIds: string[];
   onSelectionChange: (selectedIds: string[]) => void;
+  onRemoveRestaurant?: (restaurantId: string) => void;
   onConfirm: (wantsRestaurants: boolean) => void;
   isLoading?: boolean;
 }
@@ -19,6 +20,7 @@ export function RestaurantSelectionView({
   restaurants,
   selectedIds,
   onSelectionChange,
+  onRemoveRestaurant,
   onConfirm,
   isLoading = false,
 }: RestaurantSelectionViewProps) {
@@ -140,11 +142,28 @@ export function RestaurantSelectionView({
                 </div>
                 <div className="flex items-start justify-between">
                   <CardTitle className="text-base line-clamp-1">{restaurant.name}</CardTitle>
-                  {isSelected && (
-                    <div className="flex-shrink-0 w-6 h-6 bg-primary rounded-full flex items-center justify-center">
-                      <Check className="w-4 h-4 text-white" />
-                    </div>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {isSelected && (
+                      <div className="flex-shrink-0 w-6 h-6 bg-primary rounded-full flex items-center justify-center">
+                        <Check className="w-4 h-4 text-white" />
+                      </div>
+                    )}
+                    {onRemoveRestaurant ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0 text-gray-400 hover:text-red-600"
+                        title="Remove card"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveRestaurant(restaurant.id);
+                        }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-1">
                   {restaurant.cuisine && (

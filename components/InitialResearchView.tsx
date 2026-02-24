@@ -17,6 +17,7 @@ interface InitialResearchViewProps {
   onRegenerate: () => void;
   onDeepResearchAll: () => void;
   onDeepResearchOption: (optionId: string) => void;
+  onRemoveOption?: (optionId: string) => void;
   deepResearchOptionId?: string | null;
   lastDeepResearchAtByOptionId?: Record<string, string>;
   onProceed: () => void;
@@ -34,6 +35,7 @@ export function InitialResearchView({
   onRegenerate,
   onDeepResearchAll,
   onDeepResearchOption,
+  onRemoveOption,
   deepResearchOptionId = null,
   lastDeepResearchAtByOptionId = {},
   onProceed,
@@ -300,6 +302,7 @@ export function InitialResearchView({
                 isSelected={selectedSet.has(option.id)}
                 onToggleSelect={(id) => onSelectionChange(id, !selectedSet.has(id))}
                 onDeepResearch={onDeepResearchOption}
+                onRemove={onRemoveOption}
                 deepResearchLoading={isLoading && deepResearchOptionId === option.id}
                 deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
                 lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}

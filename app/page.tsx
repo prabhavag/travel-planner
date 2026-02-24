@@ -23,6 +23,7 @@ import {
   setMealPreferences,
   updateTripInfo,
   updateWorkflowState,
+  removeCard,
   deepResearchOption,
   deepResearchSelectedOptions,
   enrichResearchPhotos,
@@ -584,6 +585,27 @@ export default function PlannerPage() {
     });
   };
 
+  const handleRemoveResearchOption = async (optionId: string) => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await removeCard(sessionId, "research_option", optionId);
+      if (response.success) {
+        applySessionResponse(response, false);
+        setLastDeepResearchAtByOptionId((prev) => {
+          const next = { ...prev };
+          delete next[optionId];
+          return next;
+        });
+      }
+    } catch (error) {
+      console.error("Remove research option error:", error);
+      alert("Failed to remove activity card. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const getDerivedDurationFromDates = (info: TripInfo | null): number | null => {
     if (!info?.startDate || !info?.endDate) return null;
     const start = new Date(info.startDate);
@@ -740,6 +762,22 @@ export default function PlannerPage() {
     setSelectedRestaurantIds(ids);
   };
 
+  const handleRemoveRestaurant = async (restaurantId: string) => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await removeCard(sessionId, "restaurant", restaurantId);
+      if (response.success) {
+        applySessionResponse(response, false);
+      }
+    } catch (error) {
+      console.error("Remove restaurant error:", error);
+      alert("Failed to remove restaurant card. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleMealPreferences = async (shouldAddRestaurants: boolean) => {
     if (!sessionId) return;
     setLoading(true);
@@ -818,6 +856,22 @@ export default function PlannerPage() {
     }
   };
 
+  const handleRemoveAccommodationOption = async (optionId: string) => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await removeCard(sessionId, "accommodation", optionId);
+      if (response.success) {
+        applySessionResponse(response, false);
+      }
+    } catch (error) {
+      console.error("Remove accommodation option error:", error);
+      alert("Failed to remove hotel card. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSelectFlight = async (optionId: string) => {
     if (!sessionId) return;
     setLoading(true);
@@ -850,6 +904,22 @@ export default function PlannerPage() {
     } catch (error) {
       console.error("Skip flight error:", error);
       alert("Failed to skip flights. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveFlightOption = async (optionId: string) => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await removeCard(sessionId, "flight", optionId);
+      if (response.success) {
+        applySessionResponse(response, false);
+      }
+    } catch (error) {
+      console.error("Remove flight option error:", error);
+      alert("Failed to remove flight card. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -1297,6 +1367,7 @@ export default function PlannerPage() {
                     researchBrief={tripResearchBrief}
                     selectedOptionIds={selectedResearchOptionIds}
                     onSelectionChange={handleResearchSelectionChange}
+                    onRemoveOption={handleRemoveResearchOption}
                     onResolveDurationConflict={handleResolveDurationConflict}
                     hasUnresolvedAssumptionConflicts={hasUnresolvedAssumptionConflicts}
                     onRegenerate={() => handleGenerateResearchBrief("deep", "augment")}
@@ -1354,6 +1425,7 @@ export default function PlannerPage() {
                       restaurants={restaurantSuggestions}
                       selectedIds={selectedRestaurantIds}
                       onSelectionChange={handleRestaurantSelectionChange}
+                      onRemoveRestaurant={handleRemoveRestaurant}
                       onConfirm={handleMealPreferences}
                       isLoading={loading}
                     />
@@ -1400,6 +1472,7 @@ export default function PlannerPage() {
                           lastSearchedAt={accommodationLastSearchedAt}
                           onRefresh={handleRefreshAccommodationSearch}
                           onConfirmSelection={handleSelectAccommodation}
+                          onRemoveOption={handleRemoveAccommodationOption}
                           onSkip={handleSkipAccommodation}
                           isLoading={loading}
                         />
@@ -1413,6 +1486,7 @@ export default function PlannerPage() {
                           lastSearchedAt={flightLastSearchedAt}
                           onRefresh={handleRefreshFlightSearch}
                           onConfirmSelection={handleSelectFlight}
+                          onRemoveOption={handleRemoveFlightOption}
                           onSkip={handleSkipFlight}
                           isLoading={loading}
                         />

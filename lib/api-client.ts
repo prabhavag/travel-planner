@@ -102,6 +102,8 @@ export interface AgentUiAction {
   payload?: Record<string, unknown>;
 }
 
+export type RemovableCardType = "research_option" | "restaurant" | "accommodation" | "flight";
+
 export interface ToolAction {
   tool:
     | "select_activities"
@@ -593,5 +595,16 @@ export async function updateWorkflowState(
   return fetchJson(`${BASE_URL}/session/${sessionId}/update-state`, {
     method: "POST",
     body: JSON.stringify({ workflowState, transitionOwner: options?.transitionOwner ?? "UI" }),
+  });
+}
+
+export async function removeCard(
+  sessionId: string,
+  cardType: RemovableCardType,
+  cardId: string
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/remove-card`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, cardType, cardId }),
   });
 }
