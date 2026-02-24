@@ -189,6 +189,7 @@ export function DayItineraryView({
           option={activity.researchOption}
           isSelected={true}
           readOnly={true}
+          activityDuration={activity.estimatedDuration}
           collapsed={isCollapsed}
           onToggleCollapse={() => toggleActivityCollapse(activity.id)}
           extraContent={moveControls}

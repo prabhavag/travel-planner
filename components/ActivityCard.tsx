@@ -130,6 +130,10 @@ export function ActivityCard({
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5 mt-1">
+          <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
+            <Clock className="mr-1 h-3 w-3" />
+            {activity.estimatedDuration}
+          </Badge>
           <Badge className={`border ${getDifficultyBadgeClass(difficultyLevel)}`}>
             {difficultyLevel}
           </Badge>

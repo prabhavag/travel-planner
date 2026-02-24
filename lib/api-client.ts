@@ -161,6 +161,7 @@ export interface ResearchOption {
   whyItMatches: string;
   bestForDates: string;
   reviewSummary: string;
+  estimatedDuration?: string | null;
   sourceLinks: ResearchSource[];
   photoUrls?: string[];
   difficultyLevel?: "easy" | "moderate" | "hard";

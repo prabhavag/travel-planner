@@ -6,13 +6,20 @@ import { buildGroupedDays, groupActivitiesByDay } from "@/lib/services/day-group
 import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
 
 function mapResearchOptionToSuggestedActivity(option: ResearchOption): SuggestedActivity {
+  const fallbackDuration =
+    option.category === "food"
+      ? "1-2 hours"
+      : option.category === "hiking" || option.category === "snorkeling" || option.category === "adventure"
+        ? "2-4 hours"
+        : "1-3 hours";
+
   return {
     id: option.id,
     name: option.title,
     type: option.category,
     interestTags: [option.category],
     description: option.reviewSummary || option.whyItMatches || option.bestForDates,
-    estimatedDuration: "2-4 hours",
+    estimatedDuration: option.estimatedDuration || fallbackDuration,
     estimatedCost: null,
     currency: "USD",
     difficultyLevel: option.difficultyLevel || "moderate",

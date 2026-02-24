@@ -235,6 +235,7 @@ export const ResearchOptionSchema = z.object({
   whyItMatches: z.string(),
   bestForDates: z.string(),
   reviewSummary: z.string(),
+  estimatedDuration: z.string().optional().nullable(),
   sourceLinks: z.array(ResearchSourceSchema).default([]),
   photoUrls: z.array(z.string()).max(3).default([]),
   difficultyLevel: z.enum(["easy", "moderate", "hard"]).optional(),

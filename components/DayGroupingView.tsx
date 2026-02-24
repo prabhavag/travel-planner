@@ -150,6 +150,7 @@ export function DayGroupingView({
           option={activity.researchOption}
           isSelected={true}
           readOnly={true}
+          activityDuration={activity.estimatedDuration}
           extraContent={moveControls}
         />
       );

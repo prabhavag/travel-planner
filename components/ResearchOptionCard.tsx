@@ -4,7 +4,7 @@ import { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Check, ExternalLink, Loader2, Search, ChevronDown, ChevronUp, X } from "lucide-react";
+import { Check, ExternalLink, Loader2, Search, ChevronDown, ChevronUp, Clock, X } from "lucide-react";
 import type { ResearchOption } from "@/lib/api-client";
 
 interface ResearchOptionCardProps {
@@ -20,6 +20,7 @@ interface ResearchOptionCardProps {
   extraContent?: ReactNode;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  activityDuration?: string | null;
 }
 
 const categoryClassMap: Record<string, string> = {
@@ -45,6 +46,7 @@ export function ResearchOptionCard({
   extraContent,
   collapsed = false,
   onToggleCollapse,
+  activityDuration = null,
 }: ResearchOptionCardProps) {
   const formattedLastDeepResearchAt = lastDeepResearchAt
     ? new Date(lastDeepResearchAt).toLocaleString([], {
@@ -54,6 +56,8 @@ export function ResearchOptionCard({
         minute: "2-digit",
       })
     : null;
+
+  const displayedDuration = activityDuration || option.estimatedDuration || null;
 
   return (
     <Card
@@ -66,6 +70,12 @@ export function ResearchOptionCard({
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base flex-1">{option.title}</CardTitle>
           <div className="flex items-center gap-1">
+            {displayedDuration ? (
+              <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
+                <Clock className="mr-1 h-3 w-3" />
+                {displayedDuration}
+              </Badge>
+            ) : null}
             <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>
               {option.category}
             </Badge>

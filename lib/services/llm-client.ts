@@ -53,6 +53,7 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
               whyItMatches: { type: "string" },
               bestForDates: { type: "string" },
               reviewSummary: { type: "string" },
+              estimatedDuration: { type: ["string", "null"] },
               difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
               bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
               timeReason: { type: ["string", "null"] },
@@ -136,6 +137,7 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
           whyItMatches: { type: "string" },
           bestForDates: { type: "string" },
           reviewSummary: { type: "string" },
+          estimatedDuration: { type: ["string", "null"] },
           difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
           bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
           timeReason: { type: ["string", "null"] },
@@ -207,6 +209,7 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
         whyItMatches: { type: "string" },
         bestForDates: { type: "string" },
         reviewSummary: { type: "string" },
+        estimatedDuration: { type: ["string", "null"] },
         difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
         bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
         timeReason: { type: ["string", "null"] },
@@ -851,6 +854,37 @@ class LLMClient {
     return value === "easy" || value === "moderate" || value === "hard" ? value : "moderate";
   }
 
+  private _normalizeEstimatedDuration(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private _inferEstimatedDuration({
+    title,
+    category,
+    whyItMatches,
+    bestForDates,
+    reviewSummary,
+  }: {
+    title: string;
+    category: string;
+    whyItMatches: string;
+    bestForDates: string;
+    reviewSummary: string;
+  }): string {
+    const text = `${title} ${category} ${whyItMatches} ${bestForDates} ${reviewSummary}`.toLowerCase();
+
+    if (/(road to hana|scenic drive|full day|all day|day trip)/i.test(text)) return "6-10 hours";
+    if (/(dinner|lunch|breakfast|meal|restaurant|food tour)/i.test(text)) return "1-2 hours";
+    if (/(snorkel|snorkeling|hike|trail|kayak|surf|adventure tour)/i.test(text)) return "2-4 hours";
+    if (/(museum|gallery|market|walking tour|city tour|beach|relax)/i.test(text)) return "1-3 hours";
+
+    if (category === "hiking" || category === "snorkeling" || category === "adventure") return "2-4 hours";
+    if (category === "food" || category === "culture" || category === "relaxation") return "1-3 hours";
+    return "2-3 hours";
+  }
+
   private _inferDifficultyLevel({
     title,
     category,
@@ -1016,6 +1050,13 @@ class LLMClient {
             reviewSummary: option.reviewSummary,
             sourceLinks: option.sourceLinks || [],
           });
+          const inferredEstimatedDuration = this._inferEstimatedDuration({
+            title: option.title,
+            category: option.category,
+            whyItMatches: option.whyItMatches,
+            bestForDates: option.bestForDates,
+            reviewSummary: option.reviewSummary,
+          });
           const inferredDifficulty = this._inferDifficultyLevel({
             title: option.title,
             category: option.category,
@@ -1047,6 +1088,7 @@ class LLMClient {
             return {
               ...option,
               photoUrls: option.photoUrls || [],
+              estimatedDuration: option.estimatedDuration || inferredEstimatedDuration,
               difficultyLevel: option.difficultyLevel || inferredDifficulty,
               bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
               timeReason: option.timeReason || inferredTime.timeReason,
@@ -1063,6 +1105,7 @@ class LLMClient {
           return {
             ...option,
             photoUrls: photoUrls.slice(0, 3),
+            estimatedDuration: option.estimatedDuration || inferredEstimatedDuration,
             difficultyLevel: option.difficultyLevel || inferredDifficulty,
             bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
             timeReason: option.timeReason || inferredTime.timeReason,
@@ -1144,6 +1187,14 @@ class LLMClient {
             bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
             reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
           });
+          const inferredEstimatedDuration = this._inferEstimatedDuration({
+            title: typeof opt.title === "string" ? opt.title : "",
+            category: typeof opt.category === "string" ? opt.category : "other",
+            whyItMatches: typeof opt.whyItMatches === "string" ? opt.whyItMatches : "",
+            bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
+            reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
+          });
+          const estimatedDuration = this._normalizeEstimatedDuration(opt.estimatedDuration) || inferredEstimatedDuration;
           const rawDifficultyLevel = opt.difficultyLevel;
           const hasExplicitDifficultyLevel =
             rawDifficultyLevel === "easy" ||
@@ -1182,6 +1233,7 @@ class LLMClient {
             whyItMatches: typeof opt.whyItMatches === "string" ? opt.whyItMatches : "",
             bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
             reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
+            estimatedDuration,
             sourceLinks,
             photoUrls,
             difficultyLevel: hasExplicitDifficultyLevel ? difficultyLevel : inferredDifficulty,
