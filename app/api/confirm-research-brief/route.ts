@@ -15,6 +15,7 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
     estimatedDuration: "2-4 hours",
     estimatedCost: null,
     currency: "USD",
+    difficultyLevel: option.difficultyLevel || "moderate",
     bestTimeOfDay: option.bestTimeOfDay || "any",
     timeReason: option.timeReason || null,
     timeSourceLinks: option.timeSourceLinks || [],

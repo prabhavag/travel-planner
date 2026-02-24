@@ -163,6 +163,7 @@ export interface ResearchOption {
   reviewSummary: string;
   sourceLinks: ResearchSource[];
   photoUrls?: string[];
+  difficultyLevel?: "easy" | "moderate" | "hard";
   bestTimeOfDay?: "morning" | "afternoon" | "evening" | "any";
   timeReason?: string | null;
   timeSourceLinks?: ResearchSource[];
@@ -444,6 +445,7 @@ export interface SuggestedActivity {
   estimatedDuration: string;
   estimatedCost: number | null;
   currency?: string;
+  difficultyLevel: "easy" | "moderate" | "hard";
   bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
   timeReason?: string | null;
   timeSourceLinks?: ResearchSource[];

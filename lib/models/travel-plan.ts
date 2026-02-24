@@ -237,6 +237,7 @@ export const ResearchOptionSchema = z.object({
   reviewSummary: z.string(),
   sourceLinks: z.array(ResearchSourceSchema).default([]),
   photoUrls: z.array(z.string()).max(3).default([]),
+  difficultyLevel: z.enum(["easy", "moderate", "hard"]).optional(),
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]).optional(),
   timeReason: z.string().optional().nullable(),
   timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
@@ -269,6 +270,7 @@ export const SuggestedActivitySchema = z.object({
   estimatedDuration: z.string(), // "2-3 hours"
   estimatedCost: z.number().nullable(),
   currency: z.string().default("USD"), // Currency code (e.g., "USD", "EUR", "JPY")
+  difficultyLevel: z.enum(["easy", "moderate", "hard"]).default("moderate"),
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]),
   timeReason: z.string().nullable().optional(),
   timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),

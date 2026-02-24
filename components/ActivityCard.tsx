@@ -75,6 +75,13 @@ export function ActivityCard({
     return [];
   };
 
+  const getDifficultyBadgeClass = (level: SuggestedActivity["difficultyLevel"]) => {
+    if (level === "easy") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+    if (level === "hard") return "border-rose-200 bg-rose-50 text-rose-800";
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  };
+  const difficultyLevel = activity.difficultyLevel || "moderate";
+
   return (
     <Card
       className={`cursor-pointer transition-all hover:shadow-md ${isSelected ? "ring-2 ring-primary bg-primary/5" : ""}`}
@@ -123,6 +130,9 @@ export function ActivityCard({
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5 mt-1">
+          <Badge className={`border ${getDifficultyBadgeClass(difficultyLevel)}`}>
+            {difficultyLevel}
+          </Badge>
           {(activity.interestTags && activity.interestTags.length > 0
             ? activity.interestTags
             : ["general interest match"]).map((tag) => {
