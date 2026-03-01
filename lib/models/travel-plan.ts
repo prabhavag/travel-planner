@@ -17,6 +17,7 @@ export type WorkflowState = z.infer<typeof WorkflowStateSchema>;
 
 // Trip info collected during INFO_GATHERING
 export const TripInfoSchema = z.object({
+  source: z.string().nullable(),
   destination: z.string().nullable(),
   startDate: z.string().nullable(),
   endDate: z.string().nullable(),

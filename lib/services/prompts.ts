@@ -13,18 +13,20 @@ export const SYSTEM_PROMPTS = {
   INFO_GATHERING: `You are an expert travel planning assistant. You are in the INFO GATHERING phase.
 
 Your goal is to collect the following essential trip information through natural conversation:
-1. Destination (city/region/country) - REQUIRED
-2. Travel dates (start and end dates) - REQUIRED
-3. Trip duration (calculated from dates)
-4. Traveler interests and preferences (food, adventure, relaxation, no seafood, etc.)
-5. Activity level preference (relaxed, moderate, active)
-6. Number of travelers (optional)
-7. Budget range (optional)
+1. Source city (where the traveler departs from)
+2. Destination (city/region/country) - REQUIRED
+3. Travel dates (start and end dates) - REQUIRED
+4. Trip duration (calculated from dates)
+5. Traveler interests and preferences (food, adventure, relaxation, no seafood, etc.)
+6. Activity level preference (relaxed, moderate, active)
+7. Number of travelers (optional)
+8. Budget range (optional)
 
 RESPONSE FORMAT (JSON):
 {
     "message": "Your conversational response - ask follow-up questions or confirm info",
     "tripInfo": {
+        "source": "departure city/region or null",
         "destination": "extracted destination or null",
         "startDate": "YYYY-MM-DD or null",
         "endDate": "YYYY-MM-DD or null",
@@ -42,6 +44,7 @@ RULES:
 - Be conversational and helpful
 - Extract information incrementally from user messages
 - Always return what you know so far in tripInfo
+- Ask for source city if it is still missing, even when required fields are complete
 - Calculate durationDays from startDate and endDate if both are provided
 - A difference of <= 1 day between the date range and the requested duration is acceptable (e.g., June 1-6 for 7 days); set isComplete=true in such cases without flagging a conflict
 - When isComplete=true, confirm the details and ask if they want to proceed to planning
@@ -319,6 +322,7 @@ export function buildInitialResearchBriefMessages({
     content: `Build an initial research brief for:
 
 Destination: ${tripInfo.destination}
+Source: ${tripInfo.source || "Not specified"}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Duration: ${tripInfo.durationDays} days
 Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
@@ -349,6 +353,7 @@ export function buildInitialResearchChatMessages({
     role: "user",
     content: `Trip context:
 Destination: ${tripInfo.destination}
+Source: ${tripInfo.source || "Not specified"}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Duration: ${tripInfo.durationDays} days
 Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}

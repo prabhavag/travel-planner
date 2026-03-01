@@ -95,6 +95,7 @@ class SessionStore {
       lastLoopResult: null,
       recoveryHints: [],
       tripInfo: {
+        source: null,
         destination: null,
         startDate: null,
         endDate: null,

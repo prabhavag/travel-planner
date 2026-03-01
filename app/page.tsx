@@ -99,6 +99,7 @@ interface ChatMessage {
 }
 
 const EMPTY_TRIP_INFO: TripInfo = {
+  source: null,
   destination: null,
   startDate: null,
   endDate: null,
@@ -1001,6 +1002,7 @@ export default function PlannerPage() {
     if (!hasRequiredBasics) return;
 
     const synced = await persistTripInfoUpdate({
+      source: tripInfo.source,
       destination: tripInfo.destination,
       startDate: tripInfo.startDate,
       endDate: tripInfo.endDate,
@@ -1200,6 +1202,19 @@ export default function PlannerPage() {
                       </div>
 
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div className="sm:col-span-2">
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                            Source
+                          </label>
+                          <Input
+                            value={tripInfo.source || ""}
+                            onChange={(e) => setTripInfo((prev) => ({ ...prev, source: e.target.value || null }))}
+                            onBlur={(e) => handleTripFieldBlur({ source: e.target.value.trim() || null })}
+                            placeholder="e.g. San Francisco"
+                            disabled={loading || tripBasicsSaving}
+                          />
+                        </div>
+
                         <div className="sm:col-span-2">
                           <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                             Destination

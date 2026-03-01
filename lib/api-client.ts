@@ -138,6 +138,7 @@ export interface LoopResult {
 }
 
 export interface TripInfo {
+  source: string | null;
   destination: string | null;
   startDate: string | null;
   endDate: string | null;

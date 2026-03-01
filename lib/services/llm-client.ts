@@ -1775,6 +1775,7 @@ class LLMClient {
       const response = this._parseJsonResponse(completion);
 
       const updatedTripInfo: TripInfo = {
+        source: null,
         destination: null,
         startDate: null,
         endDate: null,
@@ -1882,6 +1883,7 @@ class LLMClient {
 
 Return exactly up to 5 options in JSON.
 Trip:
+- Source: ${tripInfo.source || "Not specified"}
 - Destination: ${tripInfo.destination}
 - Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 - Travelers: ${tripInfo.travelers}
@@ -1980,6 +1982,7 @@ Rules:
 
 Return exactly up to 5 options in JSON.
 Trip:
+- Source: ${tripInfo.source || "Not specified"}
 - Destination: ${tripInfo.destination}
 - Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 - Travelers: ${tripInfo.travelers}

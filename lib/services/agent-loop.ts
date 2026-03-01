@@ -1273,7 +1273,7 @@ async function runInfoGatheringTurn({
   request: AgentTurnRequest;
 }): Promise<TurnResponse> {
   if (request.trigger !== "user_message" || !request.message?.trim()) {
-    const prompt = "Tell me where and when you want to travel so I can keep building your trip context.";
+    const prompt = "Tell me your source city, destination, and travel dates so I can keep building your trip context.";
     sessionStore.addToConversation(session.sessionId, "assistant", prompt);
     const refreshed = sessionStore.get(session.sessionId)!;
     return buildSessionSnapshot(refreshed, prompt);
@@ -1446,6 +1446,7 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
       workflowState: WORKFLOW_STATES.INFO_GATHERING,
       message: "Invalid request payload for agent turn.",
       tripInfo: {
+        source: null,
         destination: null,
         startDate: null,
         endDate: null,
@@ -1490,6 +1491,7 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
       workflowState: WORKFLOW_STATES.INFO_GATHERING,
       message: "Session not found or expired.",
       tripInfo: {
+        source: null,
         destination: null,
         startDate: null,
         endDate: null,
