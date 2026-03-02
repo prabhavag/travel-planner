@@ -154,31 +154,6 @@ class PlacesClient {
     }
   }
 
-  async enrichActivityWithPlaces(
-    activityName: string,
-    location: Coordinates,
-    activityType: string = "tourist_attraction"
-  ): Promise<PlaceResult | null> {
-    try {
-      // First try nearby search with larger radius (50km for spread out attractions)
-      let places = await this.searchPlaces(activityName, location, 50000, activityType);
-
-      // If no results, try text search without location constraint
-      if (!places || places.length === 0) {
-        places = await this.searchPlaces(activityName, null, 5000, activityType);
-      }
-
-      if (places && places.length > 0) {
-        // Return best match (highest rating)
-        return places.reduce((prev, current) => (prev.rating > current.rating ? prev : current));
-      }
-      return null;
-    } catch (error) {
-      console.error("Error enriching activity:", (error as Error).message);
-      return null;
-    }
-  }
-
   getPlacePhotoUrl(photoReference: string | null, maxWidth: number = 400): string | null {
     if (!photoReference) return null;
     return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=${maxWidth}&photo_reference=${photoReference}&key=${this.apiKey}`;
@@ -201,15 +176,6 @@ class PlacesClient {
     }
   }
 
-  async getPlacePhotoUrlFromId(placeId: string | null, maxWidth: number = 400): Promise<string | null> {
-    if (!placeId) return null;
-    try {
-      const urls = await this.getPlacePhotoUrlsFromId(placeId, maxWidth);
-      return urls.length > 0 ? urls[0] : null;
-    } catch {
-      return null;
-    }
-  }
 }
 
 // Export singleton

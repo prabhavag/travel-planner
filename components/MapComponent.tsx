@@ -72,8 +72,6 @@ interface MapComponentProps {
   highlightedDay?: number | null;
 }
 
-const libraries: ("places")[] = ["places"];
-
 export default function MapComponent({
   itinerary,
   destination,
@@ -360,7 +358,6 @@ function GoogleMapContent({
 
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: apiKey,
-    libraries,
   });
 
   // Geocode destination if no locations available
