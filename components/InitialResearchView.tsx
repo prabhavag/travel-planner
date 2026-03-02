@@ -198,7 +198,7 @@ export function InitialResearchView({
           </p>
           <p>
             <span className="text-gray-500">Dietary constraints:</span>{" "}
-            {dietaryHints.length > 0 ? dietaryHints.join(", ") : allPreferences.join(", ") || "None specified"}
+            {dietaryHints.length > 0 ? dietaryHints.join(", ") : "None specified"}
           </p>
           {researchBrief.assumptions.length > 0 ? (
             <div className="pt-2">
