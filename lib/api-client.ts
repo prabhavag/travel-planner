@@ -155,6 +155,12 @@ export interface ResearchSource {
   snippet?: string | null;
 }
 
+export interface RouteWaypoint {
+  name: string;
+  place_id?: string | null;
+  coordinates: { lat: number; lng: number };
+}
+
 export interface ResearchOption {
   id: string;
   title: string;
@@ -170,6 +176,8 @@ export interface ResearchOption {
   timeReason?: string | null;
   timeSourceLinks?: ResearchSource[];
   locationMode?: "point" | "route" | "area";
+  routeWaypoints?: RouteWaypoint[];
+  routePoints?: Array<{ lat: number; lng: number }>;
   startCoordinates?: { lat: number; lng: number } | null;
   endCoordinates?: { lat: number; lng: number } | null;
   coordinates?: { lat: number; lng: number } | null;
@@ -453,6 +461,8 @@ export interface SuggestedActivity {
   timeSourceLinks?: ResearchSource[];
   neighborhood?: string | null;
   locationMode?: "point" | "route" | "area";
+  routeWaypoints?: RouteWaypoint[];
+  routePoints?: Array<{ lat: number; lng: number }>;
   startCoordinates?: { lat: number; lng: number } | null;
   endCoordinates?: { lat: number; lng: number } | null;
   coordinates?: { lat: number; lng: number } | null;

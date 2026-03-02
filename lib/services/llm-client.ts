@@ -9,6 +9,8 @@ import {
   type TripResearchBrief,
   type ResearchOption,
   type ResearchOptionPreference,
+  type Coordinates,
+  type RouteWaypoint,
 } from "@/lib/models/travel-plan";
 import {
   SYSTEM_PROMPTS,
@@ -71,6 +73,18 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
                 },
               },
               locationMode: { type: "string", enum: ["point", "route", "area"] },
+              routePoints: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["lat", "lng"],
+                  properties: {
+                    lat: { type: "number" },
+                    lng: { type: "number" },
+                  },
+                },
+              },
               startCoordinates: {
                 type: ["object", "null"],
                 additionalProperties: false,
@@ -155,6 +169,18 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
             },
           },
           locationMode: { type: "string", enum: ["point", "route", "area"] },
+          routePoints: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["lat", "lng"],
+              properties: {
+                lat: { type: "number" },
+                lng: { type: "number" },
+              },
+            },
+          },
           startCoordinates: {
             type: ["object", "null"],
             additionalProperties: false,
@@ -227,6 +253,18 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
           },
         },
         locationMode: { type: "string", enum: ["point", "route", "area"] },
+        routePoints: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["lat", "lng"],
+            properties: {
+              lat: { type: "number" },
+              lng: { type: "number" },
+            },
+          },
+        },
         startCoordinates: {
           type: ["object", "null"],
           additionalProperties: false,
@@ -833,6 +871,170 @@ class LLMClient {
     return lat != null && lng != null ? { lat, lng } : null;
   }
 
+  private _asRoutePoints(value: unknown): Array<{ lat: number; lng: number }> {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((entry) => this._asCoordinates(entry))
+      .filter((entry): entry is { lat: number; lng: number } => Boolean(entry))
+      .slice(0, 50);
+  }
+
+  private _asRouteWaypoints(value: unknown): RouteWaypoint[] {
+    if (!Array.isArray(value)) return [];
+    return value.reduce<RouteWaypoint[]>((acc, entry) => {
+      if (acc.length >= 10) return acc;
+      const raw = (entry || {}) as Record<string, unknown>;
+      const coordinates = this._asCoordinates(raw.coordinates);
+      if (!coordinates) return acc;
+      acc.push({
+        name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : "Waypoint",
+        place_id: typeof raw.place_id === "string" ? raw.place_id : null,
+        coordinates,
+      });
+      return acc;
+    }, []);
+  }
+
+  private _distanceMeters(a: Coordinates, b: Coordinates): number {
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const r = 6371000;
+    const dLat = toRad(b.lat - a.lat);
+    const dLng = toRad(b.lng - a.lng);
+    const lat1 = toRad(a.lat);
+    const lat2 = toRad(b.lat);
+    const x =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * r * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+
+  private _logRouteDebug(label: string, payload: Record<string, unknown>) {
+    if (process.env.NODE_ENV === "production") return;
+    console.info(`[route-debug] ${label}`, payload);
+  }
+
+  private _buildRoutePointSequence({
+    entryPoint,
+    exitPoint,
+    waypoints,
+  }: {
+    entryPoint: Coordinates | null;
+    exitPoint: Coordinates | null;
+    waypoints: RouteWaypoint[];
+  }): Coordinates[] {
+    const ordered: Coordinates[] = [];
+    if (entryPoint) ordered.push(entryPoint);
+    ordered.push(...waypoints.map((w) => w.coordinates));
+    if (exitPoint) ordered.push(exitPoint);
+
+    const deduped: Coordinates[] = [];
+    ordered.forEach((point) => {
+      if (!deduped.length) {
+        deduped.push(point);
+        return;
+      }
+      const last = deduped[deduped.length - 1];
+      if (this._distanceMeters(last, point) >= 50) {
+        deduped.push(point);
+      }
+    });
+    return deduped.slice(0, 50);
+  }
+
+  private async _buildRouteFromPlaces({
+    placesClient,
+    optionTitle,
+    destinationName,
+    destinationCoords,
+    entryPoint,
+    exitPoint,
+  }: {
+    placesClient: ReturnType<typeof getPlacesClient>;
+    optionTitle: string;
+    destinationName: string;
+    destinationCoords: Coordinates | null;
+    entryPoint: Coordinates | null;
+    exitPoint: Coordinates | null;
+  }): Promise<{ routeWaypoints: RouteWaypoint[]; routePoints: Coordinates[] }> {
+    const loopDistance =
+      entryPoint && exitPoint ? this._distanceMeters(entryPoint, exitPoint) : Number.POSITIVE_INFINITY;
+    const isLoop = loopDistance < 300;
+    const center =
+      destinationCoords ||
+      entryPoint ||
+      exitPoint ||
+      null;
+    const radius = isLoop ? 30000 : 50000;
+    const baseQuery = `${optionTitle}, ${destinationName}`;
+    const queries = [
+      `${baseQuery} scenic stop`,
+      `${baseQuery} viewpoint`,
+      `${baseQuery} attraction`,
+    ];
+
+    const results = await Promise.all(
+      queries.map((query) => placesClient.searchPlaces(query, center, radius))
+    );
+
+    const uniqueById = new Map<string, RouteWaypoint & { score: number }>();
+    results.flat().forEach((place) => {
+      const existing = uniqueById.get(place.place_id);
+      const score = (place.rating || 0) * Math.log1p(place.user_ratings_total || 0);
+      const waypoint: RouteWaypoint & { score: number } = {
+        name: place.name,
+        place_id: place.place_id,
+        coordinates: place.location,
+        score,
+      };
+      if (!existing || waypoint.score > existing.score) {
+        uniqueById.set(place.place_id, waypoint);
+      }
+    });
+
+    const candidates = Array.from(uniqueById.values())
+      .filter((waypoint) => {
+        if (entryPoint && this._distanceMeters(waypoint.coordinates, entryPoint) < 500) return false;
+        if (exitPoint && this._distanceMeters(waypoint.coordinates, exitPoint) < 500) return false;
+        return true;
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+
+    let ordered = candidates;
+    if (entryPoint && exitPoint && !isLoop) {
+      const dx = exitPoint.lat - entryPoint.lat;
+      const dy = exitPoint.lng - entryPoint.lng;
+      const denom = dx * dx + dy * dy;
+      if (denom > 0) {
+        ordered = [...candidates].sort((a, b) => {
+          const ta =
+            ((a.coordinates.lat - entryPoint.lat) * dx + (a.coordinates.lng - entryPoint.lng) * dy) / denom;
+          const tb =
+            ((b.coordinates.lat - entryPoint.lat) * dx + (b.coordinates.lng - entryPoint.lng) * dy) / denom;
+          return ta - tb;
+        });
+      }
+    }
+
+    const routeWaypoints: RouteWaypoint[] = ordered.map(({ score, ...waypoint }) => waypoint).slice(0, 5);
+    const routePoints = this._buildRoutePointSequence({ entryPoint, exitPoint, waypoints: routeWaypoints });
+    this._logRouteDebug("buildRouteFromPlaces", {
+      optionTitle,
+      destinationName,
+      isLoop,
+      entryPoint,
+      exitPoint,
+      candidateCount: candidates.length,
+      selectedWaypoints: routeWaypoints.map((waypoint) => ({
+        name: waypoint.name,
+        place_id: waypoint.place_id || null,
+        coordinates: waypoint.coordinates,
+      })),
+      routePointCount: routePoints.length,
+    });
+    return { routeWaypoints, routePoints };
+  }
+
   private _inferLocationMode(option: { title: string; category: string }): "point" | "route" | "area" {
     const text = `${option.title} ${option.category}`.toLowerCase();
     if (/(road to|scenic drive|drive|highway|route|loop drive)/i.test(text)) {
@@ -1092,16 +1294,57 @@ class LLMClient {
           }
 
           const placeId = places[0]?.place_id || null;
+          let routeWaypoints = option.routeWaypoints || [];
+          let routePoints = option.routePoints || [];
           let startCoordinates = option.startCoordinates || null;
           let endCoordinates = option.endCoordinates || null;
-          if (inferredLocationMode === "route" && geocodingService) {
-            const derived = await this._deriveRouteEndpoints({
-              geocodingService,
+          if (inferredLocationMode === "route") {
+            if (geocodingService) {
+              const derived = await this._deriveRouteEndpoints({
+                geocodingService,
+                optionTitle: option.title,
+                destinationName,
+              });
+              startCoordinates = startCoordinates || derived.startCoordinates;
+              endCoordinates = endCoordinates || derived.endCoordinates;
+              this._logRouteDebug("derivedRouteEndpoints", {
+                optionId: option.id,
+                optionTitle: option.title,
+                startCoordinates,
+                endCoordinates,
+              });
+            }
+
+            const builtRoute = await this._buildRouteFromPlaces({
+              placesClient,
               optionTitle: option.title,
               destinationName,
+              destinationCoords,
+              entryPoint: startCoordinates,
+              exitPoint: endCoordinates,
             });
-            startCoordinates = startCoordinates || derived.startCoordinates;
-            endCoordinates = endCoordinates || derived.endCoordinates;
+
+            if (builtRoute.routeWaypoints.length > 0) {
+              routeWaypoints = builtRoute.routeWaypoints;
+            }
+            if (builtRoute.routePoints.length > 0) {
+              routePoints = builtRoute.routePoints;
+            } else if (routePoints.length === 0) {
+              routePoints = this._buildRoutePointSequence({
+                entryPoint: startCoordinates,
+                exitPoint: endCoordinates,
+                waypoints: routeWaypoints,
+              });
+            }
+
+            this._logRouteDebug("finalRoutePayload", {
+              optionId: option.id,
+              optionTitle: option.title,
+              waypointCount: routeWaypoints.length,
+              routePointCount: routePoints.length,
+              entryPoint: startCoordinates,
+              exitPoint: endCoordinates,
+            });
           }
 
           if (!placeId) {
@@ -1114,9 +1357,11 @@ class LLMClient {
               timeReason: option.timeReason || inferredTime.timeReason,
               timeSourceLinks: option.timeSourceLinks || inferredTime.timeSourceLinks,
               locationMode: inferredLocationMode,
+              routeWaypoints,
+              routePoints,
               startCoordinates,
               endCoordinates,
-              coordinates: option.coordinates || (inferredLocationMode === "route" ? startCoordinates : null),
+              coordinates: option.coordinates || (inferredLocationMode === "route" ? routePoints[0] || startCoordinates : null),
             };
           }
 
@@ -1131,11 +1376,13 @@ class LLMClient {
             timeReason: option.timeReason || inferredTime.timeReason,
             timeSourceLinks: option.timeSourceLinks || inferredTime.timeSourceLinks,
             locationMode: inferredLocationMode,
+            routeWaypoints,
+            routePoints,
             startCoordinates,
             endCoordinates,
             coordinates:
               inferredLocationMode === "route"
-                ? startCoordinates || placeCoordinates || null
+                ? routePoints[0] || startCoordinates || placeCoordinates || null
                 : placeCoordinates || option.coordinates || null,
             place_id: placeId,
           };
@@ -1180,6 +1427,8 @@ class LLMClient {
               .slice(0, 3)
             : [];
           const coordinates = this._asCoordinates(opt.coordinates);
+          const routeWaypoints = this._asRouteWaypoints(opt.routeWaypoints);
+          const routePoints = this._asRoutePoints(opt.routePoints);
           const startCoordinates = this._asCoordinates(opt.startCoordinates);
           const endCoordinates = this._asCoordinates(opt.endCoordinates);
           const rawLocationMode = typeof opt.locationMode === "string" ? opt.locationMode : null;
@@ -1264,11 +1513,22 @@ class LLMClient {
                 : inferredTime.timeReason,
             timeSourceLinks: timeSourceLinks.length > 0 ? timeSourceLinks : inferredTime.timeSourceLinks,
             locationMode,
+            routeWaypoints,
+            routePoints:
+              routePoints.length > 0
+                ? routePoints
+                : locationMode === "route"
+                  ? this._buildRoutePointSequence({
+                    entryPoint: startCoordinates,
+                    exitPoint: endCoordinates,
+                    waypoints: routeWaypoints,
+                  })
+                  : [],
             startCoordinates,
             endCoordinates,
             coordinates:
               coordinates ||
-              (locationMode === "route" ? startCoordinates : null),
+              (locationMode === "route" ? routePoints[0] || startCoordinates : null),
             place_id: typeof opt.place_id === "string" ? opt.place_id : null,
           };
         })

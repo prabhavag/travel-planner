@@ -58,6 +58,19 @@ interface Location {
   mode: "research" | "suggested" | "grouped" | "legacy";
 }
 
+interface RouteSegment {
+  id: string;
+  activityId: string;
+  name: string;
+  baseLabel: number;
+  day: number | null;
+  points: Coordinates[];
+  waypoints: Array<{
+    name: string;
+    coordinates: Coordinates;
+  }>;
+}
+
 interface MapComponentProps {
   itinerary?: DayItinerary[];
   destination?: string | null;
@@ -107,8 +120,8 @@ export default function MapComponent({
       groupedDays.forEach((day) => {
         day.activities.forEach((activity, actIndex) => {
           const markerCoordinates =
-            activity.locationMode === "route" && activity.startCoordinates
-              ? activity.startCoordinates
+            activity.locationMode === "route" && (activity.routePoints?.[0] || activity.startCoordinates)
+              ? (activity.routePoints?.[0] || activity.startCoordinates)
               : activity.coordinates;
           if (markerCoordinates && markerCoordinates.lat && markerCoordinates.lng) {
             locs.push({
@@ -149,8 +162,8 @@ export default function MapComponent({
     else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
       tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
         const markerCoordinates =
-          option.locationMode === "route" && option.startCoordinates
-            ? option.startCoordinates
+          option.locationMode === "route" && (option.routePoints?.[0] || option.startCoordinates)
+            ? (option.routePoints?.[0] || option.startCoordinates)
             : option.coordinates;
         if (!markerCoordinates?.lat || !markerCoordinates?.lng) return;
         const preference = researchOptionSelections?.[option.id] || "maybe";
@@ -175,8 +188,8 @@ export default function MapComponent({
       suggestedActivities.forEach((activity, actIndex) => {
         if (!selectedSet.has(activity.id)) return;
         const markerCoordinates =
-          activity.locationMode === "route" && activity.startCoordinates
-            ? activity.startCoordinates
+          activity.locationMode === "route" && (activity.routePoints?.[0] || activity.startCoordinates)
+            ? (activity.routePoints?.[0] || activity.startCoordinates)
             : activity.coordinates;
         if (markerCoordinates && markerCoordinates.lat && markerCoordinates.lng) {
           locs.push({
@@ -226,6 +239,96 @@ export default function MapComponent({
     return locs;
   }, [tripResearchBrief, researchOptionSelections, suggestedActivities, selectedActivityIds, groupedDays, itinerary]);
 
+  const routeSegments = useMemo(() => {
+    const segments: RouteSegment[] = [];
+    const selectedSet = new Set(selectedActivityIds || []);
+
+    if (groupedDays && groupedDays.length > 0) {
+      groupedDays.forEach((day) => {
+        day.activities.forEach((activity, actIndex) => {
+          if (activity.locationMode !== "route") return;
+          const points = activity.routePoints || [];
+          if (points.length < 2) return;
+          const explicitWaypoints = (activity.routeWaypoints || []).map((waypoint) => ({
+            name: waypoint.name,
+            coordinates: waypoint.coordinates,
+          }));
+          const waypoints =
+            explicitWaypoints.length > 0
+              ? explicitWaypoints
+              : points.slice(1, -1).map((coordinates, index) => ({
+                name: `Waypoint ${index + 1}`,
+                coordinates,
+              }));
+          segments.push({
+            id: activity.id,
+            activityId: activity.id,
+            name: activity.name,
+            baseLabel: actIndex + 1,
+            day: day.dayNumber,
+            points,
+            waypoints,
+          });
+        });
+      });
+    } else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
+      tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
+        if (option.locationMode !== "route") return;
+        const points = option.routePoints || [];
+        if (points.length < 2) return;
+        const explicitWaypoints = (option.routeWaypoints || []).map((waypoint) => ({
+          name: waypoint.name,
+          coordinates: waypoint.coordinates,
+        }));
+        const waypoints =
+          explicitWaypoints.length > 0
+            ? explicitWaypoints
+            : points.slice(1, -1).map((coordinates, index) => ({
+              name: `Waypoint ${index + 1}`,
+              coordinates,
+            }));
+        segments.push({
+          id: option.id,
+          activityId: option.id,
+          name: option.title,
+          baseLabel: optionIndex + 1,
+          day: null,
+          points,
+          waypoints,
+        });
+      });
+    } else if (suggestedActivities && suggestedActivities.length > 0) {
+      suggestedActivities.forEach((activity, actIndex) => {
+        if (!selectedSet.has(activity.id)) return;
+        if (activity.locationMode !== "route") return;
+        const points = activity.routePoints || [];
+        if (points.length < 2) return;
+        const explicitWaypoints = (activity.routeWaypoints || []).map((waypoint) => ({
+          name: waypoint.name,
+          coordinates: waypoint.coordinates,
+        }));
+        const waypoints =
+          explicitWaypoints.length > 0
+            ? explicitWaypoints
+            : points.slice(1, -1).map((coordinates, index) => ({
+              name: `Waypoint ${index + 1}`,
+              coordinates,
+            }));
+        segments.push({
+          id: activity.id,
+          activityId: activity.id,
+          name: activity.name,
+          baseLabel: actIndex + 1,
+          day: null,
+          points,
+          waypoints,
+        });
+      });
+    }
+
+    return segments;
+  }, [tripResearchBrief, suggestedActivities, selectedActivityIds, groupedDays]);
+
   if (loading) {
     return (
       <div className="h-full w-full min-h-[500px] rounded-xl border border-gray-200 bg-gray-100 flex items-center justify-center">
@@ -245,7 +348,7 @@ export default function MapComponent({
     );
   }
 
-  const hasContent = locations.length > 0 || destination || (itinerary && itinerary.length > 0);
+  const hasContent = locations.length > 0 || routeSegments.length > 0 || destination || (itinerary && itinerary.length > 0);
 
   if (!hasContent) {
     return (
@@ -270,6 +373,7 @@ export default function MapComponent({
         locations={locations}
         itinerary={itinerary}
         destination={destination}
+        routeSegments={routeSegments}
         isGroupedMode={isGroupedMode}
         isResearchSelectionMode={isResearchSelectionMode}
         isActivitySelectionMode={isActivitySelectionMode}
@@ -284,6 +388,7 @@ export default function MapComponent({
 interface GoogleMapContentProps {
   apiKey: string;
   locations: Location[];
+  routeSegments: RouteSegment[];
   itinerary?: DayItinerary[];
   destination?: string | null;
   isGroupedMode?: boolean;
@@ -338,6 +443,7 @@ function HoverTooltip({ location }: { location: Location }) {
 function GoogleMapContent({
   apiKey,
   locations,
+  routeSegments,
   itinerary,
   destination,
   isGroupedMode,
@@ -397,13 +503,16 @@ function GoogleMapContent({
   const onLoad = useCallback(
     (mapInstance: google.maps.Map) => {
       setMap(mapInstance);
-      if (locations.length > 0) {
+      if (locations.length > 0 || routeSegments.length > 0) {
         const bounds = new window.google.maps.LatLngBounds();
         locations.forEach((loc) => bounds.extend({ lat: loc.lat, lng: loc.lng }));
+        routeSegments.forEach((path) => {
+          path.points.forEach((point) => bounds.extend(point));
+        });
         mapInstance.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 });
       }
     },
-    [locations]
+    [locations, routeSegments]
   );
 
   // Reset bounds tracking when locations count changes (new data loaded)
@@ -416,13 +525,16 @@ function GoogleMapContent({
 
   // Update bounds only on initial load or when locations change significantly
   useEffect(() => {
-    if (map && locations.length > 0 && window.google && !boundsSetRef.current) {
+    if (map && (locations.length > 0 || routeSegments.length > 0) && window.google && !boundsSetRef.current) {
       const bounds = new window.google.maps.LatLngBounds();
       locations.forEach((loc) => bounds.extend({ lat: loc.lat, lng: loc.lng }));
+      routeSegments.forEach((path) => {
+        path.points.forEach((point) => bounds.extend(point));
+      });
       map.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 });
       boundsSetRef.current = true;
     }
-  }, [map, locations]);
+  }, [map, locations, routeSegments]);
 
   // Get marker icon based on day or selection state
   const getMarkerIcon = (loc: Location): google.maps.Symbol => {
@@ -470,6 +582,38 @@ function GoogleMapContent({
     };
   };
 
+  const getWaypointMarkerStyle = (activityId: string | undefined, fallbackDay: number | null) => {
+    const linkedLocation = activityId ? locations.find((loc) => loc.activityId === activityId) : undefined;
+    const isHovered = linkedLocation?.activityId === hoveredActivityId;
+
+    if (isResearchSelectionMode) {
+      const isSelected = Boolean(linkedLocation?.isSelected);
+      const fillColor = isSelected ? "#3B82F6" : "#9CA3AF";
+      return {
+        fillColor,
+        fillOpacity: isSelected || isHovered ? 1 : 0.6,
+        strokeColor: isHovered ? "#1F2937" : "#ffffff",
+      };
+    }
+
+    if (isActivitySelectionMode) {
+      const isSelected = Boolean(linkedLocation?.isSelected);
+      return {
+        fillColor: isSelected ? SELECTED_COLOR : UNSELECTED_COLOR,
+        fillOpacity: isSelected || isHovered ? 1 : 0.6,
+        strokeColor: isHovered ? "#3B82F6" : "#ffffff",
+      };
+    }
+
+    const day = linkedLocation?.day ?? fallbackDay ?? 0;
+    const isHighlighted = day === highlightedDay;
+    return {
+      fillColor: getDayColor(day),
+      fillOpacity: isHighlighted || highlightedDay == null ? 1 : 0.4,
+      strokeColor: isHovered ? "#3B82F6" : (isHighlighted ? "#000000" : "#ffffff"),
+    };
+  };
+
   // Manually manage polylines to work around @react-google-maps/api cleanup bug
   const polylinesRef = useRef<google.maps.Polyline[]>([]);
 
@@ -501,6 +645,7 @@ function GoogleMapContent({
       polylinesRef.current = [];
     };
   }, [map, isLoaded, isGroupedMode, locationsByDay, highlightedDay]);
+
   const mapCenterLat = locations.length > 0 ? locations[0].lat : undefined;
   const mapCenterLng = locations.length > 0 ? locations[0].lng : undefined;
 
@@ -549,6 +694,39 @@ function GoogleMapContent({
       }}
     >
       {/* Polylines are managed imperatively via useEffect above */}
+
+      {/* Route waypoints with segmented numbering, e.g. 3.1, 3.2 */}
+      {routeSegments.flatMap((path) =>
+        path.waypoints.map((waypoint, index) => {
+          const isHovered = Boolean(path.activityId && hoveredActivityId && path.activityId === hoveredActivityId);
+          const style = getWaypointMarkerStyle(path.activityId, path.day);
+          const scale = isHovered ? 1.45 : 1.25;
+          return (
+          <Marker
+            key={`${path.id}-${index}`}
+            position={waypoint.coordinates}
+            icon={{
+              path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
+              fillColor: style.fillColor,
+              fillOpacity: style.fillOpacity,
+              strokeColor: style.strokeColor,
+              strokeWeight: 1,
+              scale,
+              anchor: new window.google.maps.Point(12, 21),
+              labelOrigin: new window.google.maps.Point(12, 8),
+            }}
+            label={{
+              text: `${path.baseLabel}.${index + 1}`,
+              color: "white",
+              fontWeight: "700",
+              fontSize: "10px",
+            }}
+            zIndex={isHovered ? 2100 : 1600}
+            title={`${path.name}, ${waypoint.name}`}
+          />
+          );
+        })
+      )}
 
       {/* Draw markers for each location */}
       {locations.map((loc, idx) => (

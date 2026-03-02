@@ -28,11 +28,13 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
     timeSourceLinks: option.timeSourceLinks || [],
     neighborhood: null,
     locationMode: option.locationMode || "point",
+    routeWaypoints: option.routeWaypoints || [],
+    routePoints: option.routePoints || [],
     startCoordinates: option.startCoordinates || null,
     endCoordinates: option.endCoordinates || null,
     coordinates:
       option.coordinates ||
-      (option.locationMode === "route" ? option.startCoordinates || null : null),
+      (option.locationMode === "route" ? option.routePoints?.[0] || option.startCoordinates || null : null),
     photo_url: option.photoUrls?.[0] || null,
     photo_urls: option.photoUrls || [],
     researchOption: option,

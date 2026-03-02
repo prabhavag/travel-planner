@@ -38,6 +38,14 @@ export const CoordinatesSchema = z.object({
 
 export type Coordinates = z.infer<typeof CoordinatesSchema>;
 
+export const RouteWaypointSchema = z.object({
+  name: z.string(),
+  place_id: z.string().nullable().optional(),
+  coordinates: CoordinatesSchema,
+});
+
+export type RouteWaypoint = z.infer<typeof RouteWaypointSchema>;
+
 // Meal schema for restaurants
 export const MealSchema = z.object({
   name: z.string(),
@@ -244,6 +252,8 @@ export const ResearchOptionSchema = z.object({
   timeReason: z.string().optional().nullable(),
   timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
   locationMode: z.enum(["point", "route", "area"]).optional(),
+  routeWaypoints: z.array(RouteWaypointSchema).max(10).optional(),
+  routePoints: z.array(CoordinatesSchema).max(50).optional(),
   startCoordinates: CoordinatesSchema.optional().nullable(),
   endCoordinates: CoordinatesSchema.optional().nullable(),
   coordinates: CoordinatesSchema.optional().nullable(),
@@ -278,6 +288,8 @@ export const SuggestedActivitySchema = z.object({
   timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
   neighborhood: z.string().nullable().optional(),
   locationMode: z.enum(["point", "route", "area"]).optional(),
+  routeWaypoints: z.array(RouteWaypointSchema).max(10).optional(),
+  routePoints: z.array(CoordinatesSchema).max(50).optional(),
   startCoordinates: CoordinatesSchema.nullable().optional(),
   endCoordinates: CoordinatesSchema.nullable().optional(),
   // Enriched from Places API:
