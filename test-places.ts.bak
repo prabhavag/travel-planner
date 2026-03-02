@@ -1,0 +1,39 @@
+import { Client } from "@googlemaps/google-maps-services-js";
+
+async function run() {
+  const client = new Client({});
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY as string;
+
+  if (!apiKey) {
+    console.error("Missing API key");
+    process.exit(1);
+  }
+
+  console.log("Searching for 'Road to Hana Tour, Maui'...");
+  const searchResponse = await client.textSearch({
+    params: {
+      query: "Road to Hana Tour, Maui",
+      key: apiKey,
+    }
+  });
+
+  console.log("Results found:", searchResponse.data.results.length);
+  if (searchResponse.data.results.length > 0) {
+    const place = searchResponse.data.results[0];
+    console.log("First result:", place.name, place.place_id);
+    
+    // Check if place details gives photos
+    const detailsResponse = await client.placeDetails({
+      params: {
+        place_id: place.place_id as string,
+        fields: ["photos"],
+        key: apiKey,
+      }
+    });
+
+    const photos = detailsResponse.data.result?.photos || [];
+    console.log(`Place details has ${photos.length} photos`);
+  }
+}
+
+run().catch(console.error);

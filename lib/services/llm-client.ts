@@ -2090,6 +2090,7 @@ Rules:
           messages,
           model: this.model,
           temperature: this.temperature,
+          max_tokens: 8000,
           response_format: { type: "json_object" },
         });
         const parsed = this._parseJsonResponse(completion);

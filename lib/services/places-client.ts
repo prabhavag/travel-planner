@@ -130,6 +130,7 @@ class PlacesClient {
             "price_level",
             "types",
             "geometry",
+            // "photos",
           ],
         },
       });
@@ -174,6 +175,30 @@ class PlacesClient {
 
   async getPlacePhotoUrlsFromId(placeId: string | null, maxWidth: number = 400): Promise<string[]> {
     return [];
+    /*
+    if (!placeId) return [];
+    try {
+      const response = await this.client.placeDetails({
+        params: {
+          place_id: placeId,
+          key: this.apiKey,
+          fields: ["photos"],
+        },
+      });
+      const result = response.data.result;
+
+      if (!result || !result.photos || result.photos.length === 0) {
+        return [];
+      }
+
+      return result.photos
+        .slice(0, 3)
+        .map((photo) => this.getPlacePhotoUrl(photo.photo_reference, maxWidth))
+        .filter((url): url is string => Boolean(url));
+    } catch {
+      return [];
+    }
+    */
   }
 
 }

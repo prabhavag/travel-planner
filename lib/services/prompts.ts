@@ -110,7 +110,7 @@ RESPONSE FORMAT (JSON):
 
 RULES:
 - STRICTLY RESPECT traveler interests and preferences when selecting popularOptions
-- Provide 6-10 popularOptions
+- Provide the requested number of popularOptions
 - Every popularOption must include at least 1 sourceLinks item
 - Favor trusted, recent, and destination-relevant sources
 - Be explicit when source evidence is mixed or uncertain
@@ -317,6 +317,8 @@ export function buildInitialResearchBriefMessages({
     { role: "system", content: SYSTEM_PROMPTS.INITIAL_RESEARCH_BRIEF },
   ];
 
+  const targetOptionCount = Math.max(6, (tripInfo.durationDays || 3) * 3);
+
   messages.push({
     role: "user",
     content: `Build an initial research brief for:
@@ -325,12 +327,13 @@ Destination: ${tripInfo.destination}
 Source: ${tripInfo.source || "Not specified"}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Duration: ${tripInfo.durationDays} days
+Requested Options: ${targetOptionCount}
 Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
 Activity Level: ${tripInfo.activityLevel}
 Travelers: ${tripInfo.travelers || 1}
 ${tripInfo.budget ? `Budget: ${tripInfo.budget}` : ""}
 
-Use the current trip info and preferences to personalize recommendations.`,
+Use the current trip info and preferences to personalize recommendations. Please generate approximately ${targetOptionCount} popularOptions to ensure we have enough activities for each day of the trip.`,
   });
 
   return messages;
