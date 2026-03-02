@@ -135,7 +135,7 @@ export default function MapComponent({
               lng: restaurant.coordinates.lng,
               slot: "restaurant",
               slotIndex: 100 + restIndex, // Put restaurants after activities
-              actIndex: restIndex,
+              actIndex: day.activities.length + restIndex,
               day: day.dayNumber,
               desc: `Day ${day.dayNumber} - Restaurant`,
               photoUrl: restaurant.photo_url || null,
@@ -558,7 +558,7 @@ function GoogleMapContent({
           icon={getMarkerIcon(loc)}
           label={
             {
-              text: isGroupedMode ? loc.day.toString() : (loc.actIndex + 1).toString(),
+              text: (loc.actIndex + 1).toString(),
               color: "white",
               fontWeight: "bold",
               fontSize: (loc.activityId === hoveredActivityId || isGroupedMode) ? "11px" : "10px",
