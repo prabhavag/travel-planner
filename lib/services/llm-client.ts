@@ -1071,6 +1071,26 @@ class LLMClient {
             places = await placesClient.searchPlaces(searchQuery);
           }
 
+          if (!places.length && option.title.includes(" ")) {
+            // Fallback 1: Remove words like "Tour", "Trip", "Experience", "Class"
+            const cleanedTitle = option.title.replace(/\b(Tour|Trip|Experience|Class|Activity|Ticket)\b/gi, "").trim();
+            if (cleanedTitle && cleanedTitle !== option.title) {
+              const cleanedQuery = `${cleanedTitle}, ${destinationName}`;
+              places = await placesClient.searchPlaces(cleanedQuery, destinationCoords, 50000);
+              if (!places.length) places = await placesClient.searchPlaces(cleanedQuery);
+            }
+          }
+
+          if (!places.length && option.title.includes(" ")) {
+            // Fallback 2: Take just the first 2-3 words of the title
+            const shortTitle = option.title.split(" ").slice(0, 3).join(" ");
+            if (shortTitle && shortTitle !== option.title) {
+              const shortQuery = `${shortTitle}, ${destinationName}`;
+              places = await placesClient.searchPlaces(shortQuery, destinationCoords, 50000);
+              if (!places.length) places = await placesClient.searchPlaces(shortQuery);
+            }
+          }
+
           const placeId = places[0]?.place_id || null;
           let startCoordinates = option.startCoordinates || null;
           let endCoordinates = option.endCoordinates || null;
@@ -1532,16 +1552,16 @@ class LLMClient {
 
     const exactTitleMatches = normalizedTitle
       ? state.tripResearchBrief.popularOptions.filter(
-          (option) => this._normalizeLookupText(option.title) === normalizedTitle
-        )
+        (option) => this._normalizeLookupText(option.title) === normalizedTitle
+      )
       : [];
 
     const substringMatches =
       normalizedTitle && byId.length === 0 && exactTitleMatches.length === 0
         ? state.tripResearchBrief.popularOptions.filter((option) => {
-            const candidate = this._normalizeLookupText(option.title);
-            return candidate.includes(normalizedTitle) || normalizedTitle.includes(candidate);
-          })
+          const candidate = this._normalizeLookupText(option.title);
+          return candidate.includes(normalizedTitle) || normalizedTitle.includes(candidate);
+        })
         : [];
 
     const matches = byId.length > 0 ? byId : exactTitleMatches.length > 0 ? exactTitleMatches : substringMatches;
@@ -1550,15 +1570,15 @@ class LLMClient {
       const nearMatches =
         normalizedTitle.length > 0
           ? state.tripResearchBrief.popularOptions
-              .filter((option) => {
-                const title = this._normalizeLookupText(option.title);
-                return normalizedTitle
-                  .split(" ")
-                  .filter((token) => token.length > 2)
-                  .some((token) => title.includes(token));
-              })
-              .slice(0, 5)
-              .map((option) => ({ id: option.id, title: option.title }))
+            .filter((option) => {
+              const title = this._normalizeLookupText(option.title);
+              return normalizedTitle
+                .split(" ")
+                .filter((token) => token.length > 2)
+                .some((token) => title.includes(token));
+            })
+            .slice(0, 5)
+            .map((option) => ({ id: option.id, title: option.title }))
           : [];
 
       return {

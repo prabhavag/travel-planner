@@ -190,8 +190,13 @@ export function InitialResearchView({
           </p>
           <p>
             <span className="text-gray-500">Trip length:</span>{" "}
-            {currentDuration != null ? `${currentDuration} day(s)` : "Not set"}
-            {derivedDuration != null ? ` (date range implies ${derivedDuration} day(s))` : ""}
+            {derivedDuration != null && currentDuration != null && derivedDuration > currentDuration
+              ? `${derivedDuration} day(s) (including 2 travel days)`
+              : derivedDuration != null
+                ? `${derivedDuration} day(s)`
+                : currentDuration != null
+                  ? `${currentDuration} day(s)`
+                  : "Not set"}
           </p>
           <p>
             <span className="text-gray-500">Pace:</span> {tripInfo?.activityLevel || "Not set"}
