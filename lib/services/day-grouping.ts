@@ -43,11 +43,14 @@ const COST_WEIGHTS = {
   slotOverflow: 8,
   balance: 0.7,
   anchorDistance: 1.5,
+  fullDayNearbyOverflowRelief: 9,
+  fullDayFarPenalty: 3,
 };
 
 type PreparedActivity = {
   activity: SuggestedActivity;
   durationHours: number;
+  isFullDay: boolean;
 };
 
 type WorkingDay = {
@@ -121,6 +124,12 @@ function parseDurationHours(estimatedDuration: string | null | undefined): numbe
   return Math.max(0.5, Math.min(10, value));
 }
 
+function isFullDayDuration(estimatedDuration: string | null | undefined, durationHours: number): boolean {
+  if (!estimatedDuration) return durationHours >= MAX_DAY_HOURS;
+  const text = estimatedDuration.toLowerCase();
+  return text.includes("full day") || text.includes("all day") || durationHours >= MAX_DAY_HOURS;
+}
+
 function haversineDistanceKm(
   a: { lat: number; lng: number } | null | undefined,
   b: { lat: number; lng: number } | null | undefined
@@ -173,10 +182,6 @@ function sortActivitiesForDay(
   });
 }
 
-function getDayHours(day: WorkingDay, preparedMap: Map<string, PreparedActivity>): number {
-  return day.activityIds.reduce((sum, id) => sum + (preparedMap.get(id)?.durationHours ?? 0), 0);
-}
-
 function computeDayBaseCost(
   day: WorkingDay,
   preparedMap: Map<string, PreparedActivity>,
@@ -221,13 +226,43 @@ function computeDayBaseCost(
 
   const balancePenalty = Math.abs(totalHours - targetHours);
 
+  const fullDayActivities = activities.filter((activity) => preparedMap.get(activity.id)?.isFullDay);
+  let overflowPenalty = overflow * COST_WEIGHTS.overflow + overflow * overflow * COST_WEIGHTS.overflowQuadratic;
+  let fullDayFitPenalty = 0;
+
+  if (fullDayActivities.length > 0) {
+    let nearbyWeightedHours = 0;
+    let farWeightedHours = 0;
+
+    for (const activity of activities) {
+      if (preparedMap.get(activity.id)?.isFullDay) continue;
+
+      const duration = preparedMap.get(activity.id)?.durationHours ?? 0;
+      let minDistance = Number.POSITIVE_INFINITY;
+      for (const fullDayActivity of fullDayActivities) {
+        minDistance = Math.min(minDistance, activityDistanceProxy(activity, fullDayActivity));
+      }
+
+      // Smooth proximity score in [0, 1]: closer activities get more "same full-day cluster" credit.
+      const proximityScore = 1 / (1 + minDistance);
+      nearbyWeightedHours += duration * proximityScore;
+      farWeightedHours += duration * (1 - proximityScore);
+    }
+
+    overflowPenalty = Math.max(
+      0,
+      overflowPenalty - nearbyWeightedHours * COST_WEIGHTS.fullDayNearbyOverflowRelief
+    );
+    fullDayFitPenalty = farWeightedHours * COST_WEIGHTS.fullDayFarPenalty;
+  }
+
   return (
-    overflow * COST_WEIGHTS.overflow +
-    overflow * overflow * COST_WEIGHTS.overflowQuadratic +
+    overflowPenalty +
     commuteProxy * COST_WEIGHTS.commute +
     varietyPenalty * COST_WEIGHTS.variety +
     slotOverflowPenalty * COST_WEIGHTS.slotOverflow +
-    balancePenalty * COST_WEIGHTS.balance
+    balancePenalty * COST_WEIGHTS.balance +
+    fullDayFitPenalty
   );
 }
 
@@ -322,12 +357,7 @@ function assignActivityToBestDay({
   preparedMap: Map<string, PreparedActivity>;
   lockAfterAssign: boolean;
 }): void {
-  const activityHours = preparedMap.get(activityId)?.durationHours ?? 0;
-  const feasibleIndices = days
-    .map((day, index) => ({ index, nextHours: getDayHours(day, preparedMap) + activityHours }))
-    .filter((entry) => entry.nextHours <= MAX_DAY_HOURS)
-    .map((entry) => entry.index);
-  const candidateIndices = feasibleIndices.length > 0 ? feasibleIndices : days.map((_, index) => index);
+  const candidateIndices = days.map((_, index) => index);
 
   let bestIndex = candidateIndices[0] ?? 0;
   let bestCost = Number.POSITIVE_INFINITY;
@@ -457,13 +487,17 @@ export function groupActivitiesByDay({
   const dayCount = computeDayCount(tripInfo, activities.length);
   const dates = buildTripDates(tripInfo, dayCount);
   const preparedMap = new Map<string, PreparedActivity>(
-    activities.map((activity) => [
-      activity.id,
-      {
-        activity,
-        durationHours: parseDurationHours(activity.estimatedDuration),
-      },
-    ])
+    activities.map((activity) => {
+      const durationHours = parseDurationHours(activity.estimatedDuration);
+      return [
+        activity.id,
+        {
+          activity,
+          durationHours,
+          isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
+        },
+      ];
+    })
   );
 
   const days: WorkingDay[] = Array.from({ length: dayCount }, () => ({
