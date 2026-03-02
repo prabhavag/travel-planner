@@ -243,6 +243,23 @@ Rules:
 - Return ONLY valid JSON.`,
 };
 
+function getEffectiveDurationDays(tripInfo: TripInfo): number {
+  if (tripInfo.startDate && tripInfo.endDate) {
+    const start = new Date(tripInfo.startDate);
+    const end = new Date(tripInfo.endDate);
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      const derivedDays = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      if (derivedDays > 0) return derivedDays;
+    }
+  }
+
+  if (typeof tripInfo.durationDays === "number" && tripInfo.durationDays > 0) {
+    return tripInfo.durationDays;
+  }
+
+  return 3;
+}
+
 
 
 export function buildInfoGatheringMessages({
@@ -317,7 +334,8 @@ export function buildInitialResearchBriefMessages({
     { role: "system", content: SYSTEM_PROMPTS.INITIAL_RESEARCH_BRIEF },
   ];
 
-  const targetOptionCount = Math.max(6, (tripInfo.durationDays || 3) * 3);
+  const effectiveDurationDays = getEffectiveDurationDays(tripInfo);
+  const targetOptionCount = Math.max(6, effectiveDurationDays * 3);
 
   messages.push({
     role: "user",
@@ -326,7 +344,7 @@ export function buildInitialResearchBriefMessages({
 Destination: ${tripInfo.destination}
 Source: ${tripInfo.source || "Not specified"}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
-Duration: ${tripInfo.durationDays} days
+Duration: ${effectiveDurationDays} days
 Requested Options: ${targetOptionCount}
 Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
 Activity Level: ${tripInfo.activityLevel}
@@ -358,7 +376,7 @@ export function buildInitialResearchChatMessages({
 Destination: ${tripInfo.destination}
 Source: ${tripInfo.source || "Not specified"}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
-Duration: ${tripInfo.durationDays} days
+Duration: ${getEffectiveDurationDays(tripInfo)} days
 Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
 
 Current research brief:

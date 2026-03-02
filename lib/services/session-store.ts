@@ -150,6 +150,10 @@ class SessionStore {
 
     // Update last accessed time
     session.lastAccessed = Date.now();
+    const derivedDurationDays = this.deriveDurationDaysFromDates(session.tripInfo.startDate, session.tripInfo.endDate);
+    if (derivedDurationDays !== null) {
+      session.tripInfo.durationDays = derivedDurationDays;
+    }
     return session;
   }
 
@@ -161,7 +165,12 @@ class SessionStore {
 
     // Deep merge for nested objects
     if (updates.tripInfo) {
-      session.tripInfo = { ...session.tripInfo, ...updates.tripInfo };
+      const mergedTripInfo = { ...session.tripInfo, ...updates.tripInfo };
+      const derivedDurationDays = this.deriveDurationDaysFromDates(mergedTripInfo.startDate, mergedTripInfo.endDate);
+      if (derivedDurationDays !== null) {
+        mergedTripInfo.durationDays = derivedDurationDays;
+      }
+      session.tripInfo = mergedTripInfo;
       delete updates.tripInfo;
     }
 
@@ -170,6 +179,18 @@ class SessionStore {
     session.lastAccessed = Date.now();
 
     return session;
+  }
+
+  private deriveDurationDaysFromDates(startDate: string | null, endDate: string | null): number | null {
+    if (!startDate || !endDate) return null;
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+
+    const days = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    if (days <= 0) return null;
+    return days;
   }
 
   addToConversation(sessionId: string, role: "user" | "assistant", content: string): Session | null {
