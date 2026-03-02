@@ -58,6 +58,7 @@ export function ResearchOptionCard({
     : null;
 
   const displayedDuration = activityDuration || option.estimatedDuration || null;
+  const bestTimeOfDay = option.bestTimeOfDay && option.bestTimeOfDay !== "any" ? option.bestTimeOfDay : null;
 
   return (
     <Card
@@ -74,6 +75,11 @@ export function ResearchOptionCard({
               <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
                 <Clock className="mr-1 h-3 w-3" />
                 {displayedDuration}
+              </Badge>
+            ) : null}
+            {bestTimeOfDay ? (
+              <Badge className="border border-violet-200 bg-violet-50 text-violet-800 capitalize">
+                {bestTimeOfDay}
               </Badge>
             ) : null}
             <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>

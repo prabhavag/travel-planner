@@ -81,6 +81,7 @@ export function ActivityCard({
     return "border-amber-200 bg-amber-50 text-amber-800";
   };
   const difficultyLevel = activity.difficultyLevel || "moderate";
+  const bestTimeOfDay = activity.bestTimeOfDay && activity.bestTimeOfDay !== "any" ? activity.bestTimeOfDay : null;
 
   return (
     <Card
@@ -134,6 +135,11 @@ export function ActivityCard({
             <Clock className="mr-1 h-3 w-3" />
             {activity.estimatedDuration}
           </Badge>
+          {bestTimeOfDay ? (
+            <Badge className="border border-violet-200 bg-violet-50 text-violet-800 capitalize">
+              {bestTimeOfDay}
+            </Badge>
+          ) : null}
           <Badge className={`border ${getDifficultyBadgeClass(difficultyLevel)}`}>
             {difficultyLevel}
           </Badge>
