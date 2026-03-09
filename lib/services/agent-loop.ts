@@ -23,10 +23,14 @@ import { requiresTravelOfferCompletionForState, validateWorkflowTransition } fro
 import { buildGroupedDays, groupActivitiesByDay, generateDayTheme } from "@/lib/services/day-grouping";
 import { assignNightStays } from "@/lib/services/night-stays";
 import { getPlacesClient } from "@/lib/services/places-client";
+import type { PlaceResult } from "@/lib/services/places-client";
 import { getPriceRangeSymbol } from "@/lib/utils/currency";
 import { getLLMClient, PLANNING_AND_REVIEW_TOOLS } from "@/lib/services/llm-client";
 import { mergeResearchBriefAndSelections } from "@/lib/services/card-merging";
 import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
+import {
+  buildRestaurantQueries,
+} from "@/lib/services/restaurant-dietary";
 
 const DEFAULT_CONFIDENCE_THRESHOLD = 0.55;
 
@@ -61,6 +65,10 @@ const HOSPITALITY_REVIEW_TOOLS: ToolAction["tool"][] = [
 ];
 
 const finalizeIntentRegex = /\b(final|finalize|done|perfect|looks good|good to go|ship it|complete)\b/i;
+const proceedPromptRegex =
+  /\b(anything else to add|anything else|before we proceed|before we continue|ready to plan|ready to proceed|proceed to planning|proceed to plan|want to add|add or adjust|add or modify|review what we have)\b/i;
+const negativeCompletionIntentRegex =
+  /^\s*(no|nope|nah|nothing(?:\s+else)?(?:\s+to\s+add)?|nothing to add|that's all|that is all|no changes|all good|looks good|no,?\s+nothing to add)\s*[.!]*\s*$/i;
 
 const selectActivitiesInputSchema = z.object({
   selectedActivityIds: z.array(z.string()),
@@ -269,6 +277,33 @@ function dedupePlacesById<T extends { place_id: string }>(places: T[]): T[] {
     }
   }
   return Array.from(byId.values());
+}
+
+async function searchRestaurantsWithFallbacks(
+  query: string,
+  allCoordinates: Array<{ lat: number; lng: number }>,
+  centroid: { lat: number; lng: number },
+  destination: string | null,
+  placesClient: ReturnType<typeof getPlacesClient>,
+): Promise<PlaceResult[]> {
+  let places = await placesClient.searchPlaces(query, centroid, 3000, "restaurant");
+
+  if (places.length === 0) {
+    places = await placesClient.searchPlaces(query, centroid, 12000, "restaurant");
+  }
+
+  if (places.length === 0) {
+    const perActivityResults = await Promise.all(
+      allCoordinates.slice(0, 8).map((coord) => placesClient.searchPlaces(query, coord, 6000, "restaurant")),
+    );
+    places = dedupePlacesById(perActivityResults.flat());
+  }
+
+  if (places.length === 0 && destination) {
+    places = await placesClient.searchPlaces(`${query} in ${destination}`, null, 5000, "restaurant");
+  }
+
+  return places;
 }
 
 function distributeRestaurantsAcrossDays(
@@ -501,33 +536,13 @@ async function executeAction({
     const centroid = getCentroid(allCoordinates);
     const currency = getCurrencyFromSession(session);
 
-    // Primary pass: centroid search.
-    let places = await placesClient.searchPlaces("restaurant", centroid, 3000, "restaurant");
-
-    // Fallback 1: broader centroid radius.
-    if (places.length === 0) {
-      places = await placesClient.searchPlaces("restaurant", centroid, 12000, "restaurant");
-    }
-
-    // Fallback 2: search around each activity coordinate and merge.
-    if (places.length === 0) {
-      const perActivityResults = await Promise.all(
-        allCoordinates.slice(0, 8).map((coord) =>
-          placesClient.searchPlaces("restaurant", coord, 6000, "restaurant"),
-        ),
-      );
-      places = dedupePlacesById(perActivityResults.flat());
-    }
-
-    // Fallback 3: destination text search (no location lock).
-    if (places.length === 0 && session.tripInfo.destination) {
-      places = await placesClient.searchPlaces(
-        `restaurants in ${session.tripInfo.destination}`,
-        null,
-        5000,
-        "restaurant",
-      );
-    }
+    const restaurantQueries = buildRestaurantQueries(session.tripInfo.preferences || []);
+    const placeGroups = await Promise.all(
+      restaurantQueries.map((query) =>
+        searchRestaurantsWithFallbacks(query, allCoordinates, centroid, session.tripInfo.destination, placesClient),
+      ),
+    );
+    const places = dedupePlacesById(placeGroups.flat());
 
     const restaurants: RestaurantSuggestion[] = await Promise.all(
       places.slice(0, 10).map(async (place, index) => {
@@ -587,6 +602,10 @@ async function executeAction({
 
     working.restaurantSuggestions = restaurants;
     working.selectedRestaurantIds = [];
+    const hasPreferenceContext = (session.tripInfo.preferences || []).length > 0;
+    if (hasPreferenceContext) {
+      return `Found ${restaurants.length} restaurants near your activities, using your stated preferences as search context. Select the ones you'd like to add to your itinerary!`;
+    }
     return `Found ${restaurants.length} restaurants near your activities. Select the ones you'd like to add to your itinerary!`;
   }
 
@@ -744,6 +763,25 @@ function formatAiCheckMessage(result: AiCheckResult): string {
     return `AI Check: Error\n\n${result.summary}`;
   }
   return `AI Check Review\n\n${result.summary}`;
+}
+
+function inferProceedFromConfirmationContext({
+  conversationHistory,
+  userMessage,
+}: {
+  conversationHistory: Array<{ role: "user" | "assistant"; content: string }>;
+  userMessage: string;
+}): boolean {
+  const normalizedUserMessage = userMessage.trim();
+  if (!negativeCompletionIntentRegex.test(normalizedUserMessage)) {
+    return false;
+  }
+
+  const lastAssistantMessage = [...conversationHistory]
+    .reverse()
+    .find((entry) => entry.role === "assistant")?.content;
+
+  return Boolean(lastAssistantMessage && proceedPromptRegex.test(lastAssistantMessage));
 }
 
 async function runLoop({
@@ -962,6 +1000,7 @@ async function runInfoGatheringTurn({
   const result = await llmClient.gatherInfo({
     tripInfo: session.tripInfo,
     userMessage: request.message,
+    conversationHistory: (session.conversationHistory || []).slice(-10),
   });
 
   const oldDestination = session.tripInfo.destination;
@@ -999,6 +1038,54 @@ async function runInfoGatheringTurn({
     });
   } else {
     sessionStore.update(session.sessionId, { tripInfo: result.tripInfo! });
+  }
+
+  // Check if they want to proceed (e.g. they confirmed the prompt to proceed via the LLM)
+  const inferredProceedFromContext =
+    result.isComplete &&
+    !result.userConfirmedProceed &&
+    inferProceedFromConfirmationContext({
+      conversationHistory: session.conversationHistory || [],
+      userMessage: request.message,
+    });
+
+  const isConfirmingToProceed =
+    result.isComplete &&
+    (result.userConfirmedProceed === true || inferredProceedFromContext) &&
+    !destinationChanged;
+
+  if (isConfirmingToProceed) {
+    const generatingMessage = "I've got all the details. Give me a moment while I generate your initial research options...";
+    sessionStore.addToConversation(session.sessionId, "assistant", generatingMessage);
+
+    const researchResult = await llmClient.generateInitialResearchBrief({
+      tripInfo: result.tripInfo || session.tripInfo,
+      depth: "fast",
+    });
+
+    if (researchResult.success && researchResult.tripResearchBrief) {
+      sessionStore.update(session.sessionId, {
+        workflowState: WORKFLOW_STATES.INITIAL_RESEARCH,
+        tripResearchBrief: researchResult.tripResearchBrief,
+        researchOptionSelections: {},
+        activeLoop: "SUPERVISOR",
+        lastTurnId: turnId,
+        lastLoopResult: {
+          assistantMessage: researchResult.message,
+          confidence: 0.9,
+          actions: [],
+          stopReason: "completed_stage",
+        },
+      });
+      sessionStore.addToConversation(session.sessionId, "assistant", researchResult.message);
+      const refreshed = sessionStore.get(session.sessionId)!;
+      return buildSessionSnapshot(refreshed, researchResult.message);
+    } else {
+      const errorMsg = "I couldn't generate the research options right now: " + researchResult.message;
+      sessionStore.addToConversation(session.sessionId, "assistant", errorMsg);
+      const refreshed = sessionStore.get(session.sessionId)!;
+      return buildSessionSnapshot(refreshed, errorMsg);
+    }
   }
 
   const stopReason: StopReason = result.isComplete ? "completed_stage" : "needs_user_input";

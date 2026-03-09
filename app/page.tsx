@@ -837,6 +837,10 @@ export default function PlannerPage() {
       });
       if (response.success) {
         applySessionResponse(response, true);
+        const flightMade = response.wantsFlight === false || response.selectedFlightOptionId != null;
+        if (!flightMade) {
+          setReviewOfferTab("flights");
+        }
       }
     } catch (error) {
       console.error("Select accommodation error:", error);
@@ -855,6 +859,10 @@ export default function PlannerPage() {
       });
       if (response.success) {
         applySessionResponse(response, true);
+        const flightMade = response.wantsFlight === false || response.selectedFlightOptionId != null;
+        if (!flightMade) {
+          setReviewOfferTab("flights");
+        }
       }
     } catch (error) {
       console.error("Skip accommodation error:", error);
@@ -890,6 +898,10 @@ export default function PlannerPage() {
       });
       if (response.success) {
         applySessionResponse(response, true);
+        const accMade = response.wantsAccommodation === false || response.selectedAccommodationOptionId != null;
+        if (!accMade) {
+          setReviewOfferTab("hotels");
+        }
       }
     } catch (error) {
       console.error("Select flight error:", error);
@@ -908,6 +920,10 @@ export default function PlannerPage() {
       });
       if (response.success) {
         applySessionResponse(response, true);
+        const accMade = response.wantsAccommodation === false || response.selectedAccommodationOptionId != null;
+        if (!accMade) {
+          setReviewOfferTab("hotels");
+        }
       }
     } catch (error) {
       console.error("Skip flight error:", error);

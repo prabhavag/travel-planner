@@ -688,6 +688,16 @@ class LLMClient {
     }
   }
 
+  private _coerceBoolean(value: unknown): boolean {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value === 1;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      return normalized === "true" || normalized === "1" || normalized === "yes";
+    }
+    return false;
+  }
+
   private _normalizeInterestTags(rawTags: unknown): string[] {
     if (!Array.isArray(rawTags)) {
       return [];
@@ -2452,13 +2462,16 @@ class LLMClient {
   async gatherInfo({
     tripInfo,
     userMessage,
+    conversationHistory = [],
   }: {
     tripInfo: TripInfo | null;
     userMessage: string;
+    conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   }) {
     const messages = buildInfoGatheringMessages({
       tripInfo,
       userMessage,
+      conversationHistory,
     });
 
     try {
@@ -2495,8 +2508,9 @@ class LLMClient {
         success: true,
         message: response.message,
         tripInfo: updatedTripInfo,
-        isComplete: response.isComplete || false,
+        isComplete: this._coerceBoolean(response.isComplete),
         missingInfo: response.missingInfo || [],
+        userConfirmedProceed: this._coerceBoolean(response.userConfirmedProceed),
       };
     } catch (error) {
       console.error("Error in gatherInfo:", error);
@@ -2506,6 +2520,7 @@ class LLMClient {
         tripInfo,
         isComplete: false,
         missingInfo: [],
+        userConfirmedProceed: false,
       };
     }
   }

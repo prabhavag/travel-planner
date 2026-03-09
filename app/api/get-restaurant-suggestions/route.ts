@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { getPlacesClient } from "@/lib/services/places-client";
+import type { PlaceResult } from "@/lib/services/places-client";
 import type { RestaurantSuggestion, Coordinates } from "@/lib/models/travel-plan";
 import { getPriceRangeSymbol } from "@/lib/utils/currency";
+import {
+  buildRestaurantQueries,
+} from "@/lib/services/restaurant-dietary";
 
 const RESTAURANT_TYPE_TOKENS = [
   "italian_restaurant",
@@ -44,6 +48,33 @@ function dedupePlacesById<T extends { place_id: string }>(places: T[]): T[] {
     }
   }
   return Array.from(byId.values());
+}
+
+async function searchRestaurantsWithFallbacks(
+  query: string,
+  allCoordinates: Coordinates[],
+  centroid: Coordinates,
+  destination: string | null,
+  placesClient: ReturnType<typeof getPlacesClient>,
+): Promise<PlaceResult[]> {
+  let places = await placesClient.searchPlaces(query, centroid, 3000, "restaurant");
+
+  if (places.length === 0) {
+    places = await placesClient.searchPlaces(query, centroid, 12000, "restaurant");
+  }
+
+  if (places.length === 0) {
+    const perActivityResults = await Promise.all(
+      allCoordinates.slice(0, 8).map((coord) => placesClient.searchPlaces(query, coord, 6000, "restaurant"))
+    );
+    places = dedupePlacesById(perActivityResults.flat());
+  }
+
+  if (places.length === 0 && destination) {
+    places = await placesClient.searchPlaces(`${query} in ${destination}`, null, 5000, "restaurant");
+  }
+
+  return places;
 }
 
 /**
@@ -134,35 +165,14 @@ export async function POST(request: NextRequest) {
     // Get currency from session activities
     const currency = getCurrencyFromSession(session);
 
-    // Primary pass: centroid search.
-    let places = await placesClient.searchPlaces("restaurant", centroid, 3000, "restaurant");
+    const restaurantQueries = buildRestaurantQueries(session.tripInfo.preferences || []);
+    const placeGroups = await Promise.all(
+      restaurantQueries.map((query) =>
+        searchRestaurantsWithFallbacks(query, allCoordinates, centroid, session.tripInfo.destination, placesClient)
+      )
+    );
+    const places = dedupePlacesById(placeGroups.flat());
 
-    // Fallback 1: broader centroid radius.
-    if (places.length === 0) {
-      places = await placesClient.searchPlaces("restaurant", centroid, 12000, "restaurant");
-    }
-
-    // Fallback 2: search around each activity coordinate and merge.
-    if (places.length === 0) {
-      const perActivityResults = await Promise.all(
-        allCoordinates.slice(0, 8).map((coord) =>
-          placesClient.searchPlaces("restaurant", coord, 6000, "restaurant")
-        )
-      );
-      places = dedupePlacesById(perActivityResults.flat());
-    }
-
-    // Fallback 3: destination text search.
-    if (places.length === 0 && session.tripInfo.destination) {
-      places = await placesClient.searchPlaces(
-        `restaurants in ${session.tripInfo.destination}`,
-        null,
-        5000,
-        "restaurant"
-      );
-    }
-
-    // Convert to RestaurantSuggestion format with photos
     const restaurants: RestaurantSuggestion[] = await Promise.all(
       places.slice(0, 10).map(async (place, index) => {
         try {
@@ -222,7 +232,10 @@ export async function POST(request: NextRequest) {
       selectedRestaurantIds: [],
     });
 
-    const message = `Found ${restaurants.length} restaurants near your activities. Select the ones you'd like to add to your itinerary!`;
+    const hasPreferenceContext = (session.tripInfo.preferences || []).length > 0;
+    const message = hasPreferenceContext
+      ? `Found ${restaurants.length} restaurants near your activities, using your stated preferences as search context. Select the ones you'd like to add to your itinerary!`
+      : `Found ${restaurants.length} restaurants near your activities. Select the ones you'd like to add to your itinerary!`;
 
     sessionStore.addToConversation(sessionId, "assistant", message);
 

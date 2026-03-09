@@ -37,7 +37,8 @@ RESPONSE FORMAT (JSON):
         "budget": "budget range or null"
     },
     "isComplete": true or false,
-    "missingInfo": ["list of missing required fields"]
+    "missingInfo": ["list of missing required fields"],
+    "userConfirmedProceed": true or false
 }
 
 RULES:
@@ -47,7 +48,8 @@ RULES:
 - Ask for source city if it is still missing, even when required fields are complete
 - Calculate durationDays from startDate and endDate if both are provided
 - A difference of <= 1 day between the date range and the requested duration is acceptable (e.g., June 1-6 for 7 days); set isComplete=true in such cases without flagging a conflict
-- When isComplete=true, confirm the details and ask if they want to proceed to planning
+- When isComplete=true, confirm the details and ask if they want to proceed to planning, UNLESS their intent to proceed is already clear
+- Set userConfirmedProceed=true if the user provides all info and explicitly agrees/wants to proceed (e.g. "let's go", "proceed", "next step", or answers "no" when asked if they have more to add). Do NOT wait to ask them if their intent to proceed is already clear.
 - Return ONLY valid JSON, no additional text`,
 
   REVIEW: `You are helping review and refine a complete trip itinerary.
@@ -310,9 +312,11 @@ function getEffectiveDurationDays(tripInfo: TripInfo): number {
 export function buildInfoGatheringMessages({
   tripInfo,
   userMessage,
+  conversationHistory = [],
 }: {
   tripInfo: TripInfo | null;
   userMessage: string;
+  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
 }) {
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPTS.INFO_GATHERING },
@@ -326,6 +330,16 @@ export function buildInfoGatheringMessages({
     messages.push({
       role: "assistant",
       content: "I understand the current trip details. I'll continue gathering information.",
+    });
+  }
+
+  if (conversationHistory.length > 0) {
+    const serializedHistory = conversationHistory
+      .map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`)
+      .join("\n");
+    messages.push({
+      role: "user",
+      content: `Recent conversation context (most recent last):\n${serializedHistory}\n\nUse this context to interpret the latest user reply.`,
     });
   }
 
