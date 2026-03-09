@@ -306,7 +306,7 @@ export function DayGroupingView({
           affordLabel: string;
         }
       | {
-          type: "lunch" | "commute";
+          type: "lunch" | "commute" | "continue";
           id: string;
           title: string;
           detail: string;
@@ -315,6 +315,9 @@ export function DayGroupingView({
 
     const timelineItems: TimelineItem[] = [];
     let cursorMinutes = 9 * 60 + 30;
+    const lunchMinStart = 12 * 60;
+    const lunchTargetStart = 12 * 60 + 30;
+    let lunchInserted = false;
 
     sortedActivities.forEach((activity, index) => {
       const requestedHours = parseEstimatedHours(activity.estimatedDuration);
@@ -323,21 +326,24 @@ export function DayGroupingView({
       const activityMinutes = Math.max(45, roundToQuarter(allocatedHours * 60 + 15));
       const activityStart = roundToQuarter(cursorMinutes);
       const activityEnd = activityStart + activityMinutes;
+      const lunchMinutes = roundToQuarter(60 + 15);
 
-      timelineItems.push({
-        type: "activity",
-        id: `activity-${activity.id}`,
-        activity,
-        timeRange: toRangeLabel(activityStart, activityEnd),
-        affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here`,
-      });
-
-      cursorMinutes = activityEnd;
-
-      if (index === 0) {
-        const lunchMinutes = roundToQuarter(60 + 15);
-        const lunchStart = roundToQuarter(cursorMinutes);
+      // If a long activity crosses lunch, split it into before-lunch and continue-after-lunch.
+      const crossesLunchWindow = !lunchInserted && activityStart < lunchTargetStart && activityEnd > lunchTargetStart;
+      if (crossesLunchWindow) {
+        const lunchStart = roundToQuarter(Math.max(lunchTargetStart, lunchMinStart));
         const lunchEnd = lunchStart + lunchMinutes;
+        const beforeLunchEnd = Math.max(activityStart + 30, lunchStart);
+        const afterLunchStart = lunchEnd;
+        const afterLunchEnd = afterLunchStart + Math.max(30, activityEnd - beforeLunchEnd);
+
+        timelineItems.push({
+          type: "activity",
+          id: `activity-${activity.id}`,
+          activity,
+          timeRange: toRangeLabel(activityStart, beforeLunchEnd),
+          affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here`,
+        });
         timelineItems.push({
           type: "lunch",
           id: `lunch-${day.dayNumber}`,
@@ -345,7 +351,45 @@ export function DayGroupingView({
           detail: "Includes a small buffer before/after lunch",
           timeRange: toRangeLabel(lunchStart, lunchEnd),
         });
-        cursorMinutes = lunchEnd;
+        timelineItems.push({
+          type: "continue",
+          id: `continue-${activity.id}`,
+          title: `Continue with ${activity.name}`,
+          detail: "Resume after lunch",
+          timeRange: toRangeLabel(afterLunchStart, afterLunchEnd),
+        });
+
+        lunchInserted = true;
+        cursorMinutes = afterLunchEnd;
+      } else {
+        // If it's already afternoon and lunch isn't inserted yet, place lunch before this activity.
+        if (!lunchInserted && activityStart >= lunchMinStart) {
+          const lunchStart = roundToQuarter(Math.max(cursorMinutes, lunchTargetStart, lunchMinStart));
+          const lunchEnd = lunchStart + lunchMinutes;
+          timelineItems.push({
+            type: "lunch",
+            id: `lunch-${day.dayNumber}`,
+            title: "Lunch break",
+            detail: "Includes a small buffer before/after lunch",
+            timeRange: toRangeLabel(lunchStart, lunchEnd),
+          });
+          cursorMinutes = lunchEnd;
+        }
+
+        const nextActivityStart = roundToQuarter(cursorMinutes);
+        const nextActivityEnd = nextActivityStart + activityMinutes;
+        timelineItems.push({
+          type: "activity",
+          id: `activity-${activity.id}`,
+          activity,
+          timeRange: toRangeLabel(nextActivityStart, nextActivityEnd),
+          affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here`,
+        });
+        cursorMinutes = nextActivityEnd;
+      }
+
+      if (!lunchInserted && timelineItems.some((item) => item.type === "lunch")) {
+        lunchInserted = true;
       }
 
       const next = sortedActivities[index + 1];
@@ -365,6 +409,20 @@ export function DayGroupingView({
       }
     });
 
+    // Ensure lunch is always present in the afternoon even if all activities finished early.
+    if (!lunchInserted) {
+      const lunchMinutes = roundToQuarter(60 + 15);
+      const lunchStart = roundToQuarter(Math.max(cursorMinutes, lunchTargetStart, lunchMinStart));
+      const lunchEnd = lunchStart + lunchMinutes;
+      timelineItems.push({
+        type: "lunch",
+        id: `lunch-${day.dayNumber}`,
+        title: "Lunch break",
+        detail: "Includes a small buffer before/after lunch",
+        timeRange: toRangeLabel(lunchStart, lunchEnd),
+      });
+    }
+
     return (
       <>
         <div className="rounded-lg border border-sky-100 bg-sky-50/40 p-2 text-[11px] text-sky-800">
@@ -378,7 +436,9 @@ export function DayGroupingView({
                 ? "bg-sky-500 border-sky-600"
                 : item.type === "lunch"
                   ? "bg-amber-400 border-amber-500"
-                  : "bg-gray-300 border-gray-400";
+                  : item.type === "continue"
+                    ? "bg-sky-300 border-sky-400"
+                    : "bg-gray-300 border-gray-400";
 
             return (
               <div key={item.id} className="flex gap-3">
@@ -400,7 +460,9 @@ export function DayGroupingView({
                       className={`rounded-md border p-2 text-xs ${
                         item.type === "lunch"
                           ? "border-amber-200 bg-amber-50/60"
-                          : "border-gray-200 bg-gray-50"
+                          : item.type === "continue"
+                            ? "border-sky-200 bg-sky-50/60"
+                            : "border-gray-200 bg-gray-50"
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -413,7 +475,9 @@ export function DayGroupingView({
                           className={`h-5 ${
                             item.type === "lunch"
                               ? "bg-amber-50 text-amber-700 border-amber-200"
-                              : "bg-gray-50 text-gray-600 border-gray-200"
+                              : item.type === "continue"
+                                ? "bg-sky-50 text-sky-700 border-sky-200"
+                                : "bg-gray-50 text-gray-600 border-gray-200"
                           }`}
                         >
                           {item.timeRange}
