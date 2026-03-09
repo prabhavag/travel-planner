@@ -479,26 +479,6 @@ function GoogleMapContent({
     }
   }, [isLoaded, locations.length, destination]);
 
-  // Group locations by day for polylines
-  const locationsByDay: Record<number, Location[]> = {};
-  locations.forEach((loc) => {
-    if (loc.day == null) return;
-    if (!locationsByDay[loc.day]) {
-      locationsByDay[loc.day] = [];
-    }
-    locationsByDay[loc.day].push(loc);
-  });
-
-  // Sort locations within each day by time slot order, then by activity index
-  Object.keys(locationsByDay).forEach((day) => {
-    locationsByDay[Number(day)].sort((a, b) => {
-      if (a.slotIndex !== b.slotIndex) return a.slotIndex - b.slotIndex;
-      return a.actIndex - b.actIndex;
-    });
-  });
-
-  // getDayColor removed as it is now imported
-
   // Fit bounds when map loads
   const onLoad = useCallback(
     (mapInstance: google.maps.Map) => {
@@ -614,38 +594,6 @@ function GoogleMapContent({
     };
   };
 
-  // Manually manage polylines to work around @react-google-maps/api cleanup bug
-  const polylinesRef = useRef<google.maps.Polyline[]>([]);
-
-  useEffect(() => {
-    // Clear previous polylines
-    polylinesRef.current.forEach((p) => p.setMap(null));
-    polylinesRef.current = [];
-
-    if (!map || !isLoaded || !isGroupedMode) return;
-
-    Object.entries(locationsByDay).forEach(([day, dayLocations]) => {
-      if (dayLocations.length < 2) return;
-      const dayNum = parseInt(day);
-      const isHighlighted = highlightedDay === null || highlightedDay === dayNum;
-      if (!isHighlighted) return;
-
-      const polyline = new window.google.maps.Polyline({
-        path: dayLocations.map((loc) => ({ lat: loc.lat, lng: loc.lng })),
-        strokeColor: getDayColor(dayNum) || "#666666",
-        strokeOpacity: 0.9,
-        strokeWeight: 6,
-        map,
-      });
-      polylinesRef.current.push(polyline);
-    });
-
-    return () => {
-      polylinesRef.current.forEach((p) => p.setMap(null));
-      polylinesRef.current = [];
-    };
-  }, [map, isLoaded, isGroupedMode, locationsByDay, highlightedDay]);
-
   const mapCenterLat = locations.length > 0 ? locations[0].lat : undefined;
   const mapCenterLng = locations.length > 0 ? locations[0].lng : undefined;
 
@@ -693,8 +641,6 @@ function GoogleMapContent({
         fullscreenControl: true,
       }}
     >
-      {/* Polylines are managed imperatively via useEffect above */}
-
       {/* Route waypoints with segmented numbering, e.g. 3.1, 3.2 */}
       {routeSegments.flatMap((path) =>
         path.waypoints.map((waypoint, index) => {
