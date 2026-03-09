@@ -40,6 +40,7 @@ export function DayGroupingView({
     id: string;
     fromDay: number;
   } | null>(null);
+  const [collapsedActivityCards, setCollapsedActivityCards] = useState<Record<string, boolean>>({});
   const [activeDayNumber, setActiveDayNumber] = useState<number | null>(groupedDays[0]?.dayNumber ?? null);
 
   const handleScroll = useCallback(() => {
@@ -72,6 +73,16 @@ export function DayGroupingView({
     }
   }, [groupedDays, activeDayNumber]);
 
+  useEffect(() => {
+    const nextCollapsed: Record<string, boolean> = {};
+    for (const day of groupedDays) {
+      for (const activity of day.activities) {
+        nextCollapsed[activity.id] = true;
+      }
+    }
+    setCollapsedActivityCards(nextCollapsed);
+  }, [groupedDays]);
+
   const scrollToDay = (dayNumber: number) => {
     if (scrollContainerRef.current) {
       const index = groupedDays.findIndex((day) => day.dayNumber === dayNumber);
@@ -101,18 +112,31 @@ export function DayGroupingView({
     setMovingActivity(null);
   };
 
+  const toggleActivityCollapse = (activityId: string) => {
+    setCollapsedActivityCards((prev) => ({
+      ...prev,
+      [activityId]: !prev[activityId],
+    }));
+  };
+
   const ActivityItem = ({
     activity,
     dayNumber,
     index,
+    timeSlotLabel,
+    affordLabel,
   }: {
     activity: SuggestedActivity;
     dayNumber: number;
     index: number;
+    timeSlotLabel?: string;
+    affordLabel?: string;
   }) => {
     const isMoving = movingActivity?.id === activity.id;
+    const isCollapsed = collapsedActivityCards[activity.id] ?? true;
     const moveControls = (
       <div className="pt-3 mt-3 border-t border-gray-50">
+        {affordLabel ? <p className="mb-2 text-[11px] text-gray-500">{affordLabel}</p> : null}
         {isMoving ? (
           <div className="flex items-center gap-2">
             <Select onValueChange={(val) => handleMoveConfirm(parseInt(val, 10))}>
@@ -151,6 +175,10 @@ export function DayGroupingView({
           isSelected={true}
           readOnly={true}
           activityDuration={activity.estimatedDuration}
+          timeSlotLabel={timeSlotLabel}
+          showDurationBadge={false}
+          collapsed={isCollapsed}
+          onToggleCollapse={() => toggleActivityCollapse(activity.id)}
           extraContent={moveControls}
         />
       );
@@ -162,8 +190,243 @@ export function DayGroupingView({
         index={index}
         isSelected={true}
         userPreferences={userPreferences}
+        timeSlotLabel={timeSlotLabel}
+        showDurationBadge={false}
+        collapsed={isCollapsed}
+        onToggleCollapse={() => toggleActivityCollapse(activity.id)}
         extraContent={moveControls}
       />
+    );
+  };
+
+  const parseEstimatedHours = (duration?: string | null): number => {
+    if (!duration) return 2;
+    const text = duration.toLowerCase().trim();
+    if (!text) return 2;
+
+    const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
+    if (rangeMatch) {
+      const min = Number(rangeMatch[1]);
+      const max = Number(rangeMatch[2]);
+      if (Number.isFinite(min) && Number.isFinite(max) && max >= min) {
+        return (min + max) / 2;
+      }
+    }
+
+    const singleHourMatch = text.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)/);
+    if (singleHourMatch) {
+      const value = Number(singleHourMatch[1]);
+      if (Number.isFinite(value)) return value;
+    }
+
+    if (/half\s*day/.test(text)) return 4;
+    if (/full\s*day|all\s*day/.test(text)) return 7;
+    if (/30\s*min/.test(text)) return 0.5;
+    if (/45\s*min/.test(text)) return 0.75;
+    return 2;
+  };
+
+  const haversineKm = (
+    from: { lat: number; lng: number } | null | undefined,
+    to: { lat: number; lng: number } | null | undefined,
+  ): number | null => {
+    if (!from || !to) return null;
+    const toRad = (v: number) => (v * Math.PI) / 180;
+    const R = 6371;
+    const dLat = toRad(to.lat - from.lat);
+    const dLng = toRad(to.lng - from.lng);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const estimateCommuteMinutes = (
+    from: { lat: number; lng: number } | null | undefined,
+    to: { lat: number; lng: number } | null | undefined,
+  ): number => {
+    const distanceKm = haversineKm(from, to);
+    if (distanceKm == null) return 25;
+    const minutes = Math.round((distanceKm / 22) * 60);
+    return Math.max(10, Math.min(50, minutes));
+  };
+
+  const formatHourLabel = (hours: number): string => {
+    const rounded = Math.round(hours * 10) / 10;
+    if (Math.abs(rounded - 1) < 0.01) return "1 hr";
+    return `${rounded} hrs`;
+  };
+
+  const toClockLabel = (minutes: number): string => {
+    const clamped = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);
+    const h = Math.floor(clamped / 60);
+    const m = clamped % 60;
+    const suffix = h >= 12 ? "PM" : "AM";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
+  };
+
+  const toRangeLabel = (startMinutes: number, endMinutes: number): string =>
+    `${toClockLabel(startMinutes)}-${toClockLabel(endMinutes)}`;
+
+  const roundToQuarter = (value: number): number => Math.round(value / 15) * 15;
+
+  const DayTimelineRows = ({ day }: { day: GroupedDay }) => {
+    const availableVisitHours = 8;
+    const lunchHours = 1;
+    const totalCommuteHoursEstimate = Math.max(day.activities.length - 1, 0) * (25 / 60);
+    const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 2);
+    const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
+
+    const sortedActivities = [...day.activities].sort((a, b) => {
+      const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
+        morning: 0,
+        afternoon: 1,
+        evening: 2,
+        any: 3,
+      };
+      return score[a.bestTimeOfDay] - score[b.bestTimeOfDay];
+    });
+
+    if (sortedActivities.length === 0) {
+      return (
+        <div className="rounded-md border border-dashed border-sky-200 bg-sky-50/40 p-3 text-xs text-sky-800">
+          No activities yet. Reserve about 1 hr for lunch and keep 2-3 flexible hours.
+        </div>
+      );
+    }
+
+    type TimelineItem =
+      | {
+          type: "activity";
+          id: string;
+          activity: SuggestedActivity;
+          timeRange: string;
+          affordLabel: string;
+        }
+      | {
+          type: "lunch" | "commute";
+          id: string;
+          title: string;
+          detail: string;
+          timeRange: string;
+        };
+
+    const timelineItems: TimelineItem[] = [];
+    let cursorMinutes = 9 * 60 + 30;
+
+    sortedActivities.forEach((activity, index) => {
+      const requestedHours = parseEstimatedHours(activity.estimatedDuration);
+      const allocatedHours =
+        totalRequestedHours > 0 ? Math.max(0.75, (requestedHours / totalRequestedHours) * remainingForActivities) : 1.5;
+      const activityMinutes = Math.max(45, roundToQuarter(allocatedHours * 60 + 15));
+      const activityStart = roundToQuarter(cursorMinutes);
+      const activityEnd = activityStart + activityMinutes;
+
+      timelineItems.push({
+        type: "activity",
+        id: `activity-${activity.id}`,
+        activity,
+        timeRange: toRangeLabel(activityStart, activityEnd),
+        affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here`,
+      });
+
+      cursorMinutes = activityEnd;
+
+      if (index === 0) {
+        const lunchMinutes = roundToQuarter(60 + 15);
+        const lunchStart = roundToQuarter(cursorMinutes);
+        const lunchEnd = lunchStart + lunchMinutes;
+        timelineItems.push({
+          type: "lunch",
+          id: `lunch-${day.dayNumber}`,
+          title: "Lunch break",
+          detail: "Includes a small buffer before/after lunch",
+          timeRange: toRangeLabel(lunchStart, lunchEnd),
+        });
+        cursorMinutes = lunchEnd;
+      }
+
+      const next = sortedActivities[index + 1];
+      if (next) {
+        const commuteMinutes = estimateCommuteMinutes(activity.coordinates, next.coordinates);
+        const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + 15);
+        const commuteStart = roundToQuarter(cursorMinutes);
+        const commuteEnd = commuteStart + bufferedCommuteMinutes;
+        timelineItems.push({
+          type: "commute",
+          id: `commute-${activity.id}-${next.id}`,
+          title: "Commute",
+          detail: `Approx ${commuteMinutes} min travel + buffer`,
+          timeRange: toRangeLabel(commuteStart, commuteEnd),
+        });
+        cursorMinutes = commuteEnd;
+      }
+    });
+
+    return (
+      <>
+        <div className="rounded-lg border border-sky-100 bg-sky-50/40 p-2 text-[11px] text-sky-800">
+          Timeline is approximate. Daily budget: {formatHourLabel(availableVisitHours)}
+        </div>
+        <div className="space-y-2">
+          {timelineItems.map((item, index) => {
+            const isLast = index === timelineItems.length - 1;
+            const dotClass =
+              item.type === "activity"
+                ? "bg-sky-500 border-sky-600"
+                : item.type === "lunch"
+                  ? "bg-amber-400 border-amber-500"
+                  : "bg-gray-300 border-gray-400";
+
+            return (
+              <div key={item.id} className="flex gap-3">
+                <div className="w-10 shrink-0 relative flex flex-col items-center">
+                  <div className={`mt-2 h-3 w-3 rounded-full border-2 ${dotClass}`} />
+                  {!isLast ? <div className="w-px flex-1 bg-gray-200 my-1" /> : null}
+                </div>
+                <div className="flex-1 pb-2">
+                  {item.type === "activity" ? (
+                    <ActivityItem
+                      activity={item.activity}
+                      dayNumber={day.dayNumber}
+                      index={sortedActivities.findIndex((a) => a.id === item.activity.id)}
+                      timeSlotLabel={item.timeRange}
+                      affordLabel={item.affordLabel}
+                    />
+                  ) : (
+                    <div
+                      className={`rounded-md border p-2 text-xs ${
+                        item.type === "lunch"
+                          ? "border-amber-200 bg-amber-50/60"
+                          : "border-gray-200 bg-gray-50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-gray-800">{item.title}</p>
+                          <p className="text-gray-600">{item.detail}</p>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={`h-5 ${
+                            item.type === "lunch"
+                              ? "bg-amber-50 text-amber-700 border-amber-200"
+                              : "bg-gray-50 text-gray-600 border-gray-200"
+                          }`}
+                        >
+                          {item.timeRange}
+                        </Badge>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>
     );
   };
 
@@ -231,15 +494,8 @@ export function DayGroupingView({
                 </CardHeader>
                 <CardContent className="flex-1 overflow-hidden p-0">
                   <ScrollArea className="h-full px-4 pb-6">
-                    <div className="space-y-1">
-                      {day.activities.map((activity, index) => (
-                        <ActivityItem
-                          key={activity.id}
-                          activity={activity}
-                          dayNumber={day.dayNumber}
-                          index={index}
-                        />
-                      ))}
+                    <div className="space-y-3">
+                      <DayTimelineRows day={day} />
                     </div>
                   </ScrollArea>
                 </CardContent>

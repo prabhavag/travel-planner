@@ -305,6 +305,168 @@ export function DayItineraryView({
     );
   };
 
+  const parseEstimatedHours = (duration?: string | null): number => {
+    if (!duration) return 2;
+    const text = duration.toLowerCase().trim();
+    if (!text) return 2;
+
+    const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
+    if (rangeMatch) {
+      const min = Number(rangeMatch[1]);
+      const max = Number(rangeMatch[2]);
+      if (Number.isFinite(min) && Number.isFinite(max) && max >= min) {
+        return (min + max) / 2;
+      }
+    }
+
+    const singleHourMatch = text.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)/);
+    if (singleHourMatch) {
+      const value = Number(singleHourMatch[1]);
+      if (Number.isFinite(value)) return value;
+    }
+
+    if (/half\s*day/.test(text)) return 4;
+    if (/full\s*day|all\s*day/.test(text)) return 7;
+    if (/30\s*min/.test(text)) return 0.5;
+    if (/45\s*min/.test(text)) return 0.75;
+    if (/meal|restaurant|lunch|dinner|breakfast/.test(text)) return 1.25;
+    return 2;
+  };
+
+  const haversineKm = (
+    from: { lat: number; lng: number } | null | undefined,
+    to: { lat: number; lng: number } | null | undefined,
+  ): number | null => {
+    if (!from || !to) return null;
+    const toRad = (v: number) => (v * Math.PI) / 180;
+    const R = 6371;
+    const dLat = toRad(to.lat - from.lat);
+    const dLng = toRad(to.lng - from.lng);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const estimateCommuteMinutes = (
+    from: { lat: number; lng: number } | null | undefined,
+    to: { lat: number; lng: number } | null | undefined,
+  ): number => {
+    const distanceKm = haversineKm(from, to);
+    if (distanceKm == null) return 25;
+    const minutes = Math.round((distanceKm / 22) * 60);
+    return Math.max(10, Math.min(50, minutes));
+  };
+
+  const formatHourLabel = (hours: number): string => {
+    const rounded = Math.round(hours * 10) / 10;
+    if (Math.abs(rounded - 1) < 0.01) return "1 hr";
+    return `${rounded} hrs`;
+  };
+
+  const DayTimeline = ({ day }: { day: GroupedDay }) => {
+    const availableVisitHours = 8;
+    const lunchHours = 1;
+    const totalCommuteHoursEstimate = Math.max(day.activities.length - 1, 0) * (25 / 60);
+    const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 2);
+    const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
+
+    const sortedActivities = [...day.activities].sort((a, b) => {
+      const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
+        morning: 0,
+        afternoon: 1,
+        evening: 2,
+        any: 3,
+      };
+      return score[a.bestTimeOfDay] - score[b.bestTimeOfDay];
+    });
+
+    const timelineRows: Array<{
+      label: string;
+      detail: string;
+      type: "activity" | "commute" | "lunch";
+    }> = [];
+
+    sortedActivities.forEach((activity, index) => {
+      const requestedHours = parseEstimatedHours(activity.estimatedDuration);
+      const allocatedHours =
+        totalRequestedHours > 0 ? Math.max(0.75, (requestedHours / totalRequestedHours) * remainingForActivities) : 1.5;
+
+      timelineRows.push({
+        label: activity.name,
+        detail: `Visit up to ${formatHourLabel(allocatedHours)} (${activity.estimatedDuration || "estimated"})`,
+        type: "activity",
+      });
+
+      if (index === 0) {
+        timelineRows.push({
+          label: "Lunch break",
+          detail: "Reserve about 1 hr around midday",
+          type: "lunch",
+        });
+      }
+
+      const next = sortedActivities[index + 1];
+      if (next) {
+        const commuteMin = estimateCommuteMinutes(activity.coordinates, next.coordinates);
+        timelineRows.push({
+          label: "Commute",
+          detail: `Approx ${commuteMin} min`,
+          type: "commute",
+        });
+      }
+    });
+
+    if (timelineRows.length === 0) {
+      timelineRows.push(
+        {
+          label: "Lunch break",
+          detail: "Reserve about 1 hr around midday",
+          type: "lunch",
+        },
+        {
+          label: "Explore nearby",
+          detail: "Keep 2-3 flexible hours for local discoveries",
+          type: "activity",
+        },
+      );
+    }
+
+    return (
+      <div className="rounded-lg border border-sky-100 bg-sky-50/50 p-3 mb-4">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-sky-800">Timeline (Approximate)</h4>
+          <span className="text-[10px] text-sky-700">
+            {formatHourLabel(availableVisitHours)} day budget
+          </span>
+        </div>
+        <div className="space-y-2">
+          {timelineRows.map((row, index) => {
+            const badgeClass =
+              row.type === "activity"
+                ? "bg-white text-sky-700 border-sky-200"
+                : row.type === "lunch"
+                  ? "bg-amber-50 text-amber-700 border-amber-200"
+                  : "bg-gray-50 text-gray-600 border-gray-200";
+
+            return (
+              <div key={`${row.label}-${index}`} className="flex items-start gap-2 text-xs">
+                <Badge variant="outline" className={`shrink-0 h-5 ${badgeClass}`}>
+                  {row.type === "activity" ? "Stop" : row.type === "lunch" ? "Lunch" : "Commute"}
+                </Badge>
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 line-clamp-1">{row.label}</p>
+                  <p className="text-gray-500">{row.detail}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6 h-full flex flex-col">
       {tripInfo && tripInfo.destination && (
@@ -405,6 +567,7 @@ export function DayItineraryView({
                   </CardHeader>
                   <CardContent className="p-0">
                     <div className="px-4 pb-6">
+                      <DayTimeline day={day} />
                       <div className="space-y-1">
                         {day.activities.map((activity, index) => (
                           <ActivityItem

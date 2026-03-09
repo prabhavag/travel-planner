@@ -21,6 +21,8 @@ interface ResearchOptionCardProps {
   collapsed?: boolean;
   onToggleCollapse?: () => void;
   activityDuration?: string | null;
+  timeSlotLabel?: string | null;
+  showDurationBadge?: boolean;
 }
 
 const categoryClassMap: Record<string, string> = {
@@ -47,6 +49,8 @@ export function ResearchOptionCard({
   collapsed = false,
   onToggleCollapse,
   activityDuration = null,
+  timeSlotLabel = null,
+  showDurationBadge = true,
 }: ResearchOptionCardProps) {
   const formattedLastDeepResearchAt = lastDeepResearchAt
     ? new Date(lastDeepResearchAt).toLocaleString([], {
@@ -59,6 +63,7 @@ export function ResearchOptionCard({
 
   const displayedDuration = activityDuration || option.estimatedDuration || null;
   const bestTimeOfDay = option.bestTimeOfDay && option.bestTimeOfDay !== "any" ? option.bestTimeOfDay : null;
+  const displayTimeSlot = timeSlotLabel || bestTimeOfDay;
 
   return (
     <Card
@@ -71,15 +76,15 @@ export function ResearchOptionCard({
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base flex-1">{option.title}</CardTitle>
           <div className="flex items-center gap-1">
-            {displayedDuration ? (
+            {showDurationBadge && displayedDuration ? (
               <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
                 <Clock className="mr-1 h-3 w-3" />
                 {displayedDuration}
               </Badge>
             ) : null}
-            {bestTimeOfDay ? (
+            {displayTimeSlot ? (
               <Badge className="border border-violet-200 bg-violet-50 text-violet-800 capitalize">
-                {bestTimeOfDay}
+                {displayTimeSlot}
               </Badge>
             ) : null}
             <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>

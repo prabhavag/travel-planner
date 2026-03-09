@@ -18,6 +18,8 @@ interface ActivityCardProps {
   extraContent?: ReactNode;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  timeSlotLabel?: string | null;
+  showDurationBadge?: boolean;
 }
 
 export function ActivityCard({
@@ -30,6 +32,8 @@ export function ActivityCard({
   extraContent,
   collapsed = false,
   onToggleCollapse,
+  timeSlotLabel = null,
+  showDurationBadge = true,
 }: ActivityCardProps) {
   const normalize = (value: string) =>
     value
@@ -82,6 +86,7 @@ export function ActivityCard({
   };
   const difficultyLevel = activity.difficultyLevel || "moderate";
   const bestTimeOfDay = activity.bestTimeOfDay && activity.bestTimeOfDay !== "any" ? activity.bestTimeOfDay : null;
+  const displayTimeSlot = timeSlotLabel || bestTimeOfDay;
 
   return (
     <Card
@@ -131,13 +136,15 @@ export function ActivityCard({
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5 mt-1">
-          <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
-            <Clock className="mr-1 h-3 w-3" />
-            {activity.estimatedDuration}
-          </Badge>
-          {bestTimeOfDay ? (
+          {showDurationBadge ? (
+            <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
+              <Clock className="mr-1 h-3 w-3" />
+              {activity.estimatedDuration}
+            </Badge>
+          ) : null}
+          {displayTimeSlot ? (
             <Badge className="border border-violet-200 bg-violet-50 text-violet-800 capitalize">
-              {bestTimeOfDay}
+              {displayTimeSlot}
             </Badge>
           ) : null}
           <Badge className={`border ${getDifficultyBadgeClass(difficultyLevel)}`}>
