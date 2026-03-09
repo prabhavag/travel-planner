@@ -17,7 +17,7 @@ import { requiresTravelOfferCompletionForState, validateWorkflowTransition } fro
 import { buildGroupedDays, groupActivitiesByDay, generateDayTheme } from "@/lib/services/day-grouping";
 import { getPlacesClient } from "@/lib/services/places-client";
 import { getPriceRangeSymbol } from "@/lib/utils/currency";
-import { getLLMClient } from "@/lib/services/llm-client";
+import { getLLMClient, PLANNING_AND_REVIEW_TOOLS } from "@/lib/services/llm-client";
 import { mergeResearchBriefAndSelections } from "@/lib/services/card-merging";
 import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
 
@@ -223,337 +223,6 @@ function lowConfidenceQuestion(message: string): LoopResult {
     actions: [],
     stopReason: "low_confidence_noop",
   };
-}
-
-function planningLoop({
-  context,
-  request,
-}: {
-  context: LoopContext;
-  request: AgentTurnRequest;
-}): LoopResult {
-  const uiType = request.uiAction?.type || "";
-  const payload = request.uiAction?.payload || {};
-
-  if (request.trigger === "ui_action") {
-    if (uiType === "confirm_grouping") {
-      if (context.workflowState !== WORKFLOW_STATES.GROUP_DAYS) {
-        return lowConfidenceQuestion("You can confirm grouping only while organizing day groups.");
-      }
-      return {
-        assistantMessage: `Your ${context.groupedDays.length}-day itinerary is set! Would you like to add restaurants to your trip?`,
-        confidence: 0.95,
-        actions: [{ tool: "confirm_day_grouping", input: {} }],
-        proposedTransition: WORKFLOW_STATES.DAY_ITINERARY,
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "continue_to_restaurants") {
-      if (context.workflowState !== WORKFLOW_STATES.DAY_ITINERARY) {
-        return lowConfidenceQuestion("You can continue to restaurants after day itinerary is ready.");
-      }
-      return {
-        assistantMessage: "Finding nearby restaurants for your selected activities.",
-        confidence: 0.95,
-        actions: [{ tool: "get_restaurant_suggestions", input: {} }],
-        proposedTransition: WORKFLOW_STATES.MEAL_PREFERENCES,
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "reorganize_selection") {
-      const selectedActivityIds = Array.isArray(payload.selectedActivityIds)
-        ? payload.selectedActivityIds.filter((value): value is string => typeof value === "string")
-        : [];
-
-      if (selectedActivityIds.length === 0) {
-        return lowConfidenceQuestion("Select at least one activity before reorganizing your trip.");
-      }
-      return {
-        assistantMessage: `Updated ${selectedActivityIds.length} activities and regrouped your itinerary.`,
-        confidence: 0.9,
-        actions: [{ tool: "select_activities", input: { selectedActivityIds } }],
-        proposedTransition: WORKFLOW_STATES.GROUP_DAYS,
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "move_activity") {
-      const activityId = typeof payload.activityId === "string" ? payload.activityId : null;
-      const fromDay = typeof payload.fromDay === "number" ? payload.fromDay : null;
-      const toDay = typeof payload.toDay === "number" ? payload.toDay : null;
-      if (!activityId || fromDay == null || toDay == null) {
-        return lowConfidenceQuestion(
-          "I need an activity, source day, and destination day to move the item.",
-        );
-      }
-      return {
-        assistantMessage: `Moved activity to Day ${toDay}.`,
-        confidence: 0.9,
-        actions: [{ tool: "adjust_day_groups", input: { activityId, fromDay, toDay } }],
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "refresh_accommodation_search") {
-      return {
-        assistantMessage: "Refreshing accommodation recommendations.",
-        confidence: 0.95,
-        actions: [{ tool: "refresh_accommodation_search", input: {} }],
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "refresh_flight_search") {
-      return {
-        assistantMessage: "Refreshing flight recommendations.",
-        confidence: 0.95,
-        actions: [{ tool: "refresh_flight_search", input: {} }],
-        stopReason: "completed_stage",
-      };
-    }
-  }
-
-  if (request.trigger !== "user_message") {
-    return lowConfidenceQuestion("Tell me what change you want in your day flow.");
-  }
-
-  const userMessage = (request.message || "").toLowerCase().trim();
-  if (!userMessage) {
-    return lowConfidenceQuestion("Tell me what you want to adjust in your itinerary.");
-  }
-
-  if (context.workflowState === WORKFLOW_STATES.GROUP_DAYS && /\b(confirm|continue|looks good|next)\b/.test(userMessage)) {
-    return {
-      assistantMessage: `Your ${context.groupedDays.length}-day itinerary is set! Would you like to add restaurants to your trip?`,
-      confidence: 0.9,
-      actions: [{ tool: "confirm_day_grouping", input: {} }],
-      proposedTransition: WORKFLOW_STATES.DAY_ITINERARY,
-      stopReason: "completed_stage",
-    };
-  }
-
-  if (
-    context.workflowState === WORKFLOW_STATES.DAY_ITINERARY &&
-    /\b(restaurant|restaurants|food|meal|dining|eat)\b/.test(userMessage)
-  ) {
-    return {
-      assistantMessage: "Finding nearby restaurants for your selected activities.",
-      confidence: 0.85,
-      actions: [{ tool: "get_restaurant_suggestions", input: {} }],
-      proposedTransition: WORKFLOW_STATES.MEAL_PREFERENCES,
-      stopReason: "completed_stage",
-    };
-  }
-
-  return lowConfidenceQuestion(
-    context.workflowState === WORKFLOW_STATES.GROUP_DAYS
-      ? "Should I confirm your day grouping now, or move a specific activity to another day?"
-      : "Should I find nearby restaurants, or do you want to keep refining day assignments?",
-  );
-}
-
-async function hospitalityReviewLoop({
-  context,
-  request,
-}: {
-  context: LoopContext;
-  request: AgentTurnRequest;
-}): Promise<LoopResult> {
-  const uiType = request.uiAction?.type || "";
-  const payload = request.uiAction?.payload || {};
-
-  if (request.trigger === "ui_action") {
-    if (uiType === "refresh_accommodation_search") {
-      return {
-        assistantMessage: "Refreshing accommodation recommendations.",
-        confidence: 0.95,
-        actions: [{ tool: "refresh_accommodation_search", input: {} }],
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "refresh_flight_search") {
-      return {
-        assistantMessage: "Refreshing flight recommendations.",
-        confidence: 0.95,
-        actions: [{ tool: "refresh_flight_search", input: {} }],
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "add_restaurants") {
-      const selectedRestaurantIds = Array.isArray(payload.selectedRestaurantIds)
-        ? payload.selectedRestaurantIds.filter((value): value is string => typeof value === "string")
-        : [];
-      return {
-        assistantMessage:
-          selectedRestaurantIds.length > 0
-            ? `Added ${selectedRestaurantIds.length} restaurant${selectedRestaurantIds.length === 1 ? "" : "s"} to your itinerary. Ready for review!`
-            : "Select at least one restaurant or choose Skip Restaurants.",
-        confidence: selectedRestaurantIds.length > 0 ? 0.95 : 0.4,
-        actions:
-          selectedRestaurantIds.length > 0
-            ? [{ tool: "set_meal_preferences", input: { wantsRestaurants: true, selectedRestaurantIds } }]
-            : [],
-        proposedTransition: selectedRestaurantIds.length > 0 ? WORKFLOW_STATES.REVIEW : undefined,
-        stopReason: selectedRestaurantIds.length > 0 ? "completed_stage" : "low_confidence_noop",
-      };
-    }
-
-    if (uiType === "skip_restaurants") {
-      return {
-        assistantMessage: "Your itinerary is ready for review!",
-        confidence: 0.95,
-        actions: [{ tool: "set_meal_preferences", input: { wantsRestaurants: false } }],
-        proposedTransition: WORKFLOW_STATES.REVIEW,
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "finalize_trip") {
-      return {
-        assistantMessage: "Finalizing your itinerary.",
-        confidence: 0.95,
-        actions: [{ tool: "finalize", input: {} }],
-        proposedTransition: WORKFLOW_STATES.FINALIZE,
-        stopReason: "terminal",
-      };
-    }
-
-    if (uiType === "select_accommodation") {
-      const optionId = typeof payload.optionId === "string" ? payload.optionId : "";
-      if (!optionId) {
-        return lowConfidenceQuestion("Choose a hotel card first.");
-      }
-      return {
-        assistantMessage: "Selected this hotel.",
-        confidence: 0.95,
-        actions: [{ tool: "select_accommodation", input: { optionId } }],
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "select_flight") {
-      const optionId = typeof payload.optionId === "string" ? payload.optionId : "";
-      if (!optionId) {
-        return lowConfidenceQuestion("Choose a flight card first.");
-      }
-      return {
-        assistantMessage: "Selected this flight.",
-        confidence: 0.95,
-        actions: [{ tool: "select_flight", input: { optionId } }],
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "skip_accommodation") {
-      return {
-        assistantMessage: "Skipping hotels for now.",
-        confidence: 0.95,
-        actions: [{ tool: "skip_accommodation", input: {} }],
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (uiType === "skip_flight") {
-      return {
-        assistantMessage: "Skipping flights for now.",
-        confidence: 0.95,
-        actions: [{ tool: "skip_flight", input: {} }],
-        stopReason: "completed_stage",
-      };
-    }
-  }
-
-  if (request.trigger !== "user_message") {
-    return lowConfidenceQuestion("Do you want to add restaurants, continue review, or finalize?");
-  }
-
-  const userMessage = (request.message || "").trim();
-  const lower = userMessage.toLowerCase();
-
-  if (context.workflowState === WORKFLOW_STATES.MEAL_PREFERENCES) {
-    if (/\b(skip|no restaurant|without restaurant|no thanks)\b/.test(lower)) {
-      return {
-        assistantMessage: "Your itinerary is ready for review!",
-        confidence: 0.85,
-        actions: [{ tool: "set_meal_preferences", input: { wantsRestaurants: false } }],
-        proposedTransition: WORKFLOW_STATES.REVIEW,
-        stopReason: "completed_stage",
-      };
-    }
-
-    if (/\b(add|include|use)\b/.test(lower) && /\brestaurant|restaurants\b/.test(lower)) {
-      if (context.selectedRestaurantIds.length === 0) {
-        return lowConfidenceQuestion("Select restaurants first, then I can add them to your itinerary.");
-      }
-      return {
-        assistantMessage: `Added ${context.selectedRestaurantIds.length} restaurant${context.selectedRestaurantIds.length === 1 ? "" : "s"} to your itinerary. Ready for review!`,
-        confidence: 0.8,
-        actions: [
-          {
-            tool: "set_meal_preferences",
-            input: {
-              wantsRestaurants: true,
-              selectedRestaurantIds: context.selectedRestaurantIds,
-            },
-          },
-        ],
-        proposedTransition: WORKFLOW_STATES.REVIEW,
-        stopReason: "completed_stage",
-      };
-    }
-
-    return lowConfidenceQuestion("Should I add your selected restaurants or skip restaurants and continue to review?");
-  }
-
-  if (context.workflowState === WORKFLOW_STATES.REVIEW) {
-    if (finalizeIntentRegex.test(userMessage)) {
-      return {
-        assistantMessage: "Finalizing your itinerary.",
-        confidence: 0.9,
-        actions: [{ tool: "finalize", input: {} }],
-        proposedTransition: WORKFLOW_STATES.FINALIZE,
-        stopReason: "terminal",
-      };
-    }
-
-    const llmClient = getLLMClient();
-    const reviewResult = await llmClient.reviewPlan({
-      tripInfo: context.tripInfo,
-      groupedDays: context.groupedDays,
-      userMessage,
-    });
-
-    if (!reviewResult.success) {
-      return {
-        assistantMessage:
-          reviewResult.message || "I couldn't apply that review change right now. Tell me the exact day and change.",
-        confidence: 0.45,
-        actions: [],
-        stopReason: "low_confidence_noop",
-      };
-    }
-
-    const actions: ToolAction[] = [];
-    if (reviewResult.modifications) {
-      actions.push({
-        tool: "review_patch_grouped_days",
-        input: { modifications: reviewResult.modifications as Record<string, Record<string, unknown>> },
-      });
-    }
-
-    return {
-      assistantMessage: reviewResult.message,
-      confidence: actions.length > 0 ? 0.75 : 0.7,
-      actions,
-      stopReason: actions.length > 0 ? "completed_stage" : "needs_user_input",
-    };
-  }
-
-  return lowConfidenceQuestion("Tell me what part you want to refine next.");
 }
 
 function getCurrencyFromSession(session: Session): string {
@@ -1037,57 +706,11 @@ async function runLoop({
   const turnId = randomUUID();
   const context = buildLoopContext(session);
 
-  let rawLoopResult: LoopResult;
-  if (decision.targetLoop === "PLANNING_LOOP") {
-    rawLoopResult = planningLoop({ context, request });
-  } else {
-    rawLoopResult = await hospitalityReviewLoop({ context, request });
-  }
 
-  const parsedLoopResult = LoopResultSchema.safeParse(rawLoopResult);
-  if (!parsedLoopResult.success) {
-    const fallbackMessage = "I couldn't process that request safely. Please try again with a clearer instruction.";
-    const fallbackResult: LoopResult = {
-      assistantMessage: fallbackMessage,
-      confidence: 0.3,
-      actions: [],
-      stopReason: "tool_error_recovered",
-    };
-    sessionStore.update(session.sessionId, {
-      activeLoop: "SUPERVISOR",
-      lastTurnId: turnId,
-      lastLoopResult: fallbackResult,
-      recoveryHints: appendRecoveryHint(
-        session.recoveryHints,
-        JSON.stringify({ turnId, error: "loop_result_validation_failed" }),
-      ),
-    });
-    sessionStore.addToConversation(session.sessionId, "assistant", fallbackMessage);
-    const refreshed = sessionStore.get(session.sessionId)!;
-    return buildSessionSnapshot(refreshed, fallbackMessage);
-  }
-
-  const loopResult = parsedLoopResult.data;
-  if (loopResult.confidence < decision.confidenceThreshold || loopResult.stopReason === "low_confidence_noop") {
-    const lowConfidenceResult: LoopResult = {
-      ...loopResult,
-      actions: [],
-      stopReason: "low_confidence_noop",
-    };
-
-    sessionStore.update(session.sessionId, {
-      activeLoop: "SUPERVISOR",
-      lastTurnId: turnId,
-      lastLoopResult: lowConfidenceResult,
-      recoveryHints: appendRecoveryHint(
-        session.recoveryHints,
-        JSON.stringify({ turnId, stopReason: "low_confidence_noop", confidence: loopResult.confidence }),
-      ),
-    });
-    sessionStore.addToConversation(session.sessionId, "assistant", lowConfidenceResult.assistantMessage);
-    const refreshed = sessionStore.get(session.sessionId)!;
-    return buildSessionSnapshot(refreshed, lowConfidenceResult.assistantMessage);
-  }
+  const llmClient = getLLMClient();
+  const allowedTools = PLANNING_AND_REVIEW_TOOLS.filter(
+    (t) => decision.allowedTools.includes(t.name as ToolAction["tool"])
+  );
 
   const working: WorkingSession = {
     selectedActivityIds: structuredClone(session.selectedActivityIds || []),
@@ -1110,127 +733,127 @@ async function runLoop({
     flightLastSearchedAt: session.flightLastSearchedAt,
   };
 
-  let latestActionMessage = "";
-  for (const rawAction of loopResult.actions) {
-    const parsedAction = ToolActionSchema.safeParse(rawAction);
-    if (!parsedAction.success) {
-      const fallbackMessage = "I couldn't apply one of the requested actions safely. I left your plan unchanged.";
-      const errorLoopResult: LoopResult = {
-        assistantMessage: fallbackMessage,
-        confidence: loopResult.confidence,
-        actions: [],
-        stopReason: "tool_error_recovered",
-      };
-      sessionStore.update(session.sessionId, {
-        activeLoop: "SUPERVISOR",
-        lastTurnId: turnId,
-        lastLoopResult: errorLoopResult,
-        recoveryHints: appendRecoveryHint(
-          session.recoveryHints,
-          JSON.stringify({ turnId, error: "action_validation_failed" }),
-        ),
-      });
-      sessionStore.addToConversation(session.sessionId, "assistant", fallbackMessage);
-      const refreshed = sessionStore.get(session.sessionId)!;
-      return buildSessionSnapshot(refreshed, fallbackMessage);
+  // ReAct Orchestration Loop 
+  const MAX_ITERATIONS = 3;
+  let assistantMessage = "";
+  let stopReason: StopReason = "needs_user_input";
+  let finalTransition: WorkflowState | null = null;
+  const loopConfidence = 0.9;
+  let hasExecutedActions = false;
+
+  for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
+    const refreshedSession = sessionStore.get(session.sessionId)!;
+    const orchestrationContext = buildLoopContext(refreshedSession);
+
+    const turnResult = await llmClient.orchestrateTurn({
+      tripInfo: refreshedSession.tripInfo,
+      context: orchestrationContext,
+      transitionHint: session.recoveryHints.join("\n"),
+      conversationHistory: refreshedSession.conversationHistory,
+      allowedTools,
+      userMessage: request.trigger === "user_message" ? (request.message || "") : "",
+    });
+
+    if (turnResult.toolCalls.length === 0) {
+      assistantMessage = turnResult.message || "I've checked the current plan.";
+      stopReason = hasExecutedActions ? "completed_stage" : "needs_user_input";
+      break;
     }
 
-    const action = parsedAction.data;
-    if (!decision.allowedTools.includes(action.tool)) {
-      const fallbackMessage = `That action is not allowed in ${decision.targetLoop}. I left your plan unchanged.`;
-      const errorLoopResult: LoopResult = {
-        assistantMessage: fallbackMessage,
-        confidence: loopResult.confidence,
-        actions: [],
-        stopReason: "tool_error_recovered",
-      };
-      sessionStore.update(session.sessionId, {
-        activeLoop: "SUPERVISOR",
-        lastTurnId: turnId,
-        lastLoopResult: errorLoopResult,
-        recoveryHints: appendRecoveryHint(
-          session.recoveryHints,
-          JSON.stringify({ turnId, error: "tool_not_allowed", tool: action.tool, loop: decision.targetLoop }),
-        ),
-      });
-      sessionStore.addToConversation(session.sessionId, "assistant", fallbackMessage);
-      const refreshed = sessionStore.get(session.sessionId)!;
-      return buildSessionSnapshot(refreshed, fallbackMessage);
+    const toolPromises = turnResult.toolCalls.map(async (toolCall) => {
+      let parsedInput: Record<string, unknown> = {};
+      try {
+        parsedInput = toolCall.arguments ? JSON.parse(toolCall.arguments) : {};
+      } catch (e) {
+        return { ok: false, error: "Invalid JSON arguments" };
+      }
+
+      const action = { tool: toolCall.name as ToolAction["tool"], input: parsedInput } as unknown as ToolAction;
+
+      try {
+        const resultMsg = await executeAction({ action, session: refreshedSession, working });
+
+        // Handle transitions explicitly driven by specific tools
+        if (action.tool === "confirm_day_grouping") {
+          finalTransition = WORKFLOW_STATES.DAY_ITINERARY;
+        } else if (action.tool === "set_meal_preferences") {
+          finalTransition = WORKFLOW_STATES.REVIEW;
+        } else if (action.tool === "finalize") {
+          finalTransition = WORKFLOW_STATES.FINALIZE;
+        }
+
+        return { ok: true, message: resultMsg };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    });
+
+    const results = await Promise.all(toolPromises);
+    hasExecutedActions = true;
+
+    // Check if any tool failed; if so, inject the error into recovery hints and let the LLM try again.
+    const errors = results.filter(r => !r.ok);
+    if (errors.length > 0) {
+      session.recoveryHints.push(`Tool execution failed: ${errors.map(e => e.error).join(", ")}`);
+      if (iteration === MAX_ITERATIONS) {
+        assistantMessage = "I encountered some issues trying to apply your changes. Please try again.";
+        stopReason = "tool_error_recovered";
+      }
+      continue;
     }
 
-    try {
-      latestActionMessage = await executeAction({ action, session, working });
-    } catch (error) {
-      const fallbackMessage = "I couldn't complete that change, so I kept your itinerary unchanged.";
-      const errorLoopResult: LoopResult = {
-        assistantMessage: fallbackMessage,
-        confidence: loopResult.confidence,
-        actions: [],
-        stopReason: "tool_error_recovered",
-      };
-      sessionStore.update(session.sessionId, {
-        activeLoop: "SUPERVISOR",
-        lastTurnId: turnId,
-        lastLoopResult: errorLoopResult,
-        recoveryHints: appendRecoveryHint(
-          session.recoveryHints,
-          JSON.stringify({
-            turnId,
-            error: "tool_execution_failed",
-            tool: action.tool,
-            message: error instanceof Error ? error.message : String(error),
-          }),
-        ),
-      });
-      sessionStore.addToConversation(session.sessionId, "assistant", fallbackMessage);
-      const refreshed = sessionStore.get(session.sessionId)!;
-      return buildSessionSnapshot(refreshed, fallbackMessage);
-    }
+    // Tools succeeded, break loop and format friendly message
+    assistantMessage = turnResult.message || results.map(r => r.message).join(" ");
+    stopReason = "completed_stage";
+    break;
   }
+
 
   let nextWorkflowState = session.workflowState;
   const transitionHint = session.recoveryHints;
-  if (loopResult.proposedTransition) {
+  if (finalTransition) {
     if (
-      requiresTravelOfferCompletionForState(loopResult.proposedTransition) &&
+      requiresTravelOfferCompletionForState(finalTransition) &&
       (working.accommodationStatus !== "complete" || working.flightStatus !== "complete")
     ) {
       transitionHint.push(
         JSON.stringify({
           turnId,
           error: "proposed_transition_blocked_waiting_for_travel_offer_search",
-          to: loopResult.proposedTransition,
+          to: finalTransition,
           accommodationStatus: working.accommodationStatus,
           flightStatus: working.flightStatus,
         }),
       );
     } else {
-    const transitionCheck = validateWorkflowTransition({
-      from: session.workflowState,
-      to: loopResult.proposedTransition,
-      owner: "SUPERVISOR",
-    });
-    if (transitionCheck.ok) {
-      nextWorkflowState = loopResult.proposedTransition;
-    } else {
-      transitionHint.push(
-        JSON.stringify({
-          turnId,
-          error: "proposed_transition_rejected",
-          from: session.workflowState,
-          to: loopResult.proposedTransition,
-          reason: transitionCheck.reason,
-        }),
-      );
-    }
+      const transitionCheck = validateWorkflowTransition({
+        from: session.workflowState,
+        to: finalTransition,
+        owner: "SUPERVISOR",
+      });
+      if (transitionCheck.ok) {
+        nextWorkflowState = finalTransition;
+      } else {
+        transitionHint.push(
+          JSON.stringify({
+            turnId,
+            error: "proposed_transition_rejected",
+            from: session.workflowState,
+            to: finalTransition,
+            reason: transitionCheck.reason,
+          }),
+        );
+      }
     }
   }
 
-  const assistantMessage = loopResult.assistantMessage || latestActionMessage || "I updated your itinerary.";
   const normalizedStopReason: StopReason =
-    nextWorkflowState === WORKFLOW_STATES.FINALIZE ? "terminal" : loopResult.stopReason;
+    nextWorkflowState === WORKFLOW_STATES.FINALIZE ? "terminal" : stopReason;
   const normalizedLoopResult: LoopResult = {
-    ...loopResult,
+    assistantMessage,
+    confidence: loopConfidence,
+    actions: [],
+    proposedTransition: finalTransition || undefined,
     stopReason: normalizedStopReason,
   };
 
@@ -1551,6 +1174,140 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
 
   if (session.workflowState === WORKFLOW_STATES.INITIAL_RESEARCH) {
     return runInitialResearchTurn({ session, request });
+  }
+
+  if (request.trigger === "ui_action") {
+    // Deterministic state mutation bypassing LLM
+    const uiType = request.uiAction?.type || "";
+    const payload = request.uiAction?.payload || {};
+
+    // Convert UI Action to Tool Action
+    let toolName: ToolAction["tool"] | null = null;
+    let input: Record<string, unknown> = {};
+    let proposedTransition: WorkflowState | null = null;
+    let fallbackMessage = "I processed your request.";
+
+    if (uiType === "reorganize_selection") {
+      toolName = "select_activities";
+      input = { selectedActivityIds: payload.selectedActivityIds || [] };
+      proposedTransition = WORKFLOW_STATES.GROUP_DAYS;
+      fallbackMessage = "I've regrouped your itinerary based on your selections.";
+    } else if (uiType === "move_activity") {
+      toolName = "adjust_day_groups";
+      input = payload;
+      fallbackMessage = "I've moved the activity.";
+    } else if (uiType === "confirm_grouping") {
+      toolName = "confirm_day_grouping";
+      proposedTransition = WORKFLOW_STATES.DAY_ITINERARY;
+      fallbackMessage = "I've confirmed your day grouping.";
+    } else if (uiType === "continue_to_restaurants") {
+      toolName = "get_restaurant_suggestions";
+      proposedTransition = WORKFLOW_STATES.MEAL_PREFERENCES;
+      fallbackMessage = "I'm finding nearby restaurants.";
+    } else if (uiType === "refresh_accommodation_search") {
+      toolName = "refresh_accommodation_search";
+      fallbackMessage = "Refreshing accommodation options.";
+    } else if (uiType === "refresh_flight_search") {
+      toolName = "refresh_flight_search";
+      fallbackMessage = "Refreshing flight options.";
+    } else if (uiType === "add_restaurants") {
+      if (Array.isArray(payload.selectedRestaurantIds) && payload.selectedRestaurantIds.length > 0) {
+        toolName = "set_meal_preferences";
+        input = { wantsRestaurants: true, selectedRestaurantIds: payload.selectedRestaurantIds };
+        proposedTransition = WORKFLOW_STATES.REVIEW;
+        fallbackMessage = "I've added the selected restaurants.";
+      }
+    } else if (uiType === "skip_restaurants") {
+      toolName = "set_meal_preferences";
+      input = { wantsRestaurants: false };
+      proposedTransition = WORKFLOW_STATES.REVIEW;
+      fallbackMessage = "I've skipped restaurants.";
+    } else if (uiType === "finalize_trip") {
+      toolName = "finalize";
+      proposedTransition = WORKFLOW_STATES.FINALIZE;
+      fallbackMessage = "Finalizing your itinerary.";
+    } else if (uiType === "select_accommodation") {
+      if (payload.optionId) {
+        toolName = "select_accommodation";
+        input = { optionId: payload.optionId };
+        fallbackMessage = "I've selected this hotel.";
+      }
+    } else if (uiType === "select_flight") {
+      if (payload.optionId) {
+        toolName = "select_flight";
+        input = { optionId: payload.optionId };
+        fallbackMessage = "I've selected this flight.";
+      }
+    } else if (uiType === "skip_accommodation") {
+      toolName = "skip_accommodation";
+      fallbackMessage = "I've skipped hotels.";
+    } else if (uiType === "skip_flight") {
+      toolName = "skip_flight";
+      fallbackMessage = "I've skipped flights.";
+    }
+
+    if (toolName) {
+      const working: WorkingSession = {
+        selectedActivityIds: structuredClone(session.selectedActivityIds || []),
+        dayGroups: structuredClone(session.dayGroups || []),
+        groupedDays: structuredClone(session.groupedDays || []),
+        restaurantSuggestions: structuredClone(session.restaurantSuggestions || []),
+        selectedRestaurantIds: structuredClone(session.selectedRestaurantIds || []),
+        wantsRestaurants: session.wantsRestaurants,
+        accommodationStatus: session.accommodationStatus,
+        flightStatus: session.flightStatus,
+        accommodationError: session.accommodationError,
+        flightError: session.flightError,
+        accommodationOptions: structuredClone(session.accommodationOptions || []),
+        flightOptions: structuredClone(session.flightOptions || []),
+        selectedAccommodationOptionId: session.selectedAccommodationOptionId,
+        selectedFlightOptionId: session.selectedFlightOptionId,
+        wantsAccommodation: session.wantsAccommodation,
+        wantsFlight: session.wantsFlight,
+        accommodationLastSearchedAt: session.accommodationLastSearchedAt,
+        flightLastSearchedAt: session.flightLastSearchedAt,
+      };
+
+      try {
+        const resultMessage = await executeAction({ action: { tool: toolName, input } as unknown as ToolAction, session, working });
+        const finalMessage = resultMessage || fallbackMessage;
+
+        sessionStore.update(session.sessionId, {
+          selectedActivityIds: working.selectedActivityIds,
+          dayGroups: working.dayGroups,
+          groupedDays: working.groupedDays,
+          restaurantSuggestions: working.restaurantSuggestions,
+          selectedRestaurantIds: working.selectedRestaurantIds,
+          wantsRestaurants: working.wantsRestaurants,
+          accommodationStatus: working.accommodationStatus,
+          flightStatus: working.flightStatus,
+          accommodationError: working.accommodationError,
+          flightError: working.flightError,
+          accommodationOptions: working.accommodationOptions,
+          flightOptions: working.flightOptions,
+          selectedAccommodationOptionId: working.selectedAccommodationOptionId,
+          selectedFlightOptionId: working.selectedFlightOptionId,
+          wantsAccommodation: working.wantsAccommodation,
+          wantsFlight: working.wantsFlight,
+          accommodationLastSearchedAt: working.accommodationLastSearchedAt,
+          flightLastSearchedAt: working.flightLastSearchedAt,
+          workflowState: proposedTransition || session.workflowState,
+          lastTurnId: randomUUID(),
+        });
+
+        // Add a system event to keep LLM context aware 
+        const actionDescriptor = uiType.replace(/_/g, " ");
+        sessionStore.addToConversation(session.sessionId, "assistant", finalMessage);
+        const refreshed = sessionStore.get(session.sessionId)!;
+        refreshed.conversationHistory.unshift({ role: "assistant", content: `[System Event]: User executed UI action: ${actionDescriptor}. State updated deterministically.` });
+
+        return buildSessionSnapshot(refreshed, finalMessage);
+      } catch (e) {
+        return buildSessionSnapshot(session, `Failed to process ${uiType}: ` + (e instanceof Error ? e.message : String(e)));
+      }
+    } else {
+      return buildSessionSnapshot(session, `Unknown or incomplete UI Action: ${uiType}`);
+    }
   }
 
   if (request.trigger === "user_message") {

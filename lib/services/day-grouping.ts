@@ -150,6 +150,33 @@ function haversineDistanceKm(
   return r * c;
 }
 
+function listActivityDistancePoints(activity: SuggestedActivity): Array<{ lat: number; lng: number }> {
+  const points: Array<{ lat: number; lng: number }> = [];
+  const seen = new Set<string>();
+
+  const addPoint = (point: { lat: number; lng: number } | null | undefined) => {
+    if (!point) return;
+    const key = `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    points.push(point);
+  };
+
+  addPoint(activity.coordinates);
+  addPoint(activity.startCoordinates);
+  addPoint(activity.endCoordinates);
+
+  for (const waypoint of activity.routeWaypoints ?? []) {
+    addPoint(waypoint.coordinates);
+  }
+
+  for (const point of activity.routePoints ?? []) {
+    addPoint(point);
+  }
+
+  return points;
+}
+
 function slotDistance(
   a: SuggestedActivity["bestTimeOfDay"],
   b: SuggestedActivity["bestTimeOfDay"]
@@ -159,8 +186,18 @@ function slotDistance(
 }
 
 function activityDistanceProxy(a: SuggestedActivity, b: SuggestedActivity): number {
-  const geoDistance = haversineDistanceKm(a.coordinates, b.coordinates);
-  if (geoDistance > 0) return geoDistance;
+  const pointsA = listActivityDistancePoints(a);
+  const pointsB = listActivityDistancePoints(b);
+
+  if (pointsA.length > 0 && pointsB.length > 0) {
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (const pointA of pointsA) {
+      for (const pointB of pointsB) {
+        minDistance = Math.min(minDistance, haversineDistanceKm(pointA, pointB));
+      }
+    }
+    if (Number.isFinite(minDistance)) return minDistance;
+  }
 
   const slotPenalty = slotDistance(a.bestTimeOfDay, b.bestTimeOfDay) * 1.2;
   const typePenalty = a.type.trim().toLowerCase() === b.type.trim().toLowerCase() ? 0.3 : 1;

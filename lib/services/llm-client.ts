@@ -11,6 +11,7 @@ import {
   type ResearchOptionPreference,
   type Coordinates,
   type RouteWaypoint,
+  type LoopContext,
 } from "@/lib/models/travel-plan";
 import {
   SYSTEM_PROMPTS,
@@ -434,6 +435,160 @@ const INITIAL_RESEARCH_TOOLS: Array<Record<string, unknown>> = [
       },
     },
   },
+];
+
+export const PLANNING_AND_REVIEW_TOOLS: Array<Record<string, unknown>> = [
+  {
+    type: "function",
+    name: "select_activities",
+    description: "Update the user's selected activities based on their choices.",
+    strict: false,
+    parameters: {
+      type: "object",
+      properties: {
+        selectedActivityIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of activity IDs the user wants to keep."
+        }
+      },
+      required: ["selectedActivityIds"],
+    }
+  },
+  {
+    type: "function",
+    name: "adjust_day_groups",
+    description: "Move an activity from one day to another.",
+    strict: false,
+    parameters: {
+      type: "object",
+      properties: {
+        activityId: { type: "string" },
+        fromDay: { type: "integer" },
+        toDay: { type: "integer" }
+      },
+      required: ["activityId", "fromDay", "toDay"],
+    }
+  },
+  {
+    type: "function",
+    name: "confirm_day_grouping",
+    description: "Confirm the current grouped itinerary structure and proceed to the next phase (e.g. restaurants or finalizing).",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  },
+  {
+    type: "function",
+    name: "get_restaurant_suggestions",
+    description: "Find local restaurant options near the grouped activities.",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  },
+  {
+    type: "function",
+    name: "set_meal_preferences",
+    description: "Set whether the user wants restaurants and optionally select which ones.",
+    strict: false,
+    parameters: {
+      type: "object",
+      properties: {
+        wantsRestaurants: { type: "boolean" },
+        selectedRestaurantIds: {
+          type: "array",
+          items: { type: "string" }
+        }
+      },
+      required: ["wantsRestaurants"],
+    }
+  },
+  {
+    type: "function",
+    name: "review_patch_grouped_days",
+    description: "Apply specific manual overrides or patches to the grouped days based on user review feedback.",
+    strict: false,
+    parameters: {
+      type: "object",
+      properties: {
+        modifications: {
+          type: "object",
+          description: "A map of day number to partial DayGroup updates.",
+          additionalProperties: true
+        }
+      },
+      required: ["modifications"],
+    }
+  },
+  {
+    type: "function",
+    name: "finalize",
+    description: "Finalize the overall trip plan completely.",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  },
+  {
+    type: "function",
+    name: "select_accommodation",
+    description: "Select a specific accommodation option.",
+    strict: false,
+    parameters: {
+      type: "object",
+      properties: { optionId: { type: "string" } },
+      required: ["optionId"],
+    }
+  },
+  {
+    type: "function",
+    name: "select_flight",
+    description: "Select a specific flight option.",
+    strict: false,
+    parameters: {
+      type: "object",
+      properties: { optionId: { type: "string" } },
+      required: ["optionId"],
+    }
+  },
+  {
+    type: "function",
+    name: "skip_accommodation",
+    description: "Skip accommodation booking entirely.",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  },
+  {
+    type: "function",
+    name: "skip_flight",
+    description: "Skip flight booking entirely.",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  },
+  {
+    type: "function",
+    name: "search_accommodation",
+    description: "Trigger a search for accommodations.",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  },
+  {
+    type: "function",
+    name: "search_flights",
+    description: "Trigger a search for flights.",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  },
+  {
+    type: "function",
+    name: "refresh_accommodation_search",
+    description: "Refresh or re-run the accommodation search with new parameters.",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  },
+  {
+    type: "function",
+    name: "refresh_flight_search",
+    description: "Refresh or re-run the flight search with new parameters.",
+    strict: false,
+    parameters: { type: "object", properties: {}, required: [] }
+  }
 ];
 
 interface LLMClientOptions {
@@ -2609,6 +2764,75 @@ Return one improved option with stronger evidence and date fit.`;
       return {
         success: false,
         preferences: currentPreferences,
+      };
+    }
+  }
+
+  async orchestrateTurn({
+    tripInfo,
+    context,
+    transitionHint,
+    conversationHistory,
+    allowedTools,
+    userMessage,
+  }: {
+    tripInfo: TripInfo;
+    context: LoopContext;
+    transitionHint: string;
+    conversationHistory: ConversationMessage[];
+    allowedTools: Array<Record<string, unknown>>;
+    userMessage: string;
+  }): Promise<{ message: string; toolCalls: OpenAI.Responses.ResponseFunctionToolCall[] }> {
+    const input = `User Request: ${userMessage}
+
+Goal for this phase: ${transitionHint}
+
+Overall Trip Context:
+Destination: ${tripInfo.destination}
+Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
+Travelers: ${tripInfo.travelers}
+Budget: ${tripInfo.budget || "Not specified"}
+Preferences: ${(tripInfo.preferences || []).join(", ")}
+
+Current Plan Status:
+${JSON.stringify({
+      workflowState: context.workflowState,
+      accommodationStatus: context.accommodationStatus,
+      flightStatus: context.flightStatus,
+      selectedAccommodation: context.selectedAccommodationOptionId,
+      selectedFlight: context.selectedFlightOptionId,
+    }, null, 2)}
+
+Working Itinerary (Grouped Days):
+${JSON.stringify(context.groupedDays, null, 2)}
+
+Recent Conversation (Last 5 messages):
+${JSON.stringify(conversationHistory.slice(-5), null, 2)}
+`;
+
+    try {
+      const response = await this.openai.responses.create({
+        model: this.model,
+        instructions: SYSTEM_PROMPTS.ORCHESTRATOR_AGENT,
+        input,
+        temperature: this.temperature,
+        tools: allowedTools as unknown as OpenAI.Responses.Tool[],
+        tool_choice: "auto",
+        parallel_tool_calls: true,
+      });
+
+      const toolCalls = this._extractFunctionCallsFromResponse(response);
+      const outputText = typeof response.output_text === "string" ? response.output_text.trim() : "";
+
+      return {
+        message: outputText,
+        toolCalls,
+      };
+    } catch (error) {
+      console.error("Error in orchestrateTurn:", error);
+      return {
+        message: "I encountered an error trying to process your request.",
+        toolCalls: [],
       };
     }
   }
