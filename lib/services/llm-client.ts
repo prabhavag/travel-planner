@@ -1190,6 +1190,26 @@ class LLMClient {
     return { routeWaypoints, routePoints };
   }
 
+  private _pickBestPlace(
+    places: Array<{ name: string; vicinity?: string | null; place_id: string; location: Coordinates }>,
+    destinationName?: string,
+    countryName?: string
+  ) {
+    if (!places.length) return null;
+    const tokens = [destinationName, countryName]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.toLowerCase());
+
+    if (!tokens.length) return places[0];
+
+    const matches = places.filter((place) => {
+      const haystack = `${place.name || ""} ${place.vicinity || ""}`.toLowerCase();
+      return tokens.some((token) => haystack.includes(token));
+    });
+
+    return matches[0] || places[0];
+  }
+
   private _inferLocationMode(option: { title: string; category: string }): "point" | "route" | "area" {
     const text = `${option.title} ${option.category}`.toLowerCase();
     if (/(road to|scenic drive|drive|highway|route|loop drive)/i.test(text)) {
@@ -1387,12 +1407,19 @@ class LLMClient {
 
     let geocodingService: ReturnType<typeof getGeocodingService> | null = null;
     let destinationCoords: { lat: number; lng: number } | null = null;
+    let destinationCountryName: string | undefined;
+    let destinationCountryCode: string | undefined;
     try {
       geocodingService = getGeocodingService();
-      destinationCoords = await geocodingService.geocode(destinationName);
+      const geocodeResult = await geocodingService.geocodeWithCountry(destinationName);
+      destinationCoords = geocodeResult.location;
+      destinationCountryName = geocodeResult.countryName;
+      destinationCountryCode = geocodeResult.countryCode;
     } catch {
       geocodingService = null;
       destinationCoords = null;
+      destinationCountryName = undefined;
+      destinationCountryCode = undefined;
     }
 
     const popularOptions = await Promise.all(
@@ -1423,9 +1450,67 @@ class LLMClient {
           });
 
           const searchQuery = `${option.title}, ${destinationName}`;
-          let places = await placesClient.searchPlaces(searchQuery, destinationCoords, 50000);
+          const textSearchOptions = {
+            preferTextSearch: true,
+            region: destinationCountryCode ? destinationCountryCode.toLowerCase() : undefined,
+          };
+          this._logRouteDebug("placeSearchContext", {
+            optionTitle: option.title,
+            destinationName,
+            destinationCoords,
+            destinationCountryName: destinationCountryName || null,
+            destinationCountryCode: destinationCountryCode || null,
+            searchQuery,
+            textSearchOptions,
+          });
+          let places = await placesClient.searchPlaces(
+            searchQuery,
+            destinationCoords,
+            destinationCoords ? 200000 : 50000,
+            null,
+            textSearchOptions
+          );
+          this._logRouteDebug("placeSearchResults", {
+            optionTitle: option.title,
+            attempt: "primary",
+            resultCount: places.length,
+            results: places.slice(0, 5).map((place) => ({
+              name: place.name,
+              vicinity: place.vicinity || null,
+              place_id: place.place_id || null,
+              location: place.location || null,
+              types: place.types || [],
+            })),
+          });
+          if (!places.length && destinationCoords) {
+            places = await placesClient.searchPlaces(searchQuery, destinationCoords, 500000, null, textSearchOptions);
+            this._logRouteDebug("placeSearchResults", {
+              optionTitle: option.title,
+              attempt: "expanded",
+              resultCount: places.length,
+              results: places.slice(0, 5).map((place) => ({
+                name: place.name,
+                vicinity: place.vicinity || null,
+                place_id: place.place_id || null,
+                location: place.location || null,
+                types: place.types || [],
+              })),
+            });
+          }
           if (!places.length) {
-            places = await placesClient.searchPlaces(searchQuery);
+            places = await placesClient.searchPlaces(searchQuery, null, 5000, null, textSearchOptions);
+            this._logRouteDebug("placeSearchResults", {
+              optionTitle: option.title,
+              attempt: "global",
+              resultCount: places.length,
+              results: places.slice(0, 5).map((place) => ({
+                name: place.name,
+                vicinity: place.vicinity || null,
+                place_id: place.place_id || null,
+                location: place.location || null,
+                types: place.types || [],
+              })),
+            });
           }
 
           if (!places.length && option.title.includes(" ")) {
@@ -1433,8 +1518,43 @@ class LLMClient {
             const cleanedTitle = option.title.replace(/\b(Tour|Trip|Experience|Class|Activity|Ticket)\b/gi, "").trim();
             if (cleanedTitle && cleanedTitle !== option.title) {
               const cleanedQuery = `${cleanedTitle}, ${destinationName}`;
-              places = await placesClient.searchPlaces(cleanedQuery, destinationCoords, 50000);
-              if (!places.length) places = await placesClient.searchPlaces(cleanedQuery);
+              places = await placesClient.searchPlaces(
+                cleanedQuery,
+                destinationCoords,
+                destinationCoords ? 200000 : 50000,
+                null,
+                textSearchOptions
+              );
+              if (!places.length && destinationCoords) {
+                places = await placesClient.searchPlaces(cleanedQuery, destinationCoords, 500000, null, textSearchOptions);
+                this._logRouteDebug("placeSearchResults", {
+                  optionTitle: option.title,
+                  attempt: "cleaned-expanded",
+                  resultCount: places.length,
+                  results: places.slice(0, 5).map((place) => ({
+                    name: place.name,
+                    vicinity: place.vicinity || null,
+                    place_id: place.place_id || null,
+                    location: place.location || null,
+                    types: place.types || [],
+                  })),
+                });
+              }
+              if (!places.length) {
+                places = await placesClient.searchPlaces(cleanedQuery, null, 5000, null, textSearchOptions);
+                this._logRouteDebug("placeSearchResults", {
+                  optionTitle: option.title,
+                  attempt: "cleaned-global",
+                  resultCount: places.length,
+                  results: places.slice(0, 5).map((place) => ({
+                    name: place.name,
+                    vicinity: place.vicinity || null,
+                    place_id: place.place_id || null,
+                    location: place.location || null,
+                    types: place.types || [],
+                  })),
+                });
+              }
             }
           }
 
@@ -1443,12 +1563,62 @@ class LLMClient {
             const shortTitle = option.title.split(" ").slice(0, 3).join(" ");
             if (shortTitle && shortTitle !== option.title) {
               const shortQuery = `${shortTitle}, ${destinationName}`;
-              places = await placesClient.searchPlaces(shortQuery, destinationCoords, 50000);
-              if (!places.length) places = await placesClient.searchPlaces(shortQuery);
+              places = await placesClient.searchPlaces(
+                shortQuery,
+                destinationCoords,
+                destinationCoords ? 200000 : 50000,
+                null,
+                textSearchOptions
+              );
+              if (!places.length && destinationCoords) {
+                places = await placesClient.searchPlaces(shortQuery, destinationCoords, 500000, null, textSearchOptions);
+                this._logRouteDebug("placeSearchResults", {
+                  optionTitle: option.title,
+                  attempt: "short-expanded",
+                  resultCount: places.length,
+                  results: places.slice(0, 5).map((place) => ({
+                    name: place.name,
+                    vicinity: place.vicinity || null,
+                    place_id: place.place_id || null,
+                    location: place.location || null,
+                    types: place.types || [],
+                  })),
+                });
+              }
+              if (!places.length) {
+                places = await placesClient.searchPlaces(shortQuery, null, 5000, null, textSearchOptions);
+                this._logRouteDebug("placeSearchResults", {
+                  optionTitle: option.title,
+                  attempt: "short-global",
+                  resultCount: places.length,
+                  results: places.slice(0, 5).map((place) => ({
+                    name: place.name,
+                    vicinity: place.vicinity || null,
+                    place_id: place.place_id || null,
+                    location: place.location || null,
+                    types: place.types || [],
+                  })),
+                });
+              }
             }
           }
 
-          const placeId = places[0]?.place_id || null;
+          const preferredPlace = this._pickBestPlace(places, destinationName, destinationCountryName);
+          this._logRouteDebug("placeSearchSelection", {
+            optionTitle: option.title,
+            destinationName,
+            destinationCountryName: destinationCountryName || null,
+            selected: preferredPlace
+              ? {
+                  name: preferredPlace.name,
+                  vicinity: preferredPlace.vicinity || null,
+                  place_id: preferredPlace.place_id || null,
+                  location: preferredPlace.location || null,
+                }
+              : null,
+            candidateCount: places.length,
+          });
+          const placeId = preferredPlace?.place_id || null;
           let routeWaypoints = option.routeWaypoints || [];
           let routePoints = option.routePoints || [];
           let startCoordinates = option.startCoordinates || null;
@@ -1521,7 +1691,7 @@ class LLMClient {
           }
 
           const photoUrls = await placesClient.getPlacePhotoUrlsFromId(placeId, 320);
-          const placeCoordinates = places[0]?.location || null;
+          const placeCoordinates = preferredPlace?.location || places[0]?.location || null;
           return {
             ...option,
             photoUrls: photoUrls.slice(0, 3),

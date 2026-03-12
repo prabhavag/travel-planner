@@ -50,36 +50,45 @@ class PlacesClient {
     query: string,
     location: Coordinates | null = null,
     radius: number = 5000,
-    placeType: string | null = null
+    placeType: string | null = null,
+    options: {
+      preferTextSearch?: boolean;
+      region?: string;
+    } = {}
   ): Promise<PlaceResult[]> {
     try {
-      if (location) {
-        // Nearby search
-        const params: Record<string, unknown> = {
-          key: this.apiKey,
-          location: location,
-          radius: radius,
-          keyword: query,
-        };
-        if (placeType) params.type = placeType;
-
-        const response = await this.client.placesNearby({
-          params: params as unknown as Parameters<typeof this.client.placesNearby>[0]["params"],
-        });
-        return this._processResults(response.data.results || []);
-      } else {
-        // Text search
+      const useTextSearch = !location || options.preferTextSearch;
+      if (useTextSearch) {
         const params: Record<string, unknown> = {
           key: this.apiKey,
           query: query,
         };
         if (placeType) params.type = placeType;
+        if (location) {
+          params.location = location;
+          params.radius = radius;
+        }
+        if (options.region) params.region = options.region;
 
         const response = await this.client.textSearch({
           params: params as unknown as Parameters<typeof this.client.textSearch>[0]["params"],
         });
         return this._processResults(response.data.results || []);
       }
+
+      // Nearby search
+      const params: Record<string, unknown> = {
+        key: this.apiKey,
+        location: location,
+        radius: radius,
+        keyword: query,
+      };
+      if (placeType) params.type = placeType;
+
+      const response = await this.client.placesNearby({
+        params: params as unknown as Parameters<typeof this.client.placesNearby>[0]["params"],
+      });
+      return this._processResults(response.data.results || []);
     } catch (error) {
       console.error("Error searching places:", (error as Error).message);
       return [];

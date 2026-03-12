@@ -1,6 +1,12 @@
 import { Client } from "@googlemaps/google-maps-services-js";
 import type { Coordinates } from "@/lib/models/travel-plan";
 
+export interface GeocodeResult {
+  location: Coordinates | null;
+  countryName?: string;
+  countryCode?: string;
+}
+
 class GeocodingService {
   private client: Client;
   private apiKey: string;
@@ -20,6 +26,11 @@ class GeocodingService {
   }
 
   async geocode(address: string): Promise<Coordinates | null> {
+    const result = await this.geocodeWithCountry(address);
+    return result.location;
+  }
+
+  async geocodeWithCountry(address: string): Promise<GeocodeResult> {
     try {
       const response = await this.client.geocode({
         params: {
@@ -29,13 +40,21 @@ class GeocodingService {
       });
 
       if (response.data.results && response.data.results.length > 0) {
-        const location = response.data.results[0].geometry.location;
-        return { lat: location.lat, lng: location.lng };
+        const primary = response.data.results[0];
+        const location = primary.geometry.location;
+        const countryComponent = Array.isArray(primary.address_components)
+          ? primary.address_components.find((component) => component.types?.includes("country"))
+          : undefined;
+        return {
+          location: { lat: location.lat, lng: location.lng },
+          countryName: countryComponent?.long_name,
+          countryCode: countryComponent?.short_name,
+        };
       }
-      return null;
+      return { location: null };
     } catch (error) {
       console.error(`Geocoding error for '${address}':`, (error as Error).message);
-      return null;
+      return { location: null };
     }
   }
 

@@ -288,6 +288,8 @@ export function DayGroupingView({
       };
       return score[a.bestTimeOfDay] - score[b.bestTimeOfDay];
     });
+    let scheduledActivityMinutes = 0;
+    let scheduledCommuteMinutes = 0;
 
     if (sortedActivities.length === 0) {
       return (
@@ -336,6 +338,7 @@ export function DayGroupingView({
         const beforeLunchEnd = Math.max(activityStart + 30, lunchStart);
         const afterLunchStart = lunchEnd;
         const afterLunchEnd = afterLunchStart + Math.max(30, activityEnd - beforeLunchEnd);
+        scheduledActivityMinutes += Math.max(0, beforeLunchEnd - activityStart) + Math.max(0, afterLunchEnd - afterLunchStart);
 
         timelineItems.push({
           type: "activity",
@@ -378,6 +381,7 @@ export function DayGroupingView({
 
         const nextActivityStart = roundToQuarter(cursorMinutes);
         const nextActivityEnd = nextActivityStart + activityMinutes;
+        scheduledActivityMinutes += Math.max(0, nextActivityEnd - nextActivityStart);
         timelineItems.push({
           type: "activity",
           id: `activity-${activity.id}`,
@@ -398,6 +402,7 @@ export function DayGroupingView({
         const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + 15);
         const commuteStart = roundToQuarter(cursorMinutes);
         const commuteEnd = commuteStart + bufferedCommuteMinutes;
+        scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
         timelineItems.push({
           type: "commute",
           id: `commute-${activity.id}-${next.id}`,
@@ -423,11 +428,19 @@ export function DayGroupingView({
       });
     }
 
+    const totalPlannedHours = (scheduledActivityMinutes + scheduledCommuteMinutes) / 60;
+    const isOverloaded = totalPlannedHours > 8;
+
     return (
       <>
         <div className="rounded-lg border border-sky-100 bg-sky-50/40 p-2 text-[11px] text-sky-800">
           Timeline is approximate. Daily budget: {formatHourLabel(availableVisitHours)}
         </div>
+        {isOverloaded ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2 text-[11px] text-amber-900">
+            Overloaded day: ~{formatHourLabel(totalPlannedHours)} of activity + drive. Consider moving an activity.
+          </div>
+        ) : null}
         <div className="space-y-2">
           {timelineItems.map((item, index) => {
             const isLast = index === timelineItems.length - 1;
