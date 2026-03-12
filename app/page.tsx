@@ -1371,7 +1371,7 @@ export default function PlannerPage() {
                           disabled={!hasRequiredBasics || loading || tripBasicsSaving}
                         >
                           {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                          Proceed to Next Stage
+                          Proceed to activities
                         </Button>
                       </div>
                     </div>
