@@ -58,6 +58,11 @@ type WorkingDay = {
   activityIds: string[];
 };
 
+type DayBucket = {
+  activities: SuggestedActivity[];
+  originalIndex: number;
+};
+
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
   const date = new Date(value);
@@ -175,6 +180,90 @@ function listActivityDistancePoints(activity: SuggestedActivity): Array<{ lat: n
   }
 
   return points;
+}
+
+function computeDayCentroid(activities: SuggestedActivity[]): { lat: number; lng: number } | null {
+  let sumLat = 0;
+  let sumLng = 0;
+  let count = 0;
+
+  for (const activity of activities) {
+    for (const point of listActivityDistancePoints(activity)) {
+      sumLat += point.lat;
+      sumLng += point.lng;
+      count += 1;
+    }
+  }
+
+  if (count === 0) return null;
+  return { lat: sumLat / count, lng: sumLng / count };
+}
+
+function orderDayBucketsByProximity(buckets: DayBucket[]): DayBucket[] {
+  if (buckets.length <= 2) return [...buckets].sort((a, b) => a.originalIndex - b.originalIndex);
+
+  const withCentroids = buckets.map((bucket) => ({
+    ...bucket,
+    centroid: computeDayCentroid(bucket.activities),
+  }));
+
+  const centroidDays = withCentroids.filter((bucket) => bucket.centroid !== null);
+  if (centroidDays.length <= 1) {
+    return [...withCentroids].sort((a, b) => a.originalIndex - b.originalIndex);
+  }
+
+  centroidDays.sort((a, b) => a.originalIndex - b.originalIndex);
+  const used = new Set<number>();
+  const ordered: typeof centroidDays = [];
+
+  ordered.push(centroidDays[0]);
+  used.add(centroidDays[0].originalIndex);
+
+  while (ordered.length < centroidDays.length) {
+    const current = ordered[ordered.length - 1];
+    let bestCandidate: typeof centroidDays[number] | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (const candidate of centroidDays) {
+      if (used.has(candidate.originalIndex)) continue;
+      const distance = haversineDistanceKm(current.centroid, candidate.centroid);
+      if (distance < bestDistance - 1e-6) {
+        bestDistance = distance;
+        bestCandidate = candidate;
+      } else if (Math.abs(distance - bestDistance) <= 1e-6 && bestCandidate) {
+        if (candidate.originalIndex < bestCandidate.originalIndex) {
+          bestCandidate = candidate;
+        }
+      }
+    }
+
+    if (!bestCandidate) break;
+    ordered.push(bestCandidate);
+    used.add(bestCandidate.originalIndex);
+  }
+
+  if (ordered.length < centroidDays.length) {
+    const remaining = centroidDays.filter((bucket) => !used.has(bucket.originalIndex));
+    remaining.sort((a, b) => a.originalIndex - b.originalIndex);
+    ordered.push(...remaining);
+  }
+
+  const slots: Array<typeof withCentroids[number] | null> = Array.from({ length: buckets.length }, () => null);
+  for (const bucket of withCentroids) {
+    if (bucket.centroid === null) {
+      slots[bucket.originalIndex] = bucket;
+    }
+  }
+
+  let orderedIndex = 0;
+  for (let i = 0; i < slots.length; i += 1) {
+    if (!slots[i]) {
+      slots[i] = ordered[orderedIndex] ?? null;
+      orderedIndex += 1;
+    }
+  }
+
+  return slots.filter((bucket): bucket is typeof withCentroids[number] => bucket !== null);
 }
 
 function slotDistance(
@@ -655,11 +744,18 @@ export function groupActivitiesByDay({
     )
   );
 
-  return buckets.map((bucket, index) => ({
+  const orderedBuckets = orderDayBucketsByProximity(
+    buckets.map((bucket, index) => ({
+      activities: bucket,
+      originalIndex: index,
+    }))
+  );
+
+  return orderedBuckets.map((bucket, index) => ({
     dayNumber: index + 1,
     date: dates[index],
-    theme: generateDayTheme(bucket),
-    activityIds: bucket.map((activity) => activity.id),
+    theme: generateDayTheme(bucket.activities),
+    activityIds: bucket.activities.map((activity) => activity.id),
   }));
 }
 
