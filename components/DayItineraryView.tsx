@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { computeRoutes } from "@/lib/api-client";
 import type {
   GroupedDay,
   SuggestedActivity,
@@ -50,6 +51,71 @@ export function DayItineraryView({
   const [movingActivity, setMovingActivity] = useState<{ id: string; fromDay: number } | null>(null);
   const [collapsedActivityCards, setCollapsedActivityCards] = useState<Record<string, boolean>>({});
   const [collapsedRestaurantCards, setCollapsedRestaurantCards] = useState<Record<string, boolean>>({});
+  const [commuteMinutesByLeg, setCommuteMinutesByLeg] = useState<Record<string, number>>({});
+
+  const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
+    `${dayNumber}:${fromId}->${toId}`;
+
+  const sortActivitiesForTimeline = useCallback((activities: SuggestedActivity[]) => {
+    const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
+      morning: 0,
+      afternoon: 1,
+      evening: 2,
+      any: 3,
+    };
+    return [...activities].sort((a, b) => score[a.bestTimeOfDay] - score[b.bestTimeOfDay]);
+  }, []);
+
+  const commuteLegs = useMemo(() => {
+    const legs: Array<{
+      id: string;
+      origin: { lat: number; lng: number };
+      destination: { lat: number; lng: number };
+    }> = [];
+    groupedDays.forEach((day) => {
+      const sorted = sortActivitiesForTimeline(day.activities);
+      sorted.forEach((activity, index) => {
+        const next = sorted[index + 1];
+        if (!next?.coordinates || !activity.coordinates) return;
+        legs.push({
+          id: buildLegId(day.dayNumber, activity.id, next.id),
+          origin: activity.coordinates,
+          destination: next.coordinates,
+        });
+      });
+    });
+    return legs;
+  }, [groupedDays, sortActivitiesForTimeline]);
+
+  const commuteLegsToFetch = useMemo(
+    () => commuteLegs.filter((leg) => commuteMinutesByLeg[leg.id] == null),
+    [commuteLegs, commuteMinutesByLeg]
+  );
+
+  useEffect(() => {
+    if (commuteLegsToFetch.length === 0) return;
+    let isActive = true;
+    computeRoutes(commuteLegsToFetch)
+      .then((result) => {
+        if (!isActive || !result?.legs) return;
+        const updates: Record<string, number> = {};
+        result.legs.forEach((leg) => {
+          if (leg.durationSeconds != null) {
+            updates[leg.id] = Math.max(5, Math.round(leg.durationSeconds / 60));
+          }
+        });
+        if (Object.keys(updates).length > 0) {
+          setCommuteMinutesByLeg((prev) => ({ ...prev, ...updates }));
+        }
+      })
+      .catch(() => {
+        // Ignore route API failures and fall back to local estimates.
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [commuteLegsToFetch]);
 
   useEffect(() => {
     const nextCollapsedActivities: Record<string, boolean> = {};
@@ -368,19 +434,18 @@ export function DayItineraryView({
   const DayTimeline = ({ day }: { day: GroupedDay }) => {
     const availableVisitHours = 8;
     const lunchHours = 1;
-    const totalCommuteHoursEstimate = Math.max(day.activities.length - 1, 0) * (25 / 60);
+    const sortedActivities = sortActivitiesForTimeline(day.activities);
+    const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
+      const next = sortedActivities[index + 1];
+      if (!next) return sum;
+      const legId = buildLegId(day.dayNumber, activity.id, next.id);
+      const commuteMinutes =
+        commuteMinutesByLeg[legId] ?? estimateCommuteMinutes(activity.coordinates, next.coordinates);
+      return sum + commuteMinutes;
+    }, 0);
+    const totalCommuteHoursEstimate = totalCommuteMinutesEstimate / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 2);
     const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
-
-    const sortedActivities = [...day.activities].sort((a, b) => {
-      const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
-        morning: 0,
-        afternoon: 1,
-        evening: 2,
-        any: 3,
-      };
-      return score[a.bestTimeOfDay] - score[b.bestTimeOfDay];
-    });
 
     const timelineRows: Array<{
       label: string;
@@ -409,7 +474,9 @@ export function DayItineraryView({
 
       const next = sortedActivities[index + 1];
       if (next) {
-        const commuteMin = estimateCommuteMinutes(activity.coordinates, next.coordinates);
+        const legId = buildLegId(day.dayNumber, activity.id, next.id);
+        const commuteMin =
+          commuteMinutesByLeg[legId] ?? estimateCommuteMinutes(activity.coordinates, next.coordinates);
         timelineRows.push({
           label: "Commute",
           detail: `Approx ${commuteMin} min`,

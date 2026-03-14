@@ -47,6 +47,33 @@ export async function getConfig(): Promise<{ googleMapsApiKey?: string }> {
   }
 }
 
+// Routes API proxy (no live traffic)
+export interface RouteLegRequest {
+  id: string;
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  intermediates?: Array<{ lat: number; lng: number }>;
+  travelMode?: "DRIVE" | "WALK" | "BICYCLE" | "TRANSIT" | "TWO_WHEELER" | "TRAVEL_MODE_UNSPECIFIED";
+  includePolyline?: boolean;
+}
+
+export interface RouteLegResult {
+  id: string;
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+  polyline?: string | null;
+  error?: string;
+}
+
+export async function computeRoutes(
+  legs: RouteLegRequest[]
+): Promise<{ success: boolean; legs: RouteLegResult[] }> {
+  return fetchJson(`${BASE_URL}/routes`, {
+    method: "POST",
+    body: JSON.stringify({ legs }),
+  });
+}
+
 // ==================== SESSION-BASED WORKFLOW API ====================
 
 export interface SessionResponse {

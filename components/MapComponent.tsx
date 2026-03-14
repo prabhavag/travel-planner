@@ -7,8 +7,9 @@ import {
   Marker,
   InfoWindow,
   OverlayView,
+  Polyline,
 } from "@react-google-maps/api";
-import { getConfig } from "@/lib/api-client";
+import { computeRoutes, getConfig } from "@/lib/api-client";
 import type {
   SuggestedActivity,
   GroupedDay,
@@ -457,6 +458,8 @@ function GoogleMapContent({
   const [hoveredMarker, setHoveredMarker] = useState<Location | null>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
   const [destinationCenter, setDestinationCenter] = useState<Coordinates | null>(null);
+  const [routeOverlays, setRouteOverlays] = useState<Record<string, { polyline?: string | null }>>({});
+  const [dayRouteOverlays, setDayRouteOverlays] = useState<Record<string, { polyline?: string | null }>>({});
 
   // Refs to prevent map from resetting position on every re-render
   const boundsSetRef = useRef(false);
@@ -464,7 +467,161 @@ function GoogleMapContent({
 
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: apiKey,
+    libraries: ["geometry"],
   });
+
+  const sortLocationsForDay = useCallback(
+    (day: number) => {
+      const score: Record<"morning" | "afternoon" | "evening" | "any", number> = {
+        morning: 0,
+        afternoon: 1,
+        evening: 2,
+        any: 3,
+      };
+      return locations
+        .filter((loc) => loc.mode === "grouped" && loc.day === day)
+        .sort((a, b) => {
+          const aScore = score[(a.slot as keyof typeof score) || "any"] ?? 3;
+          const bScore = score[(b.slot as keyof typeof score) || "any"] ?? 3;
+          if (aScore !== bScore) return aScore - bScore;
+          return a.actIndex - b.actIndex;
+        });
+    },
+    [locations]
+  );
+
+  const dayRouteLegs = useMemo(() => {
+    if (!isGroupedMode) return [];
+    const legs: Array<{
+      id: string;
+      day: number;
+      origin: Coordinates;
+      destination: Coordinates;
+    }> = [];
+
+    const days = Array.from(new Set(locations.filter((loc) => loc.mode === "grouped").map((loc) => loc.day)));
+    days.forEach((day) => {
+      const ordered = sortLocationsForDay(day).filter((loc) => Number.isFinite(loc.lat) && Number.isFinite(loc.lng));
+      ordered.forEach((current, idx) => {
+        const next = ordered[idx + 1];
+        if (!next) return;
+        legs.push({
+          id: `day-${day}-${current.activityId || current.name}-${next.activityId || next.name}`,
+          day,
+          origin: { lat: current.lat, lng: current.lng },
+          destination: { lat: next.lat, lng: next.lng },
+        });
+      });
+    });
+
+    return legs;
+  }, [isGroupedMode, locations, sortLocationsForDay]);
+
+  const dayRouteLegsToFetch = useMemo(
+    () => dayRouteLegs.filter((leg) => !dayRouteOverlays[leg.id]),
+    [dayRouteLegs, dayRouteOverlays]
+  );
+
+  useEffect(() => {
+    if (dayRouteLegsToFetch.length === 0) return;
+    let isActive = true;
+
+    const chunks: typeof dayRouteLegsToFetch[] = [];
+    for (let i = 0; i < dayRouteLegsToFetch.length; i += 25) {
+      chunks.push(dayRouteLegsToFetch.slice(i, i + 25));
+    }
+
+    const run = async () => {
+      for (const chunk of chunks) {
+        if (!isActive) return;
+        try {
+          const result = await computeRoutes(
+            chunk.map((leg) => ({
+              id: leg.id,
+              origin: leg.origin,
+              destination: leg.destination,
+              travelMode: "DRIVE",
+              includePolyline: true,
+            }))
+          );
+          if (!result?.legs) continue;
+          const updates: Record<string, { polyline?: string | null }> = {};
+          result.legs.forEach((leg) => {
+            updates[leg.id] = { polyline: leg.polyline ?? null };
+          });
+          if (Object.keys(updates).length > 0) {
+            setDayRouteOverlays((prev) => ({ ...prev, ...updates }));
+          }
+        } catch {
+          // Ignore route API failures and fall back to no polylines.
+        }
+      }
+    };
+
+    run();
+
+    return () => {
+      isActive = false;
+    };
+  }, [dayRouteLegsToFetch]);
+
+  const routeLegsToFetch = useMemo(() => {
+    if (!isGroupedMode) return [];
+    return routeSegments
+      .filter((segment) => segment.points.length >= 2 && !routeOverlays[segment.id])
+      .map((segment) => ({
+        id: segment.id,
+        origin: segment.points[0],
+        destination: segment.points[segment.points.length - 1],
+        intermediates: segment.points.length > 2 ? segment.points.slice(1, -1) : undefined,
+        travelMode: "DRIVE" as const,
+        includePolyline: true,
+      }));
+  }, [routeSegments, routeOverlays, isGroupedMode]);
+
+  useEffect(() => {
+    if (routeLegsToFetch.length === 0) return;
+    let isActive = true;
+
+    computeRoutes(routeLegsToFetch)
+      .then((result) => {
+        if (!isActive || !result?.legs) return;
+        const updates: Record<string, { polyline?: string | null }> = {};
+        result.legs.forEach((leg) => {
+          updates[leg.id] = { polyline: leg.polyline ?? null };
+        });
+        setRouteOverlays((prev) => ({ ...prev, ...updates }));
+      })
+      .catch(() => {
+        // Ignore route API failures and fall back to existing points.
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [routeLegsToFetch]);
+
+  const decodedRoutePaths = useMemo(() => {
+    if (!isLoaded || !window.google?.maps?.geometry?.encoding) return {};
+    const decoded: Record<string, google.maps.LatLngLiteral[]> = {};
+    Object.entries(routeOverlays).forEach(([id, overlay]) => {
+      if (!overlay.polyline) return;
+      const path = window.google.maps.geometry.encoding.decodePath(overlay.polyline);
+      decoded[id] = path.map((point) => ({ lat: point.lat(), lng: point.lng() }));
+    });
+    return decoded;
+  }, [isLoaded, routeOverlays]);
+
+  const decodedDayRoutePaths = useMemo(() => {
+    if (!isLoaded || !window.google?.maps?.geometry?.encoding) return {};
+    const decoded: Record<string, google.maps.LatLngLiteral[]> = {};
+    Object.entries(dayRouteOverlays).forEach(([id, overlay]) => {
+      if (!overlay.polyline) return;
+      const path = window.google.maps.geometry.encoding.decodePath(overlay.polyline);
+      decoded[id] = path.map((point) => ({ lat: point.lat(), lng: point.lng() }));
+    });
+    return decoded;
+  }, [isLoaded, dayRouteOverlays]);
 
   // Geocode destination if no locations available
   useEffect(() => {
@@ -641,6 +798,42 @@ function GoogleMapContent({
         fullscreenControl: true,
       }}
     >
+      {isGroupedMode
+        ? dayRouteLegs.map((leg) => {
+            const path = decodedDayRoutePaths[leg.id];
+            if (!path || path.length < 2) return null;
+            return (
+              <Polyline
+                key={`day-route-${leg.id}`}
+                path={path}
+                options={{
+                  strokeColor: getDayColor(leg.day),
+                  strokeOpacity: 0.6,
+                  strokeWeight: 3,
+                }}
+              />
+            );
+          })
+        : null}
+
+      {isGroupedMode
+        ? routeSegments.map((segment) => {
+            const decodedPath = decodedRoutePaths[segment.id];
+            if (!decodedPath || decodedPath.length < 2) return null;
+            const strokeColor = segment.day ? getDayColor(segment.day) : "#2563EB";
+            return (
+              <Polyline
+                key={`route-${segment.id}`}
+                path={decodedPath}
+                options={{
+                  strokeColor,
+                  strokeOpacity: 0.75,
+                  strokeWeight: 4,
+                }}
+              />
+            );
+          })
+        : null}
       {/* Route waypoints with segmented numbering, e.g. 3.1, 3.2 */}
       {routeSegments.flatMap((path) =>
         path.waypoints.map((waypoint, index) => {
