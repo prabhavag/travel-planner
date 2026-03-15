@@ -315,25 +315,66 @@ function activityDistanceProxy(a: SuggestedActivity, b: SuggestedActivity): numb
   return result;
 }
 
-function sortActivitiesForDay(
+function getPermutations<T>(array: T[]): T[][] {
+  if (array.length <= 1) return [array];
+  const result: T[][] = [];
+  for (let i = 0; i < array.length; i++) {
+    const current = array[i];
+    const remaining = [...array.slice(0, i), ...array.slice(i + 1)];
+    const perms = getPermutations(remaining);
+    for (const perm of perms) {
+      result.push([current, ...perm]);
+    }
+  }
+  return result;
+}
+
+function buildOptimalDayRoute(
   activities: SuggestedActivity[],
   preparedMap: Map<string, PreparedActivity>
 ): SuggestedActivity[] {
-  return [...activities].sort((a, b) => {
-    const timeDelta = TIME_ORDER[a.bestTimeOfDay] - TIME_ORDER[b.bestTimeOfDay];
-    if (timeDelta !== 0) return timeDelta;
+  if (activities.length <= 1) return [...activities];
 
-    const durationDelta = (preparedMap.get(b.id)?.durationHours ?? 0) - (preparedMap.get(a.id)?.durationHours ?? 0);
-    if (durationDelta !== 0) return durationDelta;
+  if (activities.length <= 6) {
+    const perms = getPermutations(activities);
+    let bestCost = Number.POSITIVE_INFINITY;
+    let bestRoute = [...activities];
 
-    return a.name.localeCompare(b.name);
-  });
-}
+    for (const route of perms) {
+      let cost = 0;
+      let currentHour = 0;
 
-function buildCommuteOrderedActivities(
-  activities: SuggestedActivity[]
-): SuggestedActivity[] {
-  if (activities.length <= 2) return [...activities];
+      for (let i = 0; i < route.length; i++) {
+        const activity = route[i];
+
+        if (i > 0) {
+          cost += activityDistanceProxy(route[i - 1], activity) * COST_WEIGHTS.commute;
+        }
+
+        const duration = preparedMap.get(activity.id)?.durationHours ?? 0;
+        const midHour = currentHour + duration / 2;
+        const assignedSlot = slotForHour(midHour);
+        if (activity.bestTimeOfDay !== "any") {
+          cost += slotDistance(activity.bestTimeOfDay, assignedSlot) * duration * COST_WEIGHTS.slotMismatch;
+        }
+
+        currentHour += duration;
+      }
+
+      let tieBreaker = 0;
+      for (let i = 0; i < route.length; i++) {
+        tieBreaker += (TIME_ORDER[route[i].bestTimeOfDay] || 0) * 1e-4 * i;
+      }
+
+      const totalCost = cost + tieBreaker;
+
+      if (totalCost < bestCost) {
+        bestCost = totalCost;
+        bestRoute = route;
+      }
+    }
+    return bestRoute;
+  }
 
   let bestOrder: SuggestedActivity[] = [...activities];
   let bestDistance = Number.POSITIVE_INFINITY;
@@ -388,10 +429,11 @@ function computeDayCommuteProxy(
   day: WorkingDay,
   preparedMap: Map<string, PreparedActivity>
 ): number {
-  const activities = buildCommuteOrderedActivities(
+  const activities = buildOptimalDayRoute(
     day.activityIds
       .map((id) => preparedMap.get(id)?.activity)
       .filter((activity): activity is SuggestedActivity => activity !== undefined),
+    preparedMap
   );
 
   let commuteProxy = 0;
@@ -410,7 +452,7 @@ function computeDayBaseCost(
     return targetHours * COST_WEIGHTS.balance;
   }
 
-  const activities = sortActivitiesForDay(
+  const activities = buildOptimalDayRoute(
     day.activityIds
       .map((id) => preparedMap.get(id)?.activity)
       .filter((activity): activity is SuggestedActivity => activity !== undefined),
@@ -421,7 +463,6 @@ function computeDayBaseCost(
   const overflow = Math.max(0, totalHours - MAX_DAY_HOURS);
 
   const commuteProxy = computeDayCommuteProxy(day, preparedMap);
-  const commuteOrderedActivities = buildCommuteOrderedActivities(activities);
 
   const uniqueTypes = new Set(activities.map((activity) => activity.type.trim().toLowerCase())).size;
   const varietyPenalty = activities.length > 1 ? (activities.length - uniqueTypes) / activities.length : 0;
@@ -443,7 +484,7 @@ function computeDayBaseCost(
 
   let slotMismatchPenalty = 0;
   let currentHour = 0;
-  for (const activity of commuteOrderedActivities) {
+  for (const activity of activities) {
     const duration = preparedMap.get(activity.id)?.durationHours ?? 0;
     const midHour = currentHour + duration / 2;
     const assignedSlot = slotForHour(midHour);
@@ -759,7 +800,7 @@ export function groupActivitiesByDay({
   optimizeByMovesAndSwaps(days, preparedMap);
 
   const buckets = days.map((day) =>
-    sortActivitiesForDay(
+    buildOptimalDayRoute(
       day.activityIds
         .map((id) => preparedMap.get(id)?.activity)
         .filter((activity): activity is SuggestedActivity => activity !== undefined),
