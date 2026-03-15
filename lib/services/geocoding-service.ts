@@ -43,7 +43,7 @@ class GeocodingService {
         const primary = response.data.results[0];
         const location = primary.geometry.location;
         const countryComponent = Array.isArray(primary.address_components)
-          ? primary.address_components.find((component) => component.types?.includes("country"))
+          ? primary.address_components.find((component) => (component.types as string[])?.includes("country"))
           : undefined;
         return {
           location: { lat: location.lat, lng: location.lng },

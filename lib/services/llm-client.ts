@@ -1691,11 +1691,11 @@ class LLMClient {
             destinationCountryName: destinationCountryName || null,
             selected: preferredPlace
               ? {
-                  name: preferredPlace.name,
-                  vicinity: preferredPlace.vicinity || null,
-                  place_id: preferredPlace.place_id || null,
-                  location: preferredPlace.location || null,
-                }
+                name: preferredPlace.name,
+                vicinity: preferredPlace.vicinity || null,
+                place_id: preferredPlace.place_id || null,
+                location: preferredPlace.location || null,
+              }
               : null,
             candidateCount: places.length,
           });
@@ -2546,11 +2546,13 @@ class LLMClient {
     groupedDays,
     selectedAccommodation,
     accommodationOptions,
+    verifiedLodgingAreas,
   }: {
     tripInfo: TripInfo;
     groupedDays: GroupedDay[];
     selectedAccommodation?: AccommodationOption | null;
     accommodationOptions?: AccommodationOption[];
+    verifiedLodgingAreas?: Record<number, string[]>;
   }): Promise<{ success: boolean; nightStays: Array<{ dayNumber: number; candidates: NightStay[] }> }> {
     const messages: Array<{ role: "system" | "user"; content: string }> = [
       { role: "system", content: SYSTEM_PROMPTS.NIGHT_STAY_PLANNING },
@@ -2561,6 +2563,7 @@ class LLMClient {
       .map((day) => ({
         dayNumber: day.dayNumber,
         date: day.date,
+        verifiedLodgingAreas: verifiedLodgingAreas?.[day.dayNumber] || null,
         activities: day.activities.map((activity) => ({
           name: activity.name,
           neighborhood: activity.neighborhood ?? null,
@@ -2570,10 +2573,10 @@ class LLMClient {
 
     const availabilitySummary = Array.isArray(accommodationOptions) && accommodationOptions.length > 0
       ? accommodationOptions.reduce<Record<string, number>>((acc, option) => {
-          const key = option.neighborhood?.trim() || "Unspecified area";
-          acc[key] = (acc[key] || 0) + 1;
-          return acc;
-        }, {})
+        const key = option.neighborhood?.trim() || "Unspecified area";
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {})
       : null;
 
     messages.push({

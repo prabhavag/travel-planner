@@ -381,8 +381,14 @@ export function DayGroupingView({
         ? estimateCommuteMinutes(getCommutePoint(lastActivity), endStayCoordinates)
         : 0;
     const totalCommuteHoursEstimate = (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
-    const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 2);
+    const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
     const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
+    const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
+    const showFreeSlotNotice = freeActivityHours >= 0.75;
+    const scaleFactor =
+      totalRequestedHours > 0 && totalRequestedHours > remainingForActivities && remainingForActivities > 0
+        ? remainingForActivities / totalRequestedHours
+        : 1;
     let scheduledActivityMinutes = 0;
     let scheduledCommuteMinutes = 0;
 
@@ -446,8 +452,7 @@ export function DayGroupingView({
 
     sortedActivities.forEach((activity, index) => {
       const requestedHours = parseEstimatedHours(activity.estimatedDuration);
-      const allocatedHours =
-        totalRequestedHours > 0 ? Math.max(0.75, (requestedHours / totalRequestedHours) * remainingForActivities) : 1.5;
+      const allocatedHours = Math.max(0.75, requestedHours * scaleFactor);
       const activityMinutes = Math.max(45, roundToQuarter(allocatedHours * 60 + 15));
       const activityStart = roundToQuarter(cursorMinutes);
       const activityEnd = activityStart + activityMinutes;
@@ -584,6 +589,11 @@ export function DayGroupingView({
         <div className="rounded-lg border border-sky-100 bg-sky-50/40 p-2 text-[11px] text-sky-800">
           Timeline is approximate. Daily budget: {formatHourLabel(availableVisitHours)}
         </div>
+        {showFreeSlotNotice ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-2 text-[11px] text-emerald-900">
+            Open slot: ~{formatHourLabel(freeActivityHours)} unplanned. Consider adding an activity or moving one here.
+          </div>
+        ) : null}
         {isOverloaded ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2 text-[11px] text-amber-900">
             Overloaded day: ~{formatHourLabel(totalPlannedHours)} of activity + drive. Consider moving an activity.

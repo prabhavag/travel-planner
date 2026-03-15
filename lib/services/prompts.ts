@@ -144,6 +144,7 @@ RESPONSE FORMAT (JSON):
 
 RULES:
 - Use the day's activities, neighborhoods, and centroid hints to choose a sensible area.
+- If verifiedLodgingAreas is provided for a day, you MUST select your candidate labels exclusively from that list.
 - Provide 2-3 candidate labels per day when possible.
 - Labels must be short and location-like (e.g., "Old Town", "Waterfront", "Downtown").
 - If an accommodation is already selected, use that area for all days.

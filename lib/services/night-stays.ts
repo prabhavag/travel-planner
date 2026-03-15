@@ -8,6 +8,7 @@ import type {
 import { computeActivitiesCentroid } from "@/lib/services/day-grouping";
 import { getLLMClient } from "@/lib/services/llm-client";
 import { getGeocodingService } from "@/lib/services/geocoding-service";
+import { getPlacesClient } from "@/lib/services/places-client";
 
 type NightStayAssignment = {
   dayGroups: DayGroup[];
@@ -154,14 +155,40 @@ export async function assignNightStays({
   const fallbackLabel = buildDefaultStayLabel({ tripInfo, selectedAccommodation });
   let nightStaySuggestions: Array<{ dayNumber: number; candidates: NightStay[] }> = [];
 
+  const verifiedLodgingAreas: Record<number, string[]> = {};
+  const placesClient = getPlacesClient();
+
   if (!selectedAccommodation) {
     try {
+      // Find verified lodging areas for each day by querying Places API around the day's centroid
+      for (const day of groupedDays) {
+        const centroid = computeStayCentroid(day.activities) ?? computeActivitiesCentroid(day.activities);
+        if (centroid) {
+          const places = await placesClient.searchPlaces("hotel", centroid, 15000, "lodging");
+          const areas = new Set<string>();
+          for (const place of places) {
+            // Use vicinity (which is often the town/city for lodging near searches) or name
+            if (place.vicinity) {
+              // Vicinity for lodging is often "City" or "Street, City". Try to extract the general area.
+              const parts = place.vicinity.split(",");
+              areas.add(parts[parts.length - 1].trim());
+            } else if (place.name) {
+              areas.add(place.name);
+            }
+          }
+          if (areas.size > 0) {
+            verifiedLodgingAreas[day.dayNumber] = Array.from(areas).slice(0, 5);
+          }
+        }
+      }
+
       const llmClient = getLLMClient();
       const response = await llmClient.determineNightStays({
         tripInfo,
         groupedDays,
         selectedAccommodation: null,
         accommodationOptions,
+        verifiedLodgingAreas,
       });
       if (response.success) {
         nightStaySuggestions = response.nightStays;
