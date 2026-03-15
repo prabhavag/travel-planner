@@ -38,8 +38,8 @@ const SLOT_CAPACITY_HOURS: Record<Exclude<SuggestedActivity["bestTimeOfDay"], "a
 const COST_WEIGHTS = {
   overflow: 50,
   overflowQuadratic: 8,
-  commute: 1.2,
-  commuteImbalance: 1.2,
+  commute: 3.5,
+  commuteImbalance: 2.5,
   variety: 3,
   slotOverflow: 8,
   slotMismatch: 5,
@@ -218,40 +218,59 @@ function orderDayBucketsByProximity(buckets: DayBucket[]): DayBucket[] {
     return [...withCentroids].sort((a, b) => a.originalIndex - b.originalIndex);
   }
 
-  centroidDays.sort((a, b) => a.originalIndex - b.originalIndex);
-  const used = new Set<number>();
-  const ordered: typeof centroidDays = [];
+  let bestOrdered: typeof centroidDays = [];
+  let bestDistance = Number.POSITIVE_INFINITY;
 
-  ordered.push(centroidDays[0]);
-  used.add(centroidDays[0].originalIndex);
+  for (let startIdx = 0; startIdx < centroidDays.length; startIdx += 1) {
+    const used = new Set<number>();
+    const ordered: typeof centroidDays = [];
 
-  while (ordered.length < centroidDays.length) {
-    const current = ordered[ordered.length - 1];
-    let bestCandidate: typeof centroidDays[number] | null = null;
-    let bestDistance = Number.POSITIVE_INFINITY;
+    ordered.push(centroidDays[startIdx]);
+    used.add(centroidDays[startIdx].originalIndex);
 
-    for (const candidate of centroidDays) {
-      if (used.has(candidate.originalIndex)) continue;
-      const distance = haversineDistanceKm(current.centroid, candidate.centroid);
-      if (distance < bestDistance - 1e-6) {
-        bestDistance = distance;
-        bestCandidate = candidate;
-      } else if (Math.abs(distance - bestDistance) <= 1e-6 && bestCandidate) {
-        if (candidate.originalIndex < bestCandidate.originalIndex) {
+    while (ordered.length < centroidDays.length) {
+      const current = ordered[ordered.length - 1];
+      let bestCandidate: typeof centroidDays[number] | null = null;
+      let minDistance = Number.POSITIVE_INFINITY;
+
+      for (const candidate of centroidDays) {
+        if (used.has(candidate.originalIndex)) continue;
+        const distance = haversineDistanceKm(current.centroid, candidate.centroid);
+
+        if (distance < minDistance - 1e-6) {
+          minDistance = distance;
           bestCandidate = candidate;
+        } else if (Math.abs(distance - minDistance) <= 1e-6 && bestCandidate) {
+          if (candidate.originalIndex < bestCandidate.originalIndex) {
+            bestCandidate = candidate;
+          }
         }
+      }
+
+      if (bestCandidate) {
+        ordered.push(bestCandidate);
+        used.add(bestCandidate.originalIndex);
+      } else {
+        break;
       }
     }
 
-    if (!bestCandidate) break;
-    ordered.push(bestCandidate);
-    used.add(bestCandidate.originalIndex);
-  }
+    let totalDistance = 0;
+    for (let i = 1; i < ordered.length; i += 1) {
+      totalDistance += haversineDistanceKm(ordered[i - 1].centroid, ordered[i].centroid);
+    }
 
-  if (ordered.length < centroidDays.length) {
-    const remaining = centroidDays.filter((bucket) => !used.has(bucket.originalIndex));
-    remaining.sort((a, b) => a.originalIndex - b.originalIndex);
-    ordered.push(...remaining);
+    // Add small penalty for original index to break ties
+    let tieBreaker = 0;
+    for (let i = 0; i < ordered.length; i += 1) {
+      tieBreaker += ordered[i].originalIndex * Math.pow(0.1, i);
+    }
+    const finalScore = totalDistance + tieBreaker * 1e-4;
+
+    if (finalScore < bestDistance) {
+      bestDistance = finalScore;
+      bestOrdered = ordered;
+    }
   }
 
   const slots: Array<typeof withCentroids[number] | null> = Array.from({ length: buckets.length }, () => null);
@@ -264,7 +283,7 @@ function orderDayBucketsByProximity(buckets: DayBucket[]): DayBucket[] {
   let orderedIndex = 0;
   for (let i = 0; i < slots.length; i += 1) {
     if (!slots[i]) {
-      slots[i] = ordered[orderedIndex] ?? null;
+      slots[i] = bestOrdered[orderedIndex] ?? null;
       orderedIndex += 1;
     }
   }
