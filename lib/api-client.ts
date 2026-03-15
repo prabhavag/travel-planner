@@ -1,3 +1,5 @@
+import type { TimelineAnalysisRequest, TimelineAnalysisResponse } from "@/lib/timeline";
+
 // API client for frontend - uses Next.js API routes
 
 const BASE_URL = "/api";
@@ -140,21 +142,21 @@ export type RemovableCardType = "research_option" | "restaurant" | "accommodatio
 
 export interface ToolAction {
   tool:
-    | "select_activities"
-    | "adjust_day_groups"
-    | "confirm_day_grouping"
-    | "get_restaurant_suggestions"
-    | "set_meal_preferences"
-    | "review_patch_grouped_days"
-    | "finalize"
-    | "select_accommodation"
-    | "select_flight"
-    | "skip_accommodation"
-    | "skip_flight"
-    | "search_accommodation"
-    | "search_flights"
-    | "refresh_accommodation_search"
-    | "refresh_flight_search";
+  | "select_activities"
+  | "adjust_day_groups"
+  | "confirm_day_grouping"
+  | "get_restaurant_suggestions"
+  | "set_meal_preferences"
+  | "review_patch_grouped_days"
+  | "finalize"
+  | "select_accommodation"
+  | "select_flight"
+  | "skip_accommodation"
+  | "skip_flight"
+  | "search_accommodation"
+  | "search_flights"
+  | "refresh_accommodation_search"
+  | "refresh_flight_search";
   input: Record<string, unknown>;
 }
 
@@ -164,11 +166,11 @@ export interface LoopResult {
   actions: ToolAction[];
   proposedTransition?: string;
   stopReason:
-    | "completed_stage"
-    | "needs_user_input"
-    | "tool_error_recovered"
-    | "low_confidence_noop"
-    | "terminal";
+  | "completed_stage"
+  | "needs_user_input"
+  | "tool_error_recovered"
+  | "low_confidence_noop"
+  | "terminal";
 }
 
 export interface TripInfo {
@@ -178,6 +180,8 @@ export interface TripInfo {
   endDate: string | null;
   durationDays: number | null;
   preferences: string[];
+  foodPreferences: string[];
+  visitedDestinations: string[];
   activityLevel: string;
   travelers: number;
   budget: string | null;
@@ -479,6 +483,15 @@ export async function answerResearchQuestions(
 }
 
 // ==================== NEW ACTIVITY-FIRST FLOW API ====================
+
+export async function analyzeTimeline(
+  payload: TimelineAnalysisRequest
+): Promise<TimelineAnalysisResponse> {
+  return fetchJson(`${BASE_URL}/analyze-timeline`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
 
 export interface SuggestedActivity {
   id: string;

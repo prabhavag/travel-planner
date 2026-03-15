@@ -23,6 +23,8 @@ export const TripInfoSchema = z.object({
   endDate: z.string().nullable(),
   durationDays: z.number().nullable(),
   preferences: z.array(z.string()).default([]),
+  foodPreferences: z.array(z.string()).default([]),
+  visitedDestinations: z.array(z.string()).default([]),
   activityLevel: z.string().default("moderate"),
   travelers: z.number().default(1),
   budget: z.string().nullable(),

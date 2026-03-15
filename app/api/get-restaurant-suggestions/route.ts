@@ -165,7 +165,11 @@ export async function POST(request: NextRequest) {
     // Get currency from session activities
     const currency = getCurrencyFromSession(session);
 
-    const restaurantQueries = buildRestaurantQueries(session.tripInfo.preferences || []);
+    const restaurantQueries = buildRestaurantQueries(
+      session.tripInfo.preferences || [],
+      session.tripInfo.foodPreferences || [],
+      session.tripInfo.destination
+    );
     const placeGroups = await Promise.all(
       restaurantQueries.map((query) =>
         searchRestaurantsWithFallbacks(query, allCoordinates, centroid, session.tripInfo.destination, placesClient)
@@ -232,7 +236,8 @@ export async function POST(request: NextRequest) {
       selectedRestaurantIds: [],
     });
 
-    const hasPreferenceContext = (session.tripInfo.preferences || []).length > 0;
+    const hasPreferenceContext =
+      (session.tripInfo.preferences || []).length > 0 || (session.tripInfo.foodPreferences || []).length > 0;
     const message = hasPreferenceContext
       ? `Found ${restaurants.length} restaurants near your activities, using your stated preferences as search context. Select the ones you'd like to add to your itinerary!`
       : `Found ${restaurants.length} restaurants near your activities. Select the ones you'd like to add to your itinerary!`;

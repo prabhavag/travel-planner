@@ -536,7 +536,11 @@ async function executeAction({
     const centroid = getCentroid(allCoordinates);
     const currency = getCurrencyFromSession(session);
 
-    const restaurantQueries = buildRestaurantQueries(session.tripInfo.preferences || []);
+    const restaurantQueries = buildRestaurantQueries(
+      session.tripInfo.preferences || [],
+      session.tripInfo.foodPreferences || [],
+      session.tripInfo.destination
+    );
     const placeGroups = await Promise.all(
       restaurantQueries.map((query) =>
         searchRestaurantsWithFallbacks(query, allCoordinates, centroid, session.tripInfo.destination, placesClient),
@@ -602,7 +606,8 @@ async function executeAction({
 
     working.restaurantSuggestions = restaurants;
     working.selectedRestaurantIds = [];
-    const hasPreferenceContext = (session.tripInfo.preferences || []).length > 0;
+    const hasPreferenceContext =
+      (session.tripInfo.preferences || []).length > 0 || (session.tripInfo.foodPreferences || []).length > 0;
     if (hasPreferenceContext) {
       return `Found ${restaurants.length} restaurants near your activities, using your stated preferences as search context. Select the ones you'd like to add to your itinerary!`;
     }
@@ -782,6 +787,30 @@ function inferProceedFromConfirmationContext({
     .find((entry) => entry.role === "assistant")?.content;
 
   return Boolean(lastAssistantMessage && proceedPromptRegex.test(lastAssistantMessage));
+}
+
+function extractVisitedDestinationsFromUserMessage(userMessage: string): string[] {
+  const match = userMessage.match(
+    /\b(?:already visited|have already visited|have visited|i visited|have been to|been to)\b([\s\S]+)/i
+  );
+  if (!match?.[1]) return [];
+
+  const trimmedSegment = match[1]
+    .split(/\b(?:can you|could you|would you|why does|why did|what about|but|so)\b/i)[0]
+    .replace(/[?.!]+$/, "")
+    .trim();
+
+  if (!trimmedSegment) return [];
+
+  return Array.from(
+    new Set(
+      trimmedSegment
+        .split(/\s*(?:,|\/|\band\b)\s*/i)
+        .map((part) => part.replace(/^(?:to|the)\s+/i, "").trim())
+        .map((part) => part.replace(/\s+/g, " "))
+        .filter((part) => part.length >= 3)
+    )
+  );
 }
 
 async function runLoop({
@@ -1002,6 +1031,19 @@ async function runInfoGatheringTurn({
     userMessage: request.message,
     conversationHistory: (session.conversationHistory || []).slice(-10),
   });
+  const explicitVisitedDestinations = extractVisitedDestinationsFromUserMessage(request.message);
+  if (explicitVisitedDestinations.length > 0 && result.tripInfo) {
+    result.tripInfo = {
+      ...result.tripInfo,
+      visitedDestinations: Array.from(
+        new Set([
+          ...(session.tripInfo.visitedDestinations || []),
+          ...(result.tripInfo.visitedDestinations || []),
+          ...explicitVisitedDestinations,
+        ])
+      ),
+    };
+  }
 
   const oldDestination = session.tripInfo.destination;
   const newDestination = result.tripInfo?.destination;
@@ -1217,6 +1259,8 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
         endDate: null,
         durationDays: null,
         preferences: [],
+        foodPreferences: [],
+        visitedDestinations: [],
         activityLevel: "moderate",
         travelers: 1,
         budget: null,
@@ -1263,6 +1307,8 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
         endDate: null,
         durationDays: null,
         preferences: [],
+        foodPreferences: [],
+        visitedDestinations: [],
         activityLevel: "moderate",
         travelers: 1,
         budget: null,

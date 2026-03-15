@@ -15,6 +15,7 @@ import type {
   GroupedDay,
   TripResearchBrief,
 } from "@/lib/api-client";
+import type { TimelineMapPoint } from "@/lib/timeline";
 import { Loader2 } from "lucide-react";
 import { getDayColor, SELECTED_COLOR, UNSELECTED_COLOR } from "@/lib/constants";
 
@@ -22,6 +23,20 @@ const containerStyle = {
   width: "100%",
   height: "100%",
 };
+
+const TIMELINE_MAP_STYLES: google.maps.MapTypeStyle[] = [
+  { elementType: "geometry", stylers: [{ color: "#09162a" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#dbe7ff" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#09162a" }] },
+  { featureType: "administrative", elementType: "geometry.stroke", stylers: [{ color: "#5f708a" }] },
+  { featureType: "landscape.natural", elementType: "geometry", stylers: [{ color: "#12344a" }] },
+  { featureType: "poi", elementType: "geometry", stylers: [{ color: "#163a4d" }] },
+  { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#18495b" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#243a53" }] },
+  { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#1a2d42" }] },
+  { featureType: "transit", elementType: "geometry", stylers: [{ color: "#1b3145" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#041433" }] },
+];
 
 // Container style deleted as we are using shared ones if needed, but actually keeping local is fine if not exported.
 // Wait, I should remove the local definitions that are now in constants.ts
@@ -56,7 +71,12 @@ interface Location {
   isSelected?: boolean;
   activityId?: string;
   photoUrl?: string | null;
-  mode: "research" | "suggested" | "grouped" | "legacy";
+  timelineId?: string;
+  timelineKind?: TimelineMapPoint["kind"];
+  timelineVisitCount?: number;
+  timelineTotalDurationMinutes?: number;
+  timelineIdentified?: boolean;
+  mode: "research" | "suggested" | "grouped" | "legacy" | "timeline";
 }
 
 interface RouteSegment {
@@ -82,8 +102,41 @@ interface MapComponentProps {
   selectedActivityIds?: string[];
   groupedDays?: GroupedDay[];
   onActivityClick?: (activityId: string) => void;
+  onGoogleMapsReady?: () => void;
   hoveredActivityId?: string | null;
   highlightedDay?: number | null;
+  timelineLocations?: TimelineMapPoint[];
+}
+
+function formatTimelineDuration(totalMinutes: number): string {
+  if (totalMinutes < 60) return `${Math.max(1, Math.round(totalMinutes))} min`;
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = Math.round(totalMinutes % 60);
+  if (hours < 24) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+}
+
+function buildTimelineDescription(point: TimelineMapPoint): string {
+  const parts = [
+    point.kind === "travel" ? "Travel place" : point.kind === "regional" ? "Regional place" : "Local place",
+    `${point.visitCount} ${point.visitCount === 1 ? "visit" : "visits"}`,
+  ];
+
+  if (point.totalDurationMinutes > 0) {
+    parts.push(`${formatTimelineDuration(point.totalDurationMinutes)} total`);
+  }
+
+  if (!point.identified) {
+    parts.push("unresolved name");
+  }
+
+  return parts.join(" · ");
 }
 
 function isValidCoordinate(value: unknown): boolean {
@@ -133,8 +186,10 @@ export default function MapComponent({
   selectedActivityIds,
   groupedDays,
   onActivityClick,
+  onGoogleMapsReady,
   hoveredActivityId,
   highlightedDay,
+  timelineLocations,
 }: MapComponentProps) {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -301,9 +356,30 @@ export default function MapComponent({
         });
       });
     }
+    // Mode 5: Timeline locations
+    if (locs.length === 0 && timelineLocations && timelineLocations.length > 0) {
+      timelineLocations.forEach((loc, index) => {
+        locs.push({
+          name: loc.name,
+          lat: loc.lat,
+          lng: loc.lng,
+          slot: "any",
+          slotIndex: 0,
+          actIndex: index,
+          day: 0,
+          desc: buildTimelineDescription(loc),
+          timelineId: loc.id,
+          timelineKind: loc.kind,
+          timelineVisitCount: loc.visitCount,
+          timelineTotalDurationMinutes: loc.totalDurationMinutes,
+          timelineIdentified: loc.identified,
+          mode: "timeline",
+        });
+      });
+    }
 
     return locs;
-  }, [tripResearchBrief, researchOptionSelections, suggestedActivities, selectedActivityIds, groupedDays, itinerary]);
+  }, [tripResearchBrief, researchOptionSelections, suggestedActivities, selectedActivityIds, groupedDays, itinerary, timelineLocations]);
 
   const routeSegments = useMemo(() => {
     const segments: RouteSegment[] = [];
@@ -433,9 +509,13 @@ export default function MapComponent({
   const isResearchSelectionMode = Boolean(
     !isGroupedMode && !isActivitySelectionMode && tripResearchBrief && tripResearchBrief.popularOptions.length > 0
   );
+  const isTimelineOnlyMode =
+    locations.length > 0 &&
+    locations.every((location) => location.mode === "timeline") &&
+    routeSegments.length === 0;
 
   return (
-    <div className="h-full w-full min-h-[500px] rounded-xl border border-gray-200 overflow-hidden">
+    <div className="relative h-full w-full min-h-[500px] rounded-xl border border-gray-200 overflow-hidden">
       <GoogleMapContent
         apiKey={apiKey}
         locations={locations}
@@ -445,10 +525,18 @@ export default function MapComponent({
         isGroupedMode={isGroupedMode}
         isResearchSelectionMode={isResearchSelectionMode}
         isActivitySelectionMode={isActivitySelectionMode}
+        isTimelineMode={isTimelineOnlyMode}
         onActivityClick={onActivityClick}
+        onGoogleMapsReady={onGoogleMapsReady}
         hoveredActivityId={hoveredActivityId}
         highlightedDay={highlightedDay}
       />
+      {isTimelineOnlyMode ? (
+        <div className="pointer-events-none absolute bottom-4 left-4 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-white shadow-2xl backdrop-blur">
+          <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-white/65">Visited Places</p>
+          <p className="mt-1 text-2xl font-semibold leading-none">{locations.length}</p>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -462,7 +550,9 @@ interface GoogleMapContentProps {
   isGroupedMode?: boolean;
   isResearchSelectionMode?: boolean;
   isActivitySelectionMode?: boolean;
+  isTimelineMode?: boolean;
   onActivityClick?: (activityId: string) => void;
+  onGoogleMapsReady?: () => void;
   hoveredActivityId?: string | null;
   highlightedDay?: number | null;
 }
@@ -517,7 +607,9 @@ function GoogleMapContent({
   isGroupedMode,
   isResearchSelectionMode,
   isActivitySelectionMode,
+  isTimelineMode,
   onActivityClick,
+  onGoogleMapsReady,
   hoveredActivityId,
   highlightedDay,
 }: GoogleMapContentProps) {
@@ -716,10 +808,13 @@ function GoogleMapContent({
         routeSegments.forEach((path) => {
           path.points.forEach((point) => bounds.extend(point));
         });
-        mapInstance.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 });
+        mapInstance.fitBounds(
+          bounds,
+          isTimelineMode ? { top: 56, right: 28, bottom: 92, left: 28 } : { top: 50, right: 50, bottom: 50, left: 50 }
+        );
       }
     },
-    [locations, routeSegments]
+    [isTimelineMode, locations, routeSegments]
   );
 
   // Reset bounds tracking when locations count changes (new data loaded)
@@ -738,10 +833,10 @@ function GoogleMapContent({
       routeSegments.forEach((path) => {
         path.points.forEach((point) => bounds.extend(point));
       });
-      map.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 });
+      map.fitBounds(bounds, isTimelineMode ? { top: 56, right: 28, bottom: 92, left: 28 } : { top: 50, right: 50, bottom: 50, left: 50 });
       boundsSetRef.current = true;
     }
-  }, [map, locations, routeSegments]);
+  }, [isTimelineMode, map, locations, routeSegments]);
 
   const stayIconUrl = useMemo(() => {
     const svg = `
@@ -761,9 +856,21 @@ function GoogleMapContent({
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg.trim())}`;
   }, []);
 
+  const timelineMarkerUrl = useMemo(() => {
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+        <circle cx="24" cy="24" r="14" fill="#f15946" stroke="#1f1f1f" stroke-width="6" />
+        <circle cx="24" cy="24" r="4.5" fill="#1f1f1f" />
+      </svg>
+    `;
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg.trim())}`;
+  }, []);
+
   // Get marker icon based on day or selection state
   const getMarkerIcon = (loc: Location): google.maps.Symbol | google.maps.Icon => {
-    const isHovered = loc.activityId === hoveredActivityId;
+    const isHovered =
+      loc.activityId === hoveredActivityId ||
+      (loc.mode === "timeline" && hoveredMarker?.timelineId === loc.timelineId);
     const isStayMarker = loc.slot === "stay-start" || loc.slot === "stay-end";
 
     if (isStayMarker) {
@@ -772,6 +879,23 @@ function GoogleMapContent({
         scaledSize: new window.google.maps.Size(isHovered ? 40 : 36, isHovered ? 40 : 36),
         anchor: new window.google.maps.Point(isHovered ? 20 : 18, isHovered ? 40 : 36),
         labelOrigin: new window.google.maps.Point(isHovered ? 20 : 18, 12),
+      };
+    }
+
+    if (loc.mode === "timeline") {
+      const baseSize =
+        loc.timelineKind === "travel"
+          ? 22
+          : loc.timelineKind === "regional"
+            ? 20
+            : loc.timelineIdentified
+              ? 18
+              : 16;
+      const size = isHovered ? baseSize + 4 : baseSize;
+      return {
+        url: timelineMarkerUrl,
+        scaledSize: new window.google.maps.Size(size, size),
+        anchor: new window.google.maps.Point(size / 2, size / 2),
       };
     }
 
@@ -858,6 +982,12 @@ function GoogleMapContent({
       : destinationCenter || { lat: 37.7749, lng: -122.4194 }; // Default to SF
   }, [mapCenterLat, mapCenterLng, destinationCenter, locations.length]);
 
+  useEffect(() => {
+    if (isLoaded) {
+      onGoogleMapsReady?.();
+    }
+  }, [isLoaded, onGoogleMapsReady]);
+
   if (loadError) {
     return (
       <div className="h-full w-full flex items-center justify-center">
@@ -888,12 +1018,14 @@ function GoogleMapContent({
     <GoogleMap
       mapContainerStyle={containerStyle}
       center={mapCenter}
-      zoom={locations.length > 0 ? 12 : 11}
+      zoom={locations.length > 0 ? (isTimelineMode ? 4 : 12) : 11}
       onLoad={onLoad}
       options={{
         streetViewControl: false,
         mapTypeControl: false,
-        fullscreenControl: true,
+        fullscreenControl: !isTimelineMode,
+        styles: isTimelineMode ? TIMELINE_MAP_STYLES : undefined,
+        backgroundColor: isTimelineMode ? "#041433" : undefined,
       }}
     >
       {isGroupedMode
@@ -974,7 +1106,7 @@ function GoogleMapContent({
             position={{ lat: loc.lat, lng: loc.lng }}
             icon={getMarkerIcon(loc)}
             label={
-              isStayMarker
+              isStayMarker || loc.mode === "timeline"
                 ? undefined
                 : {
                   text: (loc.actIndex + 1).toString(),
@@ -993,7 +1125,9 @@ function GoogleMapContent({
             onMouseOver={() => setHoveredMarker(loc)}
             onMouseOut={() => setHoveredMarker(null)}
             zIndex={
-              isResearchSelectionMode ? (loc.isSelected ? 2000 : 1000) : 1500
+              loc.mode === "timeline"
+                ? (loc.timelineKind === "travel" ? 2200 : loc.timelineKind === "regional" ? 2000 : 1800)
+                : isResearchSelectionMode ? (loc.isSelected ? 2000 : 1000) : 1500
             }
           />
         );

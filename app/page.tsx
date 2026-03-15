@@ -14,6 +14,7 @@ import { RestaurantSelectionView } from "@/components/RestaurantSelectionView";
 import { AccommodationSuggestionsView } from "@/components/AccommodationSuggestionsView";
 import { FlightSuggestionsView } from "@/components/FlightSuggestionsView";
 import {
+  analyzeTimeline,
   startSession,
   agentTurn,
   generateResearchBrief,
@@ -40,6 +41,12 @@ import {
   type FlightOption,
 } from "@/lib/api-client";
 import { InterestsPreferencesView } from "@/components/InterestsPreferencesView";
+import {
+  extractTimelineVisits,
+  type TimelineAnalysisResponse,
+  type TimelineMapPoint,
+  type TimelineVisitedPlace,
+} from "@/lib/timeline";
 
 // Workflow states
 const WORKFLOW_STATES = {
@@ -94,10 +101,22 @@ const UI_STAGE_TO_WORKFLOW: Record<number, string> = {
   5: WORKFLOW_STATES.FINALIZE,
 };
 
+const TIMELINE_ANALYSIS_CACHE_VERSION = "v14";
+const MAX_CLIENT_TIMELINE_GEOCODE_CLUSTERS = 40;
+const ENABLE_CLIENT_TIMELINE_GEOCODING = false;
+const TIMELINE_CACHE_KEY_PREFIX = "timeline-analysis:";
+const CURRENT_TIMELINE_CACHE_KEY_PREFIX = `${TIMELINE_CACHE_KEY_PREFIX}${TIMELINE_ANALYSIS_CACHE_VERSION}:`;
+const LAST_TIMELINE_CACHE_META_KEY = `timeline-analysis:${TIMELINE_ANALYSIS_CACHE_VERSION}:last-used`;
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
+
+type TimelineCacheMetadata = {
+  cacheKey: string;
+  fileName: string | null;
+};
 
 const EMPTY_TRIP_INFO: TripInfo = {
   source: null,
@@ -106,10 +125,269 @@ const EMPTY_TRIP_INFO: TripInfo = {
   endDate: null,
   durationDays: null,
   preferences: [],
+  foodPreferences: [],
+  visitedDestinations: [],
   activityLevel: "moderate",
   travelers: 1,
   budget: null,
 };
+
+type TimelineCluster = {
+  lat: number;
+  lng: number;
+  visitCount: number;
+  totalDurationMinutes: number;
+  totalScore: number;
+  points: TimelineMapPoint[];
+};
+
+function timelineDistanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function scoreTimelinePoint(point: TimelineMapPoint): number {
+  return point.visitCount * 3 + Math.min(point.totalDurationMinutes / 60, 18);
+}
+
+function clusterTimelineTravelPoints(points: TimelineMapPoint[]): TimelineCluster[] {
+  const clusters: TimelineCluster[] = [];
+
+  for (const point of points
+    .filter((point) => point.kind === "regional" || point.kind === "travel")
+    .sort((a, b) => scoreTimelinePoint(b) - scoreTimelinePoint(a))) {
+    const pointScore = scoreTimelinePoint(point);
+    const existing = clusters.find((cluster) => timelineDistanceKm(cluster.lat, cluster.lng, point.lat, point.lng) <= 55);
+
+    if (!existing) {
+      clusters.push({
+        lat: point.lat,
+        lng: point.lng,
+        visitCount: point.visitCount,
+        totalDurationMinutes: point.totalDurationMinutes,
+        totalScore: pointScore,
+        points: [point],
+      });
+      continue;
+    }
+
+    const combinedScore = existing.totalScore + pointScore;
+    existing.lat = (existing.lat * existing.totalScore + point.lat * pointScore) / combinedScore;
+    existing.lng = (existing.lng * existing.totalScore + point.lng * pointScore) / combinedScore;
+    existing.totalScore = combinedScore;
+    existing.visitCount += point.visitCount;
+    existing.totalDurationMinutes += point.totalDurationMinutes;
+    existing.points.push(point);
+  }
+
+  return clusters.sort((a, b) => b.totalDurationMinutes - a.totalDurationMinutes || b.visitCount - a.visitCount);
+}
+
+function normalizeTimelineName(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\w\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const TIMELINE_COUNTRY_LABELS = new Set([
+  "australia",
+  "canada",
+  "india",
+  "mexico",
+  "united states",
+  "usa",
+]);
+
+function isUsefulTimelineDestinationLabel(label: string | null): label is string {
+  if (!label) return false;
+  const normalized = normalizeTimelineName(label);
+  if (!normalized) return false;
+  return !TIMELINE_COUNTRY_LABELS.has(normalized);
+}
+
+function extractLabelFromGeocoderResult(result: google.maps.GeocoderResult): string | null {
+  const getComponent = (type: string) =>
+    result.address_components.find((component) => component.types.includes(type))?.long_name;
+
+  const locality = getComponent("locality") || getComponent("postal_town") || getComponent("administrative_area_level_2");
+  const region = getComponent("administrative_area_level_1");
+  if (locality && region && normalizeTimelineName(locality) !== normalizeTimelineName(region)) {
+    return `${locality}, ${region}`;
+  }
+  return locality || region || null;
+}
+
+function pickTopTimelineLabel(labelScores: Map<string, number>): string | null {
+  return [...labelScores.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+}
+
+function parseTimelineCacheMetadata(raw: string | null): TimelineCacheMetadata | null {
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      cacheKey?: unknown;
+      fileName?: unknown;
+    };
+
+    if (typeof parsed.cacheKey !== "string" || !parsed.cacheKey.trim()) {
+      return null;
+    }
+
+    return {
+      cacheKey: parsed.cacheKey,
+      fileName: typeof parsed.fileName === "string" && parsed.fileName.trim() ? parsed.fileName.trim() : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isTimelineAnalysisResponse(value: unknown): value is TimelineAnalysisResponse {
+  if (typeof value !== "object" || value === null) return false;
+
+  const candidate = value as Record<string, unknown>;
+  const stats = candidate.stats as Record<string, unknown> | undefined;
+
+  return (
+    typeof candidate.summary === "string" &&
+    Array.isArray(candidate.preferences) &&
+    Array.isArray(candidate.foodPreferences) &&
+    Array.isArray(candidate.visitedDestinations) &&
+    Array.isArray(candidate.visitedPlaces) &&
+    Array.isArray(candidate.localSignals) &&
+    Array.isArray(candidate.travelSignals) &&
+    Array.isArray(candidate.mapPoints) &&
+    typeof stats?.visitCount === "number" &&
+    typeof stats?.recurringPlaceCount === "number" &&
+    typeof stats?.localPlaceCount === "number" &&
+    typeof stats?.travelPlaceCount === "number" &&
+    typeof stats?.tripCount === "number"
+  );
+}
+
+function findCachedTimelineMetadata(storage: Storage): TimelineCacheMetadata | null {
+  for (let index = storage.length - 1; index >= 0; index -= 1) {
+    const key = storage.key(index);
+    if (!key || key === LAST_TIMELINE_CACHE_META_KEY) continue;
+    if (!key.startsWith(CURRENT_TIMELINE_CACHE_KEY_PREFIX)) continue;
+    if (key.endsWith(":last-used")) continue;
+
+    const raw = storage.getItem(key);
+    if (!raw) continue;
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!isTimelineAnalysisResponse(parsed)) continue;
+
+      return {
+        cacheKey: key,
+        fileName: null,
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+async function reverseGeocodeTimelineLocation(
+  geocoder: google.maps.Geocoder,
+  lat: number,
+  lng: number
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+      if (status !== "OK" || !results?.length) {
+        resolve(null);
+        return;
+      }
+
+      const prioritized =
+        results.find((result) => result.types.includes("locality")) ||
+        results.find((result) => result.types.includes("postal_town")) ||
+        results.find((result) => result.types.includes("administrative_area_level_2")) ||
+        results[0];
+
+      const label = prioritized ? extractLabelFromGeocoderResult(prioritized) : null;
+      resolve(isUsefulTimelineDestinationLabel(label) ? label : null);
+    });
+  });
+}
+
+async function reverseGeocodeTimelineCluster(
+  geocoder: google.maps.Geocoder,
+  cluster: TimelineCluster
+): Promise<TimelineVisitedPlace | null> {
+  const labelScores = new Map<string, number>();
+
+  for (const point of [...cluster.points].sort((a, b) => scoreTimelinePoint(b) - scoreTimelinePoint(a)).slice(0, 6)) {
+    const label = await reverseGeocodeTimelineLocation(geocoder, point.lat, point.lng);
+    if (!label) continue;
+
+    labelScores.set(
+      label,
+      (labelScores.get(label) || 0) + scoreTimelinePoint(point) * 2 + Math.min(point.visitCount, 4)
+    );
+  }
+
+  if (labelScores.size === 0) {
+    const centroidLabel = await reverseGeocodeTimelineLocation(geocoder, cluster.lat, cluster.lng);
+    if (centroidLabel) {
+      labelScores.set(centroidLabel, cluster.totalScore + Math.min(cluster.visitCount, 6));
+    }
+  }
+
+  const label = pickTopTimelineLabel(labelScores);
+  if (!label) return null;
+
+  return {
+    name: label,
+    lat: cluster.lat,
+    lng: cluster.lng,
+    visitCount: cluster.visitCount,
+    totalDurationMinutes: cluster.totalDurationMinutes,
+  };
+}
+
+function mergeTimelineDestinations(
+  existing: TimelineVisitedPlace[],
+  geocoded: TimelineVisitedPlace[]
+): TimelineVisitedPlace[] {
+  const merged = new Map<string, TimelineVisitedPlace>();
+
+  for (const place of [...existing, ...geocoded]) {
+    const normalized = normalizeTimelineName(place.name);
+    if (!normalized) continue;
+
+    const current = merged.get(normalized);
+    if (current) {
+      const combinedVisits = current.visitCount + place.visitCount;
+      const combinedDuration = current.totalDurationMinutes + place.totalDurationMinutes;
+      current.lat = (current.lat * current.visitCount + place.lat * place.visitCount) / combinedVisits;
+      current.lng = (current.lng * current.visitCount + place.lng * place.visitCount) / combinedVisits;
+      current.visitCount = combinedVisits;
+      current.totalDurationMinutes = combinedDuration;
+      continue;
+    }
+
+    merged.set(normalized, { ...place });
+  }
+
+  return [...merged.values()].sort((a, b) =>
+    b.totalDurationMinutes - a.totalDurationMinutes || b.visitCount - a.visitCount
+  );
+}
 
 export default function PlannerPage() {
   // Session state
@@ -146,6 +424,16 @@ export default function PlannerPage() {
   const [maxReachedState, setMaxReachedState] = useState(WORKFLOW_STATES.INFO_GATHERING);
   const [lastGroupedActivityIds, setLastGroupedActivityIds] = useState<string[]>([]);
 
+  // Timeline State
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineAnalysis, setTimelineAnalysis] = useState<TimelineAnalysisResponse | null>(null);
+  const [timelineFileName, setTimelineFileName] = useState<string | null>(null);
+  const [timelineLoadedFromCache, setTimelineLoadedFromCache] = useState(false);
+  const [timelineCacheKey, setTimelineCacheKey] = useState<string | null>(null);
+  const [timelineLocations, setTimelineLocations] = useState<TimelineMapPoint[]>([]);
+  const [timelineDestinationsRefined, setTimelineDestinationsRefined] = useState(false);
+  const [cachedTimelineMeta, setCachedTimelineMeta] = useState<TimelineCacheMetadata | null>(null);
+
   // UI state
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
@@ -160,12 +448,271 @@ export default function PlannerPage() {
   const [deepResearchOptionId, setDeepResearchOptionId] = useState<string | null>(null);
   const [lastDeepResearchAtByOptionId, setLastDeepResearchAtByOptionId] = useState<Record<string, string>>({});
   const [photoEnrichmentInProgress, setPhotoEnrichmentInProgress] = useState(false);
+  const [mapsReady, setMapsReady] = useState(false);
   const photoEnrichmentSignatureRef = useRef<string>("");
 
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
+
+  const clearLastTimelineCacheMetadata = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.removeItem(LAST_TIMELINE_CACHE_META_KEY);
+    setCachedTimelineMeta(null);
+  }, []);
+
+  const persistLastTimelineCacheMetadata = useCallback((cacheKey: string, fileName: string | null) => {
+    if (typeof window === "undefined") return;
+
+    const metadata: TimelineCacheMetadata = {
+      cacheKey,
+      fileName,
+    };
+
+    window.localStorage.setItem(LAST_TIMELINE_CACHE_META_KEY, JSON.stringify(metadata));
+    setCachedTimelineMeta(metadata);
+  }, []);
+
+  const applyTimelineAnalysisResult = useCallback(async (result: TimelineAnalysisResponse) => {
+    setTimelineAnalysis(result);
+    setTimelineLocations(result.mapPoints);
+    setTimelineDestinationsRefined(false);
+
+    const mergedPreferences = Array.from(
+      new Set([...(tripInfo.preferences || []), ...result.preferences])
+    );
+    const mergedFoodPreferences = Array.from(
+      new Set([...(tripInfo.foodPreferences || []), ...(result.foodPreferences || [])])
+    );
+    const mergedVisitedDestinations = Array.from(
+      new Set([...(tripInfo.visitedDestinations || []), ...result.visitedDestinations])
+    );
+
+    setTripInfo((prev) => ({
+      ...prev,
+      preferences: mergedPreferences,
+      foodPreferences: mergedFoodPreferences,
+      visitedDestinations: mergedVisitedDestinations,
+    }));
+    setTripBasicsPreferencesInput(mergedPreferences.join(", "));
+    await persistTripInfoUpdate({
+      preferences: mergedPreferences,
+      foodPreferences: mergedFoodPreferences,
+      visitedDestinations: mergedVisitedDestinations,
+    });
+  }, [persistTripInfoUpdate, tripInfo.foodPreferences, tripInfo.preferences, tripInfo.visitedDestinations]);
+
+  const computeTimelineCacheKey = async (file: File, buffer: ArrayBuffer) => {
+    const digest = await crypto.subtle.digest("SHA-256", buffer);
+    const hash = Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    return `timeline-analysis:${TIMELINE_ANALYSIS_CACHE_VERSION}:${hash}`;
+  };
+
+  const handleTimelineUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setTimelineFileName(file.name);
+    setTimelineLoading(true);
+    setTimelineAnalysis(null);
+    setTimelineLoadedFromCache(false);
+    setTimelineLocations([]);
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const cacheKey = await computeTimelineCacheKey(file, buffer);
+      setTimelineCacheKey(cacheKey);
+      const cachedValue = window.localStorage.getItem(cacheKey);
+      if (cachedValue) {
+        const cachedResult = JSON.parse(cachedValue) as TimelineAnalysisResponse;
+        setTimelineLoadedFromCache(true);
+        persistLastTimelineCacheMetadata(cacheKey, file.name);
+        await applyTimelineAnalysisResult(cachedResult);
+        return;
+      }
+
+      const text = new TextDecoder().decode(buffer);
+      const json = JSON.parse(text);
+      const visits = extractTimelineVisits(json);
+
+      if (visits.length === 0) {
+        setTimelineAnalysis({
+          summary: "This file parsed correctly, but it did not include any usable place visits to learn from.",
+          preferences: [],
+          foodPreferences: [],
+          visitedDestinations: [],
+          visitedPlaces: [],
+          localSignals: [],
+          travelSignals: [],
+          mapPoints: [],
+          stats: {
+            visitCount: 0,
+            recurringPlaceCount: 0,
+            localPlaceCount: 0,
+            travelPlaceCount: 0,
+            tripCount: 0,
+          },
+        });
+        return;
+      }
+
+      const result = await analyzeTimeline({ visits });
+      window.localStorage.setItem(cacheKey, JSON.stringify(result));
+      persistLastTimelineCacheMetadata(cacheKey, file.name);
+      await applyTimelineAnalysisResult(result);
+    } catch (error) {
+      console.error("Error processing timeline:", error);
+      alert("Failed to process timeline file.");
+    } finally {
+      setTimelineLoading(false);
+      event.target.value = "";
+    }
+  };
+
+  const handleUseCachedTimeline = useCallback(async () => {
+    if (typeof window === "undefined") return;
+
+    const metadata = cachedTimelineMeta || findCachedTimelineMetadata(window.localStorage);
+    if (!metadata) {
+      clearLastTimelineCacheMetadata();
+      alert("No cached timeline analysis was found.");
+      return;
+    }
+
+    const cachedValue = window.localStorage.getItem(metadata.cacheKey);
+    if (!cachedValue) {
+      clearLastTimelineCacheMetadata();
+      alert("No cached timeline analysis was found.");
+      return;
+    }
+
+    setTimelineLoading(true);
+    setTimelineLoadedFromCache(true);
+    setTimelineCacheKey(metadata.cacheKey);
+    setTimelineFileName(metadata.fileName);
+
+    try {
+      const cachedResult = JSON.parse(cachedValue) as TimelineAnalysisResponse;
+      persistLastTimelineCacheMetadata(metadata.cacheKey, metadata.fileName);
+      await applyTimelineAnalysisResult(cachedResult);
+    } catch (error) {
+      console.error("Error loading cached timeline:", error);
+      alert("Failed to load cached timeline analysis.");
+    } finally {
+      setTimelineLoading(false);
+    }
+  }, [applyTimelineAnalysisResult, cachedTimelineMeta, clearLastTimelineCacheMetadata, persistLastTimelineCacheMetadata]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const metadata = parseTimelineCacheMetadata(window.localStorage.getItem(LAST_TIMELINE_CACHE_META_KEY));
+    if (metadata && window.localStorage.getItem(metadata.cacheKey)) {
+      setCachedTimelineMeta(metadata);
+      return;
+    }
+
+    const discovered = findCachedTimelineMetadata(window.localStorage);
+    if (discovered) {
+      persistLastTimelineCacheMetadata(discovered.cacheKey, discovered.fileName);
+      return;
+    }
+
+    window.localStorage.removeItem(LAST_TIMELINE_CACHE_META_KEY);
+    setCachedTimelineMeta(null);
+  }, [persistLastTimelineCacheMetadata]);
+
+  useEffect(() => {
+    if (
+      !ENABLE_CLIENT_TIMELINE_GEOCODING ||
+      !mapsReady ||
+      !timelineAnalysis ||
+      timelineDestinationsRefined ||
+      typeof window === "undefined" ||
+      !window.google?.maps?.Geocoder
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const run = async () => {
+      const geocoder = new window.google.maps.Geocoder();
+      const clusters = clusterTimelineTravelPoints(timelineAnalysis.mapPoints)
+        .filter((cluster) => cluster.totalDurationMinutes >= 90 || cluster.visitCount >= 3 || cluster.points.length >= 3)
+        .slice(0, MAX_CLIENT_TIMELINE_GEOCODE_CLUSTERS);
+      const geocodedDestinations: TimelineVisitedPlace[] = [];
+
+      for (const cluster of clusters) {
+        const geocoded = await reverseGeocodeTimelineCluster(geocoder, cluster);
+        if (!geocoded) continue;
+        geocodedDestinations.push(geocoded);
+      }
+
+      if (cancelled) return;
+
+      const mergedVisitedPlaces = mergeTimelineDestinations(
+        timelineAnalysis.visitedPlaces,
+        geocodedDestinations
+      );
+      const mergedVisitedDestinationNames = Array.from(
+        new Set([
+          ...timelineAnalysis.visitedDestinations,
+          ...mergedVisitedPlaces.map((place) => place.name),
+        ])
+      );
+
+      const changed =
+        mergedVisitedPlaces.length !== timelineAnalysis.visitedPlaces.length ||
+        mergedVisitedDestinationNames.length !== timelineAnalysis.visitedDestinations.length;
+
+      setTimelineDestinationsRefined(true);
+
+      if (!changed) return;
+
+      const refinedAnalysis: TimelineAnalysisResponse = {
+        ...timelineAnalysis,
+        visitedPlaces: mergedVisitedPlaces,
+        visitedDestinations: mergedVisitedDestinationNames,
+      };
+
+      setTimelineAnalysis(refinedAnalysis);
+
+      const mergedTripVisitedDestinations = Array.from(
+        new Set([...(tripInfo.visitedDestinations || []), ...mergedVisitedDestinationNames])
+      );
+      setTripInfo((prev) => ({
+        ...prev,
+        visitedDestinations: mergedTripVisitedDestinations,
+      }));
+      await persistTripInfoUpdate({
+        visitedDestinations: mergedTripVisitedDestinations,
+      });
+
+      if (timelineCacheKey) {
+        window.localStorage.setItem(timelineCacheKey, JSON.stringify(refinedAnalysis));
+        persistLastTimelineCacheMetadata(timelineCacheKey, timelineFileName);
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    mapsReady,
+    persistTripInfoUpdate,
+    persistLastTimelineCacheMetadata,
+    timelineAnalysis,
+    timelineCacheKey,
+    timelineDestinationsRefined,
+    timelineFileName,
+    tripInfo.visitedDestinations,
+  ]);
 
   // Auto-focus chat input when loading finishes
   useEffect(() => {
@@ -1015,7 +1562,7 @@ export default function PlannerPage() {
       .map((entry) => entry.trim())
       .filter(Boolean);
 
-  const persistTripInfoUpdate = async (updates: Partial<TripInfo>) => {
+  async function persistTripInfoUpdate(updates: Partial<TripInfo>) {
     if (!sessionId) return true;
     setTripBasicsSaving(true);
     try {
@@ -1030,7 +1577,7 @@ export default function PlannerPage() {
     } finally {
       setTripBasicsSaving(false);
     }
-  };
+  }
 
   const handleTripFieldBlur = async (updates: Partial<TripInfo>) => {
     await persistTripInfoUpdate(updates);
@@ -1187,6 +1734,14 @@ export default function PlannerPage() {
       (workflowState === WORKFLOW_STATES.GROUP_DAYS || workflowState === WORKFLOW_STATES.DAY_ITINERARY) &&
       (selectedActivityIds.length !== lastGroupedActivityIds.length ||
         !selectedActivityIds.every(id => lastGroupedActivityIds.includes(id)));
+    const displayedTimelineDestinations = timelineAnalysis
+      ? Array.from(
+        new Set([
+          ...timelineAnalysis.visitedPlaces.map((place) => place.name),
+          ...timelineAnalysis.visitedDestinations,
+        ])
+      )
+      : [];
 
     const aiCheckBadgeTone =
       aiCheckResult?.status === "ERROR"
@@ -1421,6 +1976,137 @@ export default function PlannerPage() {
                             placeholder="snorkeling, hiking, local food"
                             disabled={loading || tripBasicsSaving}
                           />
+                        </div>
+
+                        <div className="sm:col-span-2 mt-4 rounded-xl border border-dashed border-gray-300 p-4 bg-gray-50">
+                          <label className="mb-2 block text-sm font-medium text-gray-900">
+                            Personalize with Maps Timeline (Optional)
+                          </label>
+                          <p className="mb-3 text-xs text-gray-500">
+                            Upload your Google Maps Timeline export to infer repeat travel patterns, food habits, and trip style from where you actually spend time.
+                          </p>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <Input
+                              type="file"
+                              accept=".json"
+                              onChange={handleTimelineUpload}
+                              disabled={timelineLoading}
+                              className="max-w-xs text-xs bg-white"
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={handleUseCachedTimeline}
+                              disabled={timelineLoading || !cachedTimelineMeta}
+                              className="text-xs"
+                            >
+                              Use cached
+                            </Button>
+                            {timelineLoading && <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}
+                          </div>
+                          {cachedTimelineMeta && (
+                            <p className="mt-2 text-xs text-gray-500">
+                              Cached timeline ready
+                              {cachedTimelineMeta.fileName ? `: ${cachedTimelineMeta.fileName}` : "."}
+                            </p>
+                          )}
+                          {timelineFileName && (
+                            <p className="mt-2 text-xs text-gray-500">
+                              Uploaded: {timelineFileName}
+                            </p>
+                          )}
+                          {timelineAnalysis && (
+                            <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                              <p className="font-semibold">Timeline Analysis</p>
+                              <p className="mt-1 text-xs text-blue-700">
+                                Learned from {timelineAnalysis.stats.visitCount} visits across{" "}
+                                {timelineAnalysis.stats.recurringPlaceCount} recurring places and{" "}
+                                {timelineAnalysis.stats.tripCount} travel bursts.
+                              </p>
+                              {timelineLoadedFromCache && (
+                                <p className="mt-1 text-xs text-blue-700">
+                                  Loaded cached analysis for this same timeline export.
+                                </p>
+                              )}
+                              <p className="mt-2">{timelineAnalysis.summary}</p>
+
+                              {timelineAnalysis.preferences.length > 0 && (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {timelineAnalysis.preferences.map((preference) => (
+                                    <Badge
+                                      key={preference}
+                                      variant="secondary"
+                                      className="border border-blue-200 bg-white text-blue-800"
+                                    >
+                                      {preference}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+
+                              {timelineAnalysis.foodPreferences.length > 0 && (
+                                <div className="mt-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                                    Food Context
+                                  </p>
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    {timelineAnalysis.foodPreferences.map((preference) => (
+                                      <Badge
+                                        key={preference}
+                                        variant="secondary"
+                                        className="border border-blue-200 bg-white text-blue-800"
+                                      >
+                                        {preference}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {displayedTimelineDestinations.length > 0 && (
+                                <div className="mt-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                                    Travel Destinations ({displayedTimelineDestinations.length})
+                                  </p>
+                                  <ScrollArea className="mt-2 max-h-32 rounded-md border border-blue-100 bg-white/60 p-2">
+                                    <div className="flex flex-wrap gap-2">
+                                      {displayedTimelineDestinations.map((destination) => (
+                                        <Badge
+                                          key={destination}
+                                          variant="secondary"
+                                          className="border border-blue-200 bg-blue-100/60 text-blue-900"
+                                        >
+                                          {destination}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </ScrollArea>
+                                </div>
+                              )}
+
+                              {timelineAnalysis.localSignals.length > 0 && (
+                                <div className="mt-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                                    Local Pattern
+                                  </p>
+                                  <p className="mt-1 text-xs text-blue-800">
+                                    {timelineAnalysis.localSignals.join(" ")}
+                                  </p>
+                                </div>
+                              )}
+
+                              {timelineAnalysis.travelSignals.length > 0 && (
+                                <div className="mt-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                                    Travel Pattern
+                                  </p>
+                                  <p className="mt-1 text-xs text-blue-800">
+                                    {timelineAnalysis.travelSignals.join(" ")}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1715,8 +2401,14 @@ export default function PlannerPage() {
                     : undefined
                 }
                 onActivityClick={handleMapActivityClick}
+                onGoogleMapsReady={() => setMapsReady(true)}
                 hoveredActivityId={hoveredActivityId}
                 highlightedDay={activeDay}
+                timelineLocations={
+                  workflowState === WORKFLOW_STATES.INFO_GATHERING
+                    ? timelineLocations
+                    : []
+                }
               />
             </div>
 

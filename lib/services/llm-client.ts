@@ -29,6 +29,7 @@ import {
 import { getPlacesClient } from "./places-client";
 import { getGeocodingService } from "./geocoding-service";
 import { mergeResearchBriefAndSelections } from "./card-merging";
+import { formatTripPreferenceSummary, getTripFoodPreferences } from "@/lib/utils/trip-preferences";
 
 const DEFAULT_MODEL = "gpt-4o";
 const DEFAULT_TEMPERATURE = 0.5;
@@ -2491,6 +2492,8 @@ class LLMClient {
         endDate: null,
         durationDays: null,
         preferences: [],
+        foodPreferences: [],
+        visitedDestinations: [],
         activityLevel: "moderate",
         travelers: 1,
         budget: null,
@@ -2718,7 +2721,8 @@ ${JSON.stringify({ wantsFlight, flightStatus }, null, 2)}`,
       content: `Trip details:
 Destination: ${tripInfo.destination || "Unknown"}
 Dates: ${tripInfo.startDate || "Unknown"} to ${tripInfo.endDate || "Unknown"}
-Preferences: ${(tripInfo.preferences || []).join(", ") || "General tourism"}
+Preferences: ${formatTripPreferenceSummary(tripInfo)}
+${getTripFoodPreferences(tripInfo).length > 0 ? `Food context: ${getTripFoodPreferences(tripInfo).join(", ")}\n` : ""}
 
 Selected accommodation:
 ${selectedAccommodation ? JSON.stringify(selectedAccommodation, null, 2) : "None"}
@@ -2794,8 +2798,8 @@ Trip:
 - Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 - Travelers: ${tripInfo.travelers}
 - Budget: ${tripInfo.budget || "Not specified"}
-- Preferences: ${(tripInfo.preferences || []).join(", ") || "General"}
-- Selected activities for area relevance: ${activityHints || "None provided"}
+- Preferences: ${formatTripPreferenceSummary(tripInfo, "General")}
+${getTripFoodPreferences(tripInfo).length > 0 ? `- Food context: ${getTripFoodPreferences(tripInfo).join(", ")}\n` : ""}- Selected activities for area relevance: ${activityHints || "None provided"}
 
 Rules:
 - Focus on options realistically bookable for these dates.
@@ -2893,8 +2897,8 @@ Trip:
 - Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 - Travelers: ${tripInfo.travelers}
 - Budget: ${tripInfo.budget || "Not specified"}
-- Preferences: ${(tripInfo.preferences || []).join(", ") || "General"}
-- Planned activities context: ${activityHints || "None provided"}
+- Preferences: ${formatTripPreferenceSummary(tripInfo, "General")}
+${getTripFoodPreferences(tripInfo).length > 0 ? `- Food context: ${getTripFoodPreferences(tripInfo).join(", ")}\n` : ""}- Planned activities context: ${activityHints || "None provided"}
 
 Rules:
 - Include realistic routes and fare estimates with source URLs where possible.
@@ -3094,7 +3098,8 @@ Trip context:
 Destination: ${tripInfo.destination}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Duration: ${tripInfo.durationDays} days
-Preferences: ${(tripInfo.preferences || []).join(", ") || "General tourism"}
+Preferences: ${formatTripPreferenceSummary(tripInfo)}
+${getTripFoodPreferences(tripInfo).length > 0 ? `Food context: ${getTripFoodPreferences(tripInfo).join(", ")}\n` : ""}
 Activity level: ${tripInfo.activityLevel}
 Budget: ${tripInfo.budget || "Not specified"}
 
@@ -3263,7 +3268,8 @@ Destination: ${tripInfo.destination}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Travelers: ${tripInfo.travelers}
 Budget: ${tripInfo.budget || "Not specified"}
-Preferences: ${(tripInfo.preferences || []).join(", ")}
+Preferences: ${formatTripPreferenceSummary(tripInfo, "General")}
+${getTripFoodPreferences(tripInfo).length > 0 ? `Food context: ${getTripFoodPreferences(tripInfo).join(", ")}\n` : ""}
 
 Current Plan Status:
 ${JSON.stringify({

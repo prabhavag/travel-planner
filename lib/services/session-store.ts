@@ -108,6 +108,8 @@ class SessionStore {
         endDate: null,
         durationDays: null,
         preferences: [],
+        foodPreferences: [],
+        visitedDestinations: [],
         activityLevel: "moderate",
         travelers: 1,
         budget: null,

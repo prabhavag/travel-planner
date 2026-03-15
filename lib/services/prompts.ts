@@ -8,6 +8,7 @@ import type {
   TripResearchBrief,
   ResearchOptionPreference,
 } from "@/lib/models/travel-plan";
+import { formatTripPreferenceSummary, getTripFoodPreferences } from "@/lib/utils/trip-preferences";
 
 export const SYSTEM_PROMPTS = {
   INFO_GATHERING: `You are an expert travel planning assistant. You are in the INFO GATHERING phase.
@@ -32,6 +33,7 @@ RESPONSE FORMAT (JSON):
         "endDate": "YYYY-MM-DD or null",
         "durationDays": number or null,
         "preferences": ["pref1", "pref2"],
+        "visitedDestinations": ["place already visited before", "another previously visited place"],
         "activityLevel": "relaxed|moderate|active",
         "travelers": number,
         "budget": "budget range or null"
@@ -45,6 +47,14 @@ RULES:
 - Be conversational and helpful
 - Extract information incrementally from user messages
 - Always return what you know so far in tripInfo
+- If the user asks for destination ideas, destination inspiration, or where they should go next while destination is still missing, answer that request directly in the message using the known preferences and constraints you already have.
+- When giving destination ideas, suggest 3-5 concrete destinations with short reasons tailored to the current preferences. Do not ask for travel dates before giving at least a few useful suggestions.
+- Treat the existing preferences in tripInfo as valid signals even if they were inferred from prior analysis such as a timeline upload.
+- Treat tripInfo.foodPreferences as timeline-inferred food context that should influence destination ideas, meal suggestions, and neighborhood fit.
+- Treat tripInfo.visitedDestinations as places the traveler has already been. When the user asks for somewhere new, avoid suggesting those places unless they explicitly ask to revisit them.
+- Do not set tripInfo.destination to a speculative suggestion. Only set destination when the user clearly chooses one.
+- If the user says they have already visited a place, add it to visitedDestinations while keeping the existing list.
+- After giving destination ideas, ask at most one short follow-up question that would help narrow the options further, such as dates, region, or budget.
 - Ask for source city if it is still missing, even when required fields are complete
 - Calculate durationDays from startDate and endDate if both are provided
 - A difference of <= 1 day between the date range and the requested duration is acceptable (e.g., June 1-6 for 7 days); set isComplete=true in such cases without flagging a conflict
@@ -325,7 +335,7 @@ export function buildInfoGatheringMessages({
   if (tripInfo && Object.values(tripInfo).some((v) => v !== null && v !== undefined)) {
     messages.push({
       role: "user",
-      content: `Current trip information collected so far:\n${JSON.stringify(tripInfo, null, 2)}\n\nContinue the conversation with the user.`,
+      content: `Current trip information collected so far:\n${JSON.stringify(tripInfo, null, 2)}\n\nThe preferences field may include strong signals inferred from prior user input or timeline analysis. The foodPreferences field contains inferred food context from the timeline and should shape food, neighborhood, and destination suggestions when relevant. The visitedDestinations field contains places the traveler has already visited and should usually be excluded when the user asks for somewhere new. Use this context for personalized destination suggestions.\n\nContinue the conversation with the user.`,
     });
     messages.push({
       role: "assistant",
@@ -374,6 +384,7 @@ Trip Overview:
 ${daysSummary}
 
 ${tripInfo.preferences.length > 0 ? `User Preferences:\n- ${tripInfo.preferences.join("\n- ")}\n` : ""}
+${getTripFoodPreferences(tripInfo).length > 0 ? `Food Context:\n- ${getTripFoodPreferences(tripInfo).join("\n- ")}\n` : ""}
 
 Full Itinerary:
 ${JSON.stringify(groupedDays, null, 2)}
@@ -405,8 +416,8 @@ Source: ${tripInfo.source || "Not specified"}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Duration: ${effectiveDurationDays} days
 Requested Options: ${targetOptionCount}
-Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
-Activity Level: ${tripInfo.activityLevel}
+Preferences: ${formatTripPreferenceSummary(tripInfo)}
+${getTripFoodPreferences(tripInfo).length > 0 ? `Food Context: ${getTripFoodPreferences(tripInfo).join(", ")}\n` : ""}Activity Level: ${tripInfo.activityLevel}
 Travelers: ${tripInfo.travelers || 1}
 ${tripInfo.budget ? `Budget: ${tripInfo.budget}` : ""}
 
@@ -436,7 +447,8 @@ Destination: ${tripInfo.destination}
 Source: ${tripInfo.source || "Not specified"}
 Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
 Duration: ${getEffectiveDurationDays(tripInfo)} days
-Preferences: ${tripInfo.preferences.join(", ") || "General tourism"}
+Preferences: ${formatTripPreferenceSummary(tripInfo)}
+${getTripFoodPreferences(tripInfo).length > 0 ? `Food Context: ${getTripFoodPreferences(tripInfo).join(", ")}\n` : ""}
 
 Current research brief:
 ${JSON.stringify(currentBrief, null, 2)}
