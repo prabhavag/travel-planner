@@ -434,7 +434,7 @@ export function DayGroupingView({
           type: "commute",
           id: `commute-stay-start-${day.dayNumber}`,
           title: "Commute",
-          detail: `Approx ${stayStartCommuteMinutes} min travel + buffer`,
+          detail: `Approx ${stayStartCommuteMinutes} min`,
           timeRange: toRangeLabel(commuteStart, commuteEnd),
         });
         cursorMinutes = commuteEnd;
@@ -474,7 +474,7 @@ export function DayGroupingView({
           type: "lunch",
           id: `lunch-${day.dayNumber}`,
           title: "Lunch break",
-          detail: "Includes a small buffer before/after lunch",
+          detail: "About 1 hr",
           timeRange: toRangeLabel(lunchStart, lunchEnd),
         });
         timelineItems.push({
@@ -496,7 +496,7 @@ export function DayGroupingView({
             type: "lunch",
             id: `lunch-${day.dayNumber}`,
             title: "Lunch break",
-            detail: "Includes a small buffer before/after lunch",
+            detail: "About 1 hr",
             timeRange: toRangeLabel(lunchStart, lunchEnd),
           });
           cursorMinutes = lunchEnd;
@@ -532,7 +532,7 @@ export function DayGroupingView({
           type: "commute",
           id: `commute-${activity.id}-${next.id}`,
           title: "Commute",
-          detail: `Approx ${commuteMinutes} min travel + buffer`,
+          detail: `Approx ${commuteMinutes} min`,
           timeRange: toRangeLabel(commuteStart, commuteEnd),
         });
         cursorMinutes = commuteEnd;
@@ -548,7 +548,7 @@ export function DayGroupingView({
         type: "lunch",
         id: `lunch-${day.dayNumber}`,
         title: "Lunch break",
-        detail: "Includes a small buffer before/after lunch",
+        detail: "About 1 hr",
         timeRange: toRangeLabel(lunchStart, lunchEnd),
       });
     }
@@ -563,7 +563,7 @@ export function DayGroupingView({
           type: "commute",
           id: `commute-stay-end-${day.dayNumber}`,
           title: "Commute",
-          detail: `Approx ${stayEndCommuteMinutes} min travel + buffer`,
+          detail: `Approx ${stayEndCommuteMinutes} min`,
           timeRange: toRangeLabel(commuteStart, commuteEnd),
         });
         cursorMinutes = commuteEnd;
@@ -626,6 +626,16 @@ export function DayGroupingView({
                           <p className="text-emerald-700">{item.detail}</p>
                         </div>
                       </div>
+                    </div>
+                  ) : item.type === "commute" ? (
+                    <div className="flex items-center justify-between gap-3 text-xs text-gray-600">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-medium text-gray-700">{item.title}</span>
+                        <span className="text-gray-500 truncate">· {item.detail}</span>
+                      </div>
+                      <Badge variant="outline" className="h-5 bg-gray-50 text-gray-600 border-gray-200">
+                        {item.timeRange}
+                      </Badge>
                     </div>
                   ) : (
                     <div
