@@ -200,12 +200,17 @@ export async function assignNightStays({
     const scoredCandidates: NightStay["candidates"] = [];
 
     if (candidates.length > 0 && geocodingService && centroid) {
-      for (const candidate of candidates) {
+      const locationPromises = candidates.map(async (candidate) => {
         const query = tripInfo.destination
           ? `${candidate.label}, ${tripInfo.destination}`
           : candidate.label;
-        const location = await geocodingService.geocode(query);
+        const location = await geocodingService!.geocode(query);
         const driveScore = computeDriveScore(location, day.activities);
+        return { candidate, location, driveScore };
+      });
+      const resolvedLocations = await Promise.all(locationPromises);
+
+      for (const { candidate, location, driveScore } of resolvedLocations) {
         scoredCandidates.push({
           label: candidate.label,
           notes: candidate.notes ?? null,

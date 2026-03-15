@@ -280,9 +280,18 @@ function slotDistance(
   return Math.abs(TIME_ORDER[a] - TIME_ORDER[b]);
 }
 
+const distanceCache = new Map<string, number>();
+
 function activityDistanceProxy(a: SuggestedActivity, b: SuggestedActivity): number {
+  if (a.id === b.id) return 0;
+  const cacheKey = a.id < b.id ? `${a.id}-${b.id}` : `${b.id}-${a.id}`;
+  const cached = distanceCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   const pointsA = listActivityDistancePoints(a);
   const pointsB = listActivityDistancePoints(b);
+
+  let result: number | undefined;
 
   if (pointsA.length > 0 && pointsB.length > 0) {
     let minDistance = Number.POSITIVE_INFINITY;
@@ -291,12 +300,19 @@ function activityDistanceProxy(a: SuggestedActivity, b: SuggestedActivity): numb
         minDistance = Math.min(minDistance, haversineDistanceKm(pointA, pointB));
       }
     }
-    if (Number.isFinite(minDistance)) return minDistance;
+    if (Number.isFinite(minDistance)) {
+      result = minDistance;
+    }
   }
 
-  const slotPenalty = slotDistance(a.bestTimeOfDay, b.bestTimeOfDay) * 1.2;
-  const typePenalty = a.type.trim().toLowerCase() === b.type.trim().toLowerCase() ? 0.3 : 1;
-  return slotPenalty + typePenalty;
+  if (result === undefined) {
+    const slotPenalty = slotDistance(a.bestTimeOfDay, b.bestTimeOfDay) * 1.2;
+    const typePenalty = a.type.trim().toLowerCase() === b.type.trim().toLowerCase() ? 0.3 : 1;
+    result = slotPenalty + typePenalty;
+  }
+
+  distanceCache.set(cacheKey, result);
+  return result;
 }
 
 function sortActivitiesForDay(
@@ -662,6 +678,7 @@ export function groupActivitiesByDay({
   tripInfo: TripInfo;
   activities: SuggestedActivity[];
 }): DayGroup[] {
+  distanceCache.clear();
   const dayCount = computeDayCount(tripInfo, activities.length);
   const dates = buildTripDates(tripInfo, dayCount);
   const preparedMap = new Map<string, PreparedActivity>(
