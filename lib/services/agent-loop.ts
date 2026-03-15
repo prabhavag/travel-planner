@@ -15,6 +15,7 @@ import { AgentTurnRequestSchema, LoopResultSchema, ToolActionSchema } from "@/li
 import { sessionStore, WORKFLOW_STATES, type Session, type WorkflowState } from "@/lib/services/session-store";
 import { requiresTravelOfferCompletionForState, validateWorkflowTransition } from "@/lib/services/workflow-transition";
 import { buildGroupedDays, groupActivitiesByDay, generateDayTheme } from "@/lib/services/day-grouping";
+import { assignNightStays } from "@/lib/services/night-stays";
 import { getPlacesClient } from "@/lib/services/places-client";
 import { getPriceRangeSymbol } from "@/lib/utils/currency";
 import { getLLMClient, PLANNING_AND_REVIEW_TOOLS } from "@/lib/services/llm-client";
@@ -372,14 +373,24 @@ async function executeAction({
       tripInfo: session.tripInfo,
       activities: selectedActivities,
     });
-    const groupedDays = buildGroupedDays({
+    let groupedDays = buildGroupedDays({
       dayGroups,
       activities: selectedActivities,
     });
+    const selectedAccommodation = session.selectedAccommodationOptionId
+      ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
+      : null;
+    const nightStayResult = await assignNightStays({
+      tripInfo: session.tripInfo,
+      dayGroups,
+      groupedDays,
+      selectedAccommodation,
+      accommodationOptions: working.accommodationOptions,
+    });
 
     working.selectedActivityIds = parsed.selectedActivityIds;
-    working.dayGroups = dayGroups;
-    working.groupedDays = groupedDays;
+    working.dayGroups = nightStayResult.dayGroups;
+    working.groupedDays = nightStayResult.groupedDays;
     await runTravelOfferSubAgents({ session, working });
     return `Updated ${parsed.selectedActivityIds.length} activities and regrouped your itinerary by day.`;
   }
@@ -418,7 +429,7 @@ async function executeAction({
     );
 
     const activityMap = new Map(selectedActivities.map((activity) => [activity.id, activity]));
-    const groupedDays = updatedDayGroups.map((day) => ({
+    let groupedDays = updatedDayGroups.map((day) => ({
       dayNumber: day.dayNumber,
       date: day.date,
       theme: day.theme,
@@ -427,9 +438,19 @@ async function executeAction({
         .filter((activity): activity is SuggestedActivity => Boolean(activity)),
       restaurants: [],
     }));
+    const selectedAccommodation = session.selectedAccommodationOptionId
+      ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
+      : null;
+    const nightStayResult = await assignNightStays({
+      tripInfo: session.tripInfo,
+      dayGroups: updatedDayGroups,
+      groupedDays,
+      selectedAccommodation,
+      accommodationOptions: working.accommodationOptions,
+    });
 
-    working.dayGroups = updatedDayGroups;
-    working.groupedDays = groupedDays;
+    working.dayGroups = nightStayResult.dayGroups;
+    working.groupedDays = nightStayResult.groupedDays;
     return `Moved activity to Day ${parsed.toDay}.`;
   }
 
@@ -618,6 +639,19 @@ async function executeAction({
     }
     working.selectedAccommodationOptionId = parsed.optionId;
     working.wantsAccommodation = true;
+    if (working.groupedDays.length > 0) {
+      const selectedAccommodation =
+        working.accommodationOptions.find((option) => option.id === parsed.optionId) || null;
+      const nightStayResult = await assignNightStays({
+        tripInfo: session.tripInfo,
+        dayGroups: working.dayGroups,
+        groupedDays: working.groupedDays,
+        selectedAccommodation,
+        accommodationOptions: working.accommodationOptions,
+      });
+      working.dayGroups = nightStayResult.dayGroups;
+      working.groupedDays = nightStayResult.groupedDays;
+    }
     return "Selected hotel option.";
   }
 

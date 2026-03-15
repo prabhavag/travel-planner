@@ -199,6 +199,12 @@ function computeDayCentroid(activities: SuggestedActivity[]): { lat: number; lng
   return { lat: sumLat / count, lng: sumLng / count };
 }
 
+export function computeActivitiesCentroid(
+  activities: SuggestedActivity[]
+): { lat: number; lng: number } | null {
+  return computeDayCentroid(activities);
+}
+
 function orderDayBucketsByProximity(buckets: DayBucket[]): DayBucket[] {
   if (buckets.length <= 2) return [...buckets].sort((a, b) => a.originalIndex - b.originalIndex);
 
@@ -776,5 +782,6 @@ export function buildGroupedDays({
       .map((activityId) => activityMap.get(activityId))
       .filter((activity): activity is SuggestedActivity => activity !== undefined),
     restaurants: [],
+    nightStay: group.nightStay ?? null,
   }));
 }

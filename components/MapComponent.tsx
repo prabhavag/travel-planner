@@ -118,7 +118,28 @@ export default function MapComponent({
 
     // Mode 1: Grouped days (day grouping and itinerary phases)
     if (groupedDays && groupedDays.length > 0) {
+      const stayByDay = new Map(
+        groupedDays
+          .map((day) => [day.dayNumber, day.nightStay] as const)
+          .filter(([, stay]) => stay?.coordinates)
+      );
+
       groupedDays.forEach((day) => {
+        const startStay = stayByDay.get(day.dayNumber - 1) ?? day.nightStay;
+        if (startStay?.coordinates) {
+          locs.push({
+            name: `Start stay: ${startStay.label}`,
+            lat: startStay.coordinates.lat,
+            lng: startStay.coordinates.lng,
+            slot: "stay-start",
+            slotIndex: -1,
+            actIndex: -1,
+            day: day.dayNumber,
+            desc: `Day ${day.dayNumber} - Start stay`,
+            mode: "grouped",
+          });
+        }
+
         day.activities.forEach((activity, actIndex) => {
           const markerCoordinates =
             activity.locationMode === "route" && (activity.routePoints?.[0] || activity.startCoordinates)
@@ -157,6 +178,21 @@ export default function MapComponent({
             });
           }
         });
+
+        const endStay = day.nightStay;
+        if (endStay?.coordinates) {
+          locs.push({
+            name: `End stay: ${endStay.label}`,
+            lat: endStay.coordinates.lat,
+            lng: endStay.coordinates.lng,
+            slot: "stay-end",
+            slotIndex: 999,
+            actIndex: day.activities.length + day.restaurants.length + 1,
+            day: day.dayNumber,
+            desc: `Day ${day.dayNumber} - End stay`,
+            mode: "grouped",
+          });
+        }
       });
     }
     // Mode 2: Initial research recommendations
@@ -472,11 +508,14 @@ function GoogleMapContent({
 
   const sortLocationsForDay = useCallback(
     (day: number) => {
-      const score: Record<"morning" | "afternoon" | "evening" | "any", number> = {
+      const score: Record<"stay-start" | "morning" | "afternoon" | "evening" | "any" | "restaurant" | "stay-end", number> = {
+        "stay-start": -1,
         morning: 0,
         afternoon: 1,
         evening: 2,
         any: 3,
+        restaurant: 3,
+        "stay-end": 4,
       };
       return locations
         .filter((loc) => loc.mode === "grouped" && loc.day === day)
@@ -673,9 +712,37 @@ function GoogleMapContent({
     }
   }, [map, locations, routeSegments]);
 
+  const stayIconUrl = useMemo(() => {
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+        <g fill="none" stroke="#111827" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+          <path d="M6 22L24 8l18 14" fill="none"/>
+          <polygon points="24,8 42,22 42,36 6,36 6,22" fill="#F3F4F6"/>
+          <polygon points="24,8 42,22 38,22 24,12 10,22 6,22" fill="#EF4444"/>
+          <rect x="21" y="24" width="6" height="12" rx="1.2" fill="#EF4444"/>
+          <rect x="11" y="24" width="7" height="7" rx="1" fill="#38BDF8"/>
+          <rect x="30" y="24" width="7" height="7" rx="1" fill="#38BDF8"/>
+          <rect x="36" y="14" width="4" height="8" rx="1" fill="#EF4444"/>
+          <path d="M30 36c2.5-4 7-4 9 0" fill="#22C55E" stroke="#16A34A"/>
+        </g>
+      </svg>
+    `;
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg.trim())}`;
+  }, []);
+
   // Get marker icon based on day or selection state
-  const getMarkerIcon = (loc: Location): google.maps.Symbol => {
+  const getMarkerIcon = (loc: Location): google.maps.Symbol | google.maps.Icon => {
     const isHovered = loc.activityId === hoveredActivityId;
+    const isStayMarker = loc.slot === "stay-start" || loc.slot === "stay-end";
+
+    if (isStayMarker) {
+      return {
+        url: stayIconUrl,
+        scaledSize: new window.google.maps.Size(isHovered ? 40 : 36, isHovered ? 40 : 36),
+        anchor: new window.google.maps.Point(isHovered ? 20 : 18, isHovered ? 40 : 36),
+        labelOrigin: new window.google.maps.Point(isHovered ? 20 : 18, 12),
+      };
+    }
 
     if (isResearchSelectionMode) {
       const fillColor = loc.isSelected ? "#3B82F6" : "#9CA3AF";
@@ -868,33 +935,38 @@ function GoogleMapContent({
       )}
 
       {/* Draw markers for each location */}
-      {locations.map((loc, idx) => (
-        <Marker
-          key={idx}
-          position={{ lat: loc.lat, lng: loc.lng }}
-          icon={getMarkerIcon(loc)}
-          label={
-            {
-              text: (loc.actIndex + 1).toString(),
-              color: "white",
-              fontWeight: "bold",
-              fontSize: (loc.activityId === hoveredActivityId || isGroupedMode) ? "11px" : "10px",
+      {locations.map((loc, idx) => {
+        const isStayMarker = loc.slot === "stay-start" || loc.slot === "stay-end";
+        return (
+          <Marker
+            key={idx}
+            position={{ lat: loc.lat, lng: loc.lng }}
+            icon={getMarkerIcon(loc)}
+            label={
+              isStayMarker
+                ? undefined
+                : {
+                    text: (loc.actIndex + 1).toString(),
+                    color: "white",
+                    fontWeight: "700",
+                    fontSize: (loc.activityId === hoveredActivityId || isGroupedMode) ? "11px" : "10px",
+                  }
             }
-          }
-          onClick={() => {
-            if (isActivitySelectionMode && onActivityClick && loc.activityId) {
-              onActivityClick(loc.activityId);
-            } else {
-              setSelectedMarker(loc);
+            onClick={() => {
+              if (isActivitySelectionMode && onActivityClick && loc.activityId) {
+                onActivityClick(loc.activityId);
+              } else {
+                setSelectedMarker(loc);
+              }
+            }}
+            onMouseOver={() => setHoveredMarker(loc)}
+            onMouseOut={() => setHoveredMarker(null)}
+            zIndex={
+              isResearchSelectionMode ? (loc.isSelected ? 2000 : 1000) : 1500
             }
-          }}
-          onMouseOver={() => setHoveredMarker(loc)}
-          onMouseOut={() => setHoveredMarker(null)}
-          zIndex={
-            isResearchSelectionMode ? (loc.isSelected ? 2000 : 1000) : 1500
-          }
-        />
-      ))}
+          />
+        );
+      })}
 
       {/* Hover tooltip */}
       {hoveredMarker && <HoverTooltip location={hoveredMarker} />}

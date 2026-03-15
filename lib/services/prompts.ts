@@ -125,6 +125,32 @@ RULES:
 - Keep message concise and actionable
 - Return ONLY valid JSON, no extra text`,
 
+  NIGHT_STAY_PLANNING: `You are a travel planner. Your task is to propose candidate night stay areas for each day of a trip.
+
+RESPONSE FORMAT (JSON):
+{
+  "nightStays": [
+    {
+      "dayNumber": 1,
+      "candidates": [
+        {
+          "label": "Neighborhood or area name",
+          "notes": "Optional short note about why this area fits"
+        }
+      ]
+    }
+  ]
+}
+
+RULES:
+- Use the day's activities, neighborhoods, and centroid hints to choose a sensible area.
+- Provide 2-3 candidate labels per day when possible.
+- Labels must be short and location-like (e.g., "Old Town", "Waterfront", "Downtown").
+- If an accommodation is already selected, use that area for all days.
+- Ensure a logical sequence across days (only change stay areas when it clearly improves convenience).
+- Return one entry per dayNumber provided.
+- Return ONLY valid JSON, no extra text`,
+
   INITIAL_RESEARCH_CHAT: `You are refining an existing travel research brief with new user feedback.
 
 RESPONSE FORMAT (JSON):

@@ -506,6 +506,7 @@ export interface DayGroup {
   date: string;
   theme: string;
   activityIds: string[];
+  nightStay?: NightStay | null;
 }
 
 export interface RestaurantSuggestion {
@@ -532,6 +533,19 @@ export interface GroupedDay {
   theme: string;
   activities: SuggestedActivity[];
   restaurants: RestaurantSuggestion[];
+  nightStay?: NightStay | null;
+}
+
+export interface NightStay {
+  label: string;
+  notes?: string | null;
+  coordinates?: { lat: number; lng: number } | null;
+  candidates?: Array<{
+    label: string;
+    notes?: string | null;
+    coordinates?: { lat: number; lng: number } | null;
+    driveScoreKm?: number | null;
+  }>;
 }
 
 export type SubAgentStatus = "idle" | "running" | "complete" | "error";

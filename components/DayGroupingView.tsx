@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { MapPin, ListChecks } from "lucide-react";
+import { MapPin, ListChecks, Home } from "lucide-react";
 import { computeRoutes } from "@/lib/api-client";
 import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
@@ -56,6 +56,13 @@ export function DayGroupingView({
       any: 3,
     };
     return [...activities].sort((a, b) => score[a.bestTimeOfDay] - score[b.bestTimeOfDay]);
+  }, []);
+
+  const getCommutePoint = useCallback((activity: SuggestedActivity) => {
+    if (activity.locationMode === "route") {
+      return activity.startCoordinates || activity.endCoordinates || activity.coordinates || null;
+    }
+    return activity.coordinates || activity.startCoordinates || activity.endCoordinates || null;
   }, []);
 
   const commuteLegs = useMemo(() => {
@@ -338,7 +345,19 @@ export function DayGroupingView({
 
   const roundToQuarter = (value: number): number => Math.round(value / 15) * 15;
 
-  const DayTimelineRows = ({ day }: { day: GroupedDay }) => {
+  const DayTimelineRows = ({
+    day,
+    startStayLabel,
+    endStayLabel,
+    startStayCoordinates,
+    endStayCoordinates,
+  }: {
+    day: GroupedDay;
+    startStayLabel?: string | null;
+    endStayLabel?: string | null;
+    startStayCoordinates?: { lat: number; lng: number } | null;
+    endStayCoordinates?: { lat: number; lng: number } | null;
+  }) => {
     const availableVisitHours = 8;
     const lunchHours = 1;
     const sortedActivities = sortActivitiesForTimeline(day.activities);
@@ -347,10 +366,21 @@ export function DayGroupingView({
       if (!next) return sum;
       const legId = buildLegId(day.dayNumber, activity.id, next.id);
       const commuteMinutes =
-        commuteMinutesByLeg[legId] ?? estimateCommuteMinutes(activity.coordinates, next.coordinates);
+        commuteMinutesByLeg[legId] ??
+        estimateCommuteMinutes(getCommutePoint(activity), getCommutePoint(next));
       return sum + commuteMinutes;
     }, 0);
-    const totalCommuteHoursEstimate = totalCommuteMinutesEstimate / 60;
+    const firstActivity = sortedActivities[0];
+    const lastActivity = sortedActivities[sortedActivities.length - 1];
+    const stayStartCommuteMinutes =
+      startStayLabel && firstActivity && startStayCoordinates
+        ? estimateCommuteMinutes(startStayCoordinates, getCommutePoint(firstActivity))
+        : 0;
+    const stayEndCommuteMinutes =
+      endStayLabel && lastActivity && endStayCoordinates
+        ? estimateCommuteMinutes(getCommutePoint(lastActivity), endStayCoordinates)
+        : 0;
+    const totalCommuteHoursEstimate = (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 2);
     const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
     let scheduledActivityMinutes = 0;
@@ -365,6 +395,12 @@ export function DayGroupingView({
     }
 
     type TimelineItem =
+      | {
+          type: "stay";
+          id: string;
+          title: string;
+          detail: string;
+        }
       | {
           type: "activity";
           id: string;
@@ -382,6 +418,28 @@ export function DayGroupingView({
 
     const timelineItems: TimelineItem[] = [];
     let cursorMinutes = 9 * 60 + 30;
+    if (startStayLabel) {
+      timelineItems.push({
+        type: "stay",
+        id: `stay-start-${day.dayNumber}`,
+        title: "Start from stay",
+        detail: startStayLabel,
+      });
+      if (stayStartCommuteMinutes > 0) {
+        const bufferedCommuteMinutes = roundToQuarter(stayStartCommuteMinutes + 15);
+        const commuteStart = roundToQuarter(cursorMinutes);
+        const commuteEnd = commuteStart + bufferedCommuteMinutes;
+        scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
+        timelineItems.push({
+          type: "commute",
+          id: `commute-stay-start-${day.dayNumber}`,
+          title: "Commute",
+          detail: `Approx ${stayStartCommuteMinutes} min travel + buffer`,
+          timeRange: toRangeLabel(commuteStart, commuteEnd),
+        });
+        cursorMinutes = commuteEnd;
+      }
+    }
     const lunchMinStart = 12 * 60;
     const lunchTargetStart = 12 * 60 + 30;
     let lunchInserted = false;
@@ -495,6 +553,29 @@ export function DayGroupingView({
       });
     }
 
+    if (endStayLabel) {
+      if (stayEndCommuteMinutes > 0) {
+        const bufferedCommuteMinutes = roundToQuarter(stayEndCommuteMinutes + 15);
+        const commuteStart = roundToQuarter(cursorMinutes);
+        const commuteEnd = commuteStart + bufferedCommuteMinutes;
+        scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
+        timelineItems.push({
+          type: "commute",
+          id: `commute-stay-end-${day.dayNumber}`,
+          title: "Commute",
+          detail: `Approx ${stayEndCommuteMinutes} min travel + buffer`,
+          timeRange: toRangeLabel(commuteStart, commuteEnd),
+        });
+        cursorMinutes = commuteEnd;
+      }
+      timelineItems.push({
+        type: "stay",
+        id: `stay-end-${day.dayNumber}`,
+        title: "End at night stay",
+        detail: endStayLabel,
+      });
+    }
+
     const totalPlannedHours = (scheduledActivityMinutes + scheduledCommuteMinutes) / 60;
     const isOverloaded = totalPlannedHours > 8;
 
@@ -518,7 +599,9 @@ export function DayGroupingView({
                   ? "bg-amber-400 border-amber-500"
                   : item.type === "continue"
                     ? "bg-sky-300 border-sky-400"
-                    : "bg-gray-300 border-gray-400";
+                    : item.type === "stay"
+                      ? "bg-emerald-400 border-emerald-500"
+                      : "bg-gray-300 border-gray-400";
 
             return (
               <div key={item.id} className="flex gap-3">
@@ -535,6 +618,15 @@ export function DayGroupingView({
                       timeSlotLabel={item.timeRange}
                       affordLabel={item.affordLabel}
                     />
+                  ) : item.type === "stay" ? (
+                    <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-2 text-xs">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-emerald-900">{item.title}</p>
+                          <p className="text-emerald-700">{item.detail}</p>
+                        </div>
+                      </div>
+                    </div>
                   ) : (
                     <div
                       className={`rounded-md border p-2 text-xs ${
@@ -618,7 +710,7 @@ export function DayGroupingView({
           className="flex-1 flex overflow-x-auto snap-x snap-mandatory scrollbar-none"
           style={{ scrollBehavior: 'smooth' }}
         >
-          {groupedDays.map((day) => (
+          {groupedDays.map((day, index) => (
             <div key={day.dayNumber} className="w-full flex-shrink-0 snap-center px-2">
               <Card className="h-full border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
                 <CardHeader className="pb-3 shrink-0">
@@ -633,13 +725,35 @@ export function DayGroupingView({
                         </span>
                       </div>
                       <CardTitle className="text-xl">{day.theme}</CardTitle>
+                      {day.nightStay?.label && (
+                        <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                          <Home className="h-3.5 w-3.5" />
+                          Night stay: {day.nightStay.label}
+                        </div>
+                      )}
+                      {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && (
+                        <div className="mt-2 space-y-1 text-xs text-slate-600">
+                          {day.nightStay.candidates.slice(0, 3).map((candidate) => (
+                            <div key={candidate.label}>
+                              Alt: {candidate.label}
+                              {candidate.driveScoreKm != null ? ` · ~${candidate.driveScoreKm} km drive` : ""}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent className="flex-1 overflow-hidden p-0">
                   <ScrollArea className="h-full px-4 pb-6">
                     <div className="space-y-3">
-                      <DayTimelineRows day={day} />
+                      <DayTimelineRows
+                        day={day}
+                        startStayLabel={groupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
+                        endStayLabel={day.nightStay?.label}
+                        startStayCoordinates={groupedDays[index - 1]?.nightStay?.coordinates ?? day.nightStay?.coordinates}
+                        endStayCoordinates={day.nightStay?.coordinates}
+                      />
                     </div>
                   </ScrollArea>
                 </CardContent>

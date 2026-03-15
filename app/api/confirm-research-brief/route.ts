@@ -3,6 +3,7 @@ import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import type { ResearchOptionPreference, ResearchOption, SuggestedActivity } from "@/lib/models/travel-plan";
 import { mergeSuggestedActivities } from "@/lib/services/card-merging";
 import { buildGroupedDays, groupActivitiesByDay } from "@/lib/services/day-grouping";
+import { assignNightStays } from "@/lib/services/night-stays";
 import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
 
 function mapResearchOptionToSuggestedActivity(option: ResearchOption): SuggestedActivity {
@@ -113,17 +114,25 @@ export async function POST(request: NextRequest) {
       tripInfo: session.tripInfo,
       activities: selectedActivities,
     });
-    const groupedDays = buildGroupedDays({
+    let groupedDays = buildGroupedDays({
       dayGroups,
       activities: selectedActivities,
     });
+    const nightStayResult = await assignNightStays({
+      tripInfo: session.tripInfo,
+      dayGroups,
+      groupedDays,
+      selectedAccommodation: null,
+    });
+    const updatedDayGroups = nightStayResult.dayGroups;
+    groupedDays = nightStayResult.groupedDays;
 
     sessionStore.update(sessionId, {
       workflowState: WORKFLOW_STATES.GROUP_DAYS,
       researchOptionSelections: parsedSelections,
       suggestedActivities,
       selectedActivityIds,
-      dayGroups,
+      dayGroups: updatedDayGroups,
       groupedDays,
       accommodationStatus: "running",
       flightStatus: "running",
@@ -161,6 +170,21 @@ export async function POST(request: NextRequest) {
       flightLastSearchedAt: now,
     });
 
+    if (accommodationResult.success && accommodationResult.options.length > 0) {
+      const availabilityStayResult = await assignNightStays({
+        tripInfo: session.tripInfo,
+        dayGroups: updatedDayGroups,
+        groupedDays,
+        selectedAccommodation: null,
+        accommodationOptions: accommodationResult.options,
+      });
+      groupedDays = availabilityStayResult.groupedDays;
+      sessionStore.update(sessionId, {
+        dayGroups: availabilityStayResult.dayGroups,
+        groupedDays,
+      });
+    }
+
     const updatedSession = sessionStore.get(sessionId);
     if (!updatedSession) {
       throw new Error("Session not found after sub-agent run");
@@ -177,8 +201,8 @@ export async function POST(request: NextRequest) {
       researchOptionSelections: parsedSelections,
       suggestedActivities,
       selectedActivityIds,
-      dayGroups,
-      groupedDays,
+      dayGroups: updatedSession.dayGroups,
+      groupedDays: updatedSession.groupedDays,
       accommodationStatus: updatedSession.accommodationStatus,
       flightStatus: updatedSession.flightStatus,
       accommodationError: updatedSession.accommodationError,

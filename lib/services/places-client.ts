@@ -96,7 +96,7 @@ class PlacesClient {
   }
 
   private _processResults(results: unknown[]): PlaceResult[] {
-    return results.slice(0, 10).map((place: unknown) => {
+    return results.slice(0, 3).map((place: unknown) => {
       const p = place as {
         name: string;
         place_id: string;

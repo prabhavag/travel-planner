@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import type { SuggestedActivity, GroupedDay, DayGroup } from "@/lib/models/travel-plan";
 import { generateDayTheme } from "@/lib/services/day-grouping";
+import { assignNightStays } from "@/lib/services/night-stays";
 
 /**
  * Rebuild GroupedDay objects from DayGroups and activities
@@ -20,6 +21,7 @@ function buildGroupedDays(
       .map((id) => activityMap.get(id))
       .filter((a): a is SuggestedActivity => a !== undefined),
     restaurants: [],
+    nightStay: group.nightStay ?? null,
   }));
 }
 
@@ -114,12 +116,23 @@ export async function POST(request: NextRequest) {
     targetDay.theme = generateDayTheme(targetActivities);
 
     // Rebuild grouped days
-    const groupedDays = buildGroupedDays(updatedDayGroups, selectedActivities);
+    let groupedDays = buildGroupedDays(updatedDayGroups, selectedActivities);
+    const selectedAccommodation = session.selectedAccommodationOptionId
+      ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
+      : null;
+    const nightStayResult = await assignNightStays({
+      tripInfo: session.tripInfo,
+      dayGroups: updatedDayGroups,
+      groupedDays,
+      selectedAccommodation,
+    });
+    const finalizedDayGroups = nightStayResult.dayGroups;
+    groupedDays = nightStayResult.groupedDays;
 
     // Update session
     sessionStore.update(sessionId, {
-      dayGroups: updatedDayGroups,
-      groupedDays: groupedDays,
+      dayGroups: finalizedDayGroups,
+      groupedDays,
     });
 
     return NextResponse.json({
@@ -127,8 +140,8 @@ export async function POST(request: NextRequest) {
       sessionId,
       workflowState: WORKFLOW_STATES.GROUP_DAYS,
       message: `Moved activity to Day ${toDay}`,
-      dayGroups: updatedDayGroups,
-      groupedDays: groupedDays,
+      dayGroups: finalizedDayGroups,
+      groupedDays,
     });
   } catch (error) {
     console.error("Error in adjustDayGroups:", error);

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp, MapPin, Utensils, ExternalLink, Clock, Star, Plane, Building2 } from "lucide-react";
+import { ChevronDown, ChevronUp, MapPin, Utensils, ExternalLink, Clock, Star, Plane, Building2, Home } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -425,13 +425,32 @@ export function DayItineraryView({
     return Math.max(10, Math.min(50, minutes));
   };
 
+  const getCommutePoint = useCallback((activity: SuggestedActivity) => {
+    if (activity.locationMode === "route") {
+      return activity.startCoordinates || activity.endCoordinates || activity.coordinates || null;
+    }
+    return activity.coordinates || activity.startCoordinates || activity.endCoordinates || null;
+  }, []);
+
   const formatHourLabel = (hours: number): string => {
     const rounded = Math.round(hours * 10) / 10;
     if (Math.abs(rounded - 1) < 0.01) return "1 hr";
     return `${rounded} hrs`;
   };
 
-  const DayTimeline = ({ day }: { day: GroupedDay }) => {
+  const DayTimeline = ({
+    day,
+    startStayLabel,
+    endStayLabel,
+    startStayCoordinates,
+    endStayCoordinates,
+  }: {
+    day: GroupedDay;
+    startStayLabel?: string | null;
+    endStayLabel?: string | null;
+    startStayCoordinates?: { lat: number; lng: number } | null;
+    endStayCoordinates?: { lat: number; lng: number } | null;
+  }) => {
     const availableVisitHours = 8;
     const lunchHours = 1;
     const sortedActivities = sortActivitiesForTimeline(day.activities);
@@ -440,18 +459,44 @@ export function DayItineraryView({
       if (!next) return sum;
       const legId = buildLegId(day.dayNumber, activity.id, next.id);
       const commuteMinutes =
-        commuteMinutesByLeg[legId] ?? estimateCommuteMinutes(activity.coordinates, next.coordinates);
+        commuteMinutesByLeg[legId] ?? estimateCommuteMinutes(getCommutePoint(activity), getCommutePoint(next));
       return sum + commuteMinutes;
     }, 0);
-    const totalCommuteHoursEstimate = totalCommuteMinutesEstimate / 60;
+    const firstActivity = sortedActivities[0];
+    const lastActivity = sortedActivities[sortedActivities.length - 1];
+    const stayStartCommuteMinutes =
+      startStayLabel && firstActivity && startStayCoordinates
+        ? estimateCommuteMinutes(startStayCoordinates, getCommutePoint(firstActivity))
+        : 0;
+    const stayEndCommuteMinutes =
+      endStayLabel && lastActivity && endStayCoordinates
+        ? estimateCommuteMinutes(getCommutePoint(lastActivity), endStayCoordinates)
+        : 0;
+    const totalCommuteHoursEstimate =
+      (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 2);
     const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
 
     const timelineRows: Array<{
       label: string;
       detail: string;
-      type: "activity" | "commute" | "lunch";
+      type: "activity" | "commute" | "lunch" | "stay";
     }> = [];
+
+    if (startStayLabel) {
+      timelineRows.push({
+        label: "Start from stay",
+        detail: startStayLabel,
+        type: "stay",
+      });
+      if (stayStartCommuteMinutes > 0) {
+        timelineRows.push({
+          label: "Commute to first stop",
+          detail: `Approx ${stayStartCommuteMinutes} min`,
+          type: "commute",
+        });
+      }
+    }
 
     sortedActivities.forEach((activity, index) => {
       const requestedHours = parseEstimatedHours(activity.estimatedDuration);
@@ -500,6 +545,21 @@ export function DayItineraryView({
       );
     }
 
+    if (endStayLabel) {
+      if (stayEndCommuteMinutes > 0) {
+        timelineRows.push({
+          label: "Commute to night stay",
+          detail: `Approx ${stayEndCommuteMinutes} min`,
+          type: "commute",
+        });
+      }
+      timelineRows.push({
+        label: "End at night stay",
+        detail: endStayLabel,
+        type: "stay",
+      });
+    }
+
     return (
       <div className="rounded-lg border border-sky-100 bg-sky-50/50 p-3 mb-4">
         <div className="flex items-center justify-between gap-2 mb-2">
@@ -515,12 +575,14 @@ export function DayItineraryView({
                 ? "bg-white text-sky-700 border-sky-200"
                 : row.type === "lunch"
                   ? "bg-amber-50 text-amber-700 border-amber-200"
-                  : "bg-gray-50 text-gray-600 border-gray-200";
+                  : row.type === "stay"
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : "bg-gray-50 text-gray-600 border-gray-200";
 
             return (
               <div key={`${row.label}-${index}`} className="flex items-start gap-2 text-xs">
                 <Badge variant="outline" className={`shrink-0 h-5 ${badgeClass}`}>
-                  {row.type === "activity" ? "Stop" : row.type === "lunch" ? "Lunch" : "Commute"}
+                  {row.type === "activity" ? "Stop" : row.type === "lunch" ? "Lunch" : row.type === "stay" ? "Stay" : "Commute"}
                 </Badge>
                 <div className="min-w-0">
                   <p className="font-medium text-gray-800 line-clamp-1">{row.label}</p>
@@ -599,7 +661,7 @@ export function DayItineraryView({
         {groupedDays.length > 0 ? (
           <ScrollArea className="flex-1 min-h-0 px-2">
             <div className="space-y-4 pb-6">
-              {groupedDays.map((day) => (
+              {groupedDays.map((day, index) => (
                 <Card key={day.dayNumber} className="border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
                   <CardHeader className="pb-3 shrink-0">
                     <div className="flex items-center justify-between gap-3">
@@ -613,6 +675,22 @@ export function DayItineraryView({
                           </span>
                         </div>
                         <CardTitle className="text-xl">{day.theme}</CardTitle>
+                        {day.nightStay?.label && (
+                          <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                            <Home className="h-3.5 w-3.5" />
+                            Night stay: {day.nightStay.label}
+                          </div>
+                        )}
+                        {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && (
+                          <div className="mt-2 space-y-1 text-xs text-slate-600">
+                            {day.nightStay.candidates.slice(0, 3).map((candidate) => (
+                              <div key={candidate.label}>
+                                Alt: {candidate.label}
+                                {candidate.driveScoreKm != null ? ` · ~${candidate.driveScoreKm} km drive` : ""}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <Button
                         variant="outline"
@@ -634,7 +712,13 @@ export function DayItineraryView({
                   </CardHeader>
                   <CardContent className="p-0">
                     <div className="px-4 pb-6">
-                      <DayTimeline day={day} />
+                      <DayTimeline
+                        day={day}
+                        startStayLabel={groupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
+                        endStayLabel={day.nightStay?.label}
+                        startStayCoordinates={groupedDays[index - 1]?.nightStay?.coordinates ?? day.nightStay?.coordinates}
+                        endStayCoordinates={day.nightStay?.coordinates}
+                      />
                       <div className="space-y-1">
                         {day.activities.map((activity, index) => (
                           <ActivityItem

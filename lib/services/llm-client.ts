@@ -9,6 +9,7 @@ import {
   type TripResearchBrief,
   type ResearchOption,
   type ResearchOptionPreference,
+  type NightStay,
   type Coordinates,
   type RouteWaypoint,
   type LoopContext,
@@ -132,6 +133,20 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
     },
   },
 };
+
+const NIGHT_STAY_RESPONSE_SCHEMA = z.object({
+  nightStays: z.array(
+    z.object({
+      dayNumber: z.number(),
+      candidates: z.array(
+        z.object({
+          label: z.string().min(1),
+          notes: z.string().optional().nullable(),
+        })
+      ),
+    })
+  ),
+});
 
 const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -1191,23 +1206,89 @@ class LLMClient {
   }
 
   private _pickBestPlace(
-    places: Array<{ name: string; vicinity?: string | null; place_id: string; location: Coordinates }>,
+    places: Array<{ name: string; vicinity?: string | null; place_id: string; location: Coordinates; types?: string[] }>,
+    optionTitle: string,
     destinationName?: string,
     countryName?: string
   ) {
     if (!places.length) return null;
-    const tokens = [destinationName, countryName]
+
+    const normalize = (value: string) =>
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const stopwords = new Set([
+      "the",
+      "and",
+      "of",
+      "in",
+      "on",
+      "for",
+      "to",
+      "a",
+      "an",
+      "at",
+      "with",
+      "tour",
+      "trip",
+      "experience",
+      "class",
+      "activity",
+      "ticket",
+      "adventure",
+      "snorkel",
+      "snorkeling",
+      "hike",
+      "hiking",
+      "beach",
+      "bay",
+      "park",
+      "trail",
+      "drive",
+      "road",
+    ]);
+
+    const titleTokens = normalize(optionTitle)
+      .split(" ")
+      .filter((token) => token.length >= 3 && !stopwords.has(token));
+    const strongTokens = titleTokens.filter((token) => token.length >= 5);
+    const destinationTokens = [destinationName, countryName]
       .filter((value): value is string => Boolean(value))
-      .map((value) => value.toLowerCase());
+      .map((value) => normalize(value))
+      .filter(Boolean);
 
-    if (!tokens.length) return places[0];
+    const scored = places
+      .map((place) => {
+        const haystack = normalize(`${place.name || ""} ${place.vicinity || ""}`);
+        const name = normalize(place.name || "");
 
-    const matches = places.filter((place) => {
-      const haystack = `${place.name || ""} ${place.vicinity || ""}`.toLowerCase();
-      return tokens.some((token) => haystack.includes(token));
-    });
+        // Require at least one strong title token if we have any.
+        if (strongTokens.length > 0 && !strongTokens.some((token) => haystack.includes(token))) {
+          return null;
+        }
 
-    return matches[0] || places[0];
+        let score = 0;
+        if (name && name === normalize(optionTitle)) score += 6;
+        if (name && name.includes(normalize(optionTitle))) score += 4;
+
+        titleTokens.forEach((token) => {
+          if (haystack.includes(token)) score += 2;
+        });
+        destinationTokens.forEach((token) => {
+          if (haystack.includes(token)) score += 1;
+        });
+
+        return { place, score };
+      })
+      .filter((value): value is { place: (typeof places)[number]; score: number } => Boolean(value));
+
+    if (scored.length === 0) return places[0];
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0].place;
   }
 
   private _inferLocationMode(option: { title: string; category: string }): "point" | "route" | "area" {
@@ -1603,7 +1684,7 @@ class LLMClient {
             }
           }
 
-          const preferredPlace = this._pickBestPlace(places, destinationName, destinationCountryName);
+          const preferredPlace = this._pickBestPlace(places, option.title, destinationName, destinationCountryName);
           this._logRouteDebug("placeSearchSelection", {
             optionTitle: option.title,
             destinationName,
@@ -2457,6 +2538,89 @@ class LLMClient {
         modifications: null,
         readyToFinalize: false,
       };
+    }
+  }
+
+  async determineNightStays({
+    tripInfo,
+    groupedDays,
+    selectedAccommodation,
+    accommodationOptions,
+  }: {
+    tripInfo: TripInfo;
+    groupedDays: GroupedDay[];
+    selectedAccommodation?: AccommodationOption | null;
+    accommodationOptions?: AccommodationOption[];
+  }): Promise<{ success: boolean; nightStays: Array<{ dayNumber: number; candidates: NightStay[] }> }> {
+    const messages: Array<{ role: "system" | "user"; content: string }> = [
+      { role: "system", content: SYSTEM_PROMPTS.NIGHT_STAY_PLANNING },
+    ];
+
+    const daysPayload = groupedDays
+      .sort((a, b) => a.dayNumber - b.dayNumber)
+      .map((day) => ({
+        dayNumber: day.dayNumber,
+        date: day.date,
+        activities: day.activities.map((activity) => ({
+          name: activity.name,
+          neighborhood: activity.neighborhood ?? null,
+          coordinates: activity.coordinates ?? null,
+        })),
+      }));
+
+    const availabilitySummary = Array.isArray(accommodationOptions) && accommodationOptions.length > 0
+      ? accommodationOptions.reduce<Record<string, number>>((acc, option) => {
+          const key = option.neighborhood?.trim() || "Unspecified area";
+          acc[key] = (acc[key] || 0) + 1;
+          return acc;
+        }, {})
+      : null;
+
+    messages.push({
+      role: "user",
+      content: `Trip details:
+Destination: ${tripInfo.destination || "Unknown"}
+Dates: ${tripInfo.startDate || "Unknown"} to ${tripInfo.endDate || "Unknown"}
+Preferences: ${(tripInfo.preferences || []).join(", ") || "General tourism"}
+
+Selected accommodation:
+${selectedAccommodation ? JSON.stringify(selectedAccommodation, null, 2) : "None"}
+
+Accommodation availability by area:
+${availabilitySummary ? JSON.stringify(availabilitySummary, null, 2) : "None"}
+
+Day plan:
+${JSON.stringify(daysPayload, null, 2)}`,
+    });
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+      });
+
+      const response = this._parseJsonResponse(completion);
+      const parsed = NIGHT_STAY_RESPONSE_SCHEMA.safeParse(response);
+      if (!parsed.success) {
+        return { success: false, nightStays: [] };
+      }
+
+      return {
+        success: true,
+        nightStays: parsed.data.nightStays.map((entry) => ({
+          dayNumber: entry.dayNumber,
+          candidates: entry.candidates.map((candidate) => ({
+            label: candidate.label,
+            notes: candidate.notes ?? null,
+            coordinates: null,
+          })),
+        })),
+      };
+    } catch (error) {
+      console.error("Error in determineNightStays:", error);
+      return { success: false, nightStays: [] };
     }
   }
 

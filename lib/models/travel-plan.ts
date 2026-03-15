@@ -304,12 +304,31 @@ export const SuggestedActivitySchema = z.object({
 
 export type SuggestedActivity = z.infer<typeof SuggestedActivitySchema>;
 
+export const NightStaySchema = z.object({
+  label: z.string(),
+  notes: z.string().optional().nullable(),
+  coordinates: CoordinatesSchema.optional().nullable(),
+  candidates: z
+    .array(
+      z.object({
+        label: z.string(),
+        notes: z.string().optional().nullable(),
+        coordinates: CoordinatesSchema.optional().nullable(),
+        driveScoreKm: z.number().optional().nullable(),
+      }),
+    )
+    .optional(),
+});
+
+export type NightStay = z.infer<typeof NightStaySchema>;
+
 // Day grouping from LLM
 export const DayGroupSchema = z.object({
   dayNumber: z.number(),
   date: z.string(),
   theme: z.string(), // Auto-generated theme based on grouped activities
   activityIds: z.array(z.string()), // References to SuggestedActivity.id
+  nightStay: NightStaySchema.optional().nullable(),
 });
 
 export type DayGroup = z.infer<typeof DayGroupSchema>;
@@ -342,6 +361,7 @@ export const GroupedDaySchema = z.object({
   theme: z.string(),
   activities: z.array(SuggestedActivitySchema),
   restaurants: z.array(RestaurantSuggestionSchema).default([]),
+  nightStay: NightStaySchema.optional().nullable(),
 });
 
 export type GroupedDay = z.infer<typeof GroupedDaySchema>;
