@@ -249,7 +249,10 @@ function getCurrencyFromSession(session: Session): string {
 function getCentroid(coordinates: Array<{ lat: number; lng: number }>) {
   if (coordinates.length === 0) return { lat: 0, lng: 0 };
   const sum = coordinates.reduce(
-    (acc, coord) => ({ lat: acc.lat + coord.lat, lng: acc.lng + coord.lng }),
+    (acc, coord) => ({
+      lat: acc.lat + (typeof coord.lat === "string" ? parseFloat(coord.lat) : coord.lat),
+      lng: acc.lng + (typeof coord.lng === "string" ? parseFloat(coord.lng) : coord.lng)
+    }),
     { lat: 0, lng: 0 },
   );
   return {
@@ -737,14 +740,10 @@ function appendRecoveryHint(existing: string[], hint: string): string[] {
 }
 
 function formatAiCheckMessage(result: AiCheckResult): string {
-  if (result.verdict === "LGTM") {
-    return `AI Check: LGTM\n\n${result.summary}`;
+  if (result.status === "ERROR") {
+    return `AI Check: Error\n\n${result.summary}`;
   }
-  if (result.suggestions.length === 0) {
-    return `AI Check: Suggestions\n\n${result.summary}`;
-  }
-  const bullets = result.suggestions.map((item) => `- ${item}`).join("\n");
-  return `AI Check: Suggestions\n\n${result.summary}\n\n${bullets}`;
+  return `AI Check Review\n\n${result.summary}`;
 }
 
 async function runLoop({
@@ -1242,38 +1241,38 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
     if (uiType === "run_ai_check") {
       const llmClient = getLLMClient();
       const checkedAt = new Date().toISOString();
-      let aiCheckResult: AiCheckResult;
-
-      if (!session.groupedDays || session.groupedDays.length === 0) {
-        aiCheckResult = {
-          verdict: "SUGGESTIONS",
-          summary: "I need at least one planned day before I can run a meaningful AI quality check.",
-          suggestions: ["Build your day-by-day itinerary first, then run AI Check again."],
-          checkedAt,
-        };
-      } else {
-        const selectedAccommodation =
-          session.selectedAccommodationOptionId != null
-            ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
-            : null;
-        const selectedFlight =
-          session.selectedFlightOptionId != null
-            ? session.flightOptions.find((option) => option.id === session.selectedFlightOptionId) || null
-            : null;
-
-        const result = await llmClient.runOnDemandAiCheck({
-          tripInfo: session.tripInfo,
-          groupedDays: session.groupedDays,
-          selectedAccommodation,
-          selectedFlight,
-        });
-        aiCheckResult = {
-          verdict: result.success ? result.verdict : "ERROR",
-          summary: result.summary,
-          suggestions: result.suggestions,
-          checkedAt,
-        };
-      }
+      const selectedAccommodation =
+        session.selectedAccommodationOptionId != null
+          ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
+          : null;
+      const selectedFlight =
+        session.selectedFlightOptionId != null
+          ? session.flightOptions.find((option) => option.id === session.selectedFlightOptionId) || null
+          : null;
+      const result = await llmClient.runOnDemandAiCheck({
+        workflowState: session.workflowState,
+        tripInfo: session.tripInfo,
+        suggestedActivities: session.suggestedActivities || [],
+        selectedActivityIds: session.selectedActivityIds || [],
+        dayGroups: session.dayGroups || [],
+        groupedDays: session.groupedDays || [],
+        restaurantSuggestions: (session.restaurantSuggestions || []).map((restaurant) => ({
+          id: restaurant.id,
+          name: restaurant.name,
+        })),
+        selectedRestaurantIds: session.selectedRestaurantIds || [],
+        selectedAccommodation,
+        selectedFlight,
+        wantsAccommodation: session.wantsAccommodation,
+        wantsFlight: session.wantsFlight,
+        accommodationStatus: session.accommodationStatus,
+        flightStatus: session.flightStatus,
+      });
+      const aiCheckResult: AiCheckResult = {
+        status: result.success ? result.status : "ERROR",
+        summary: result.assessment,
+        checkedAt,
+      };
 
       const finalMessage = formatAiCheckMessage(aiCheckResult);
       sessionStore.update(session.sessionId, {

@@ -86,22 +86,31 @@ interface MapComponentProps {
   highlightedDay?: number | null;
 }
 
-function isValidCoordinate(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+function isValidCoordinate(value: unknown): boolean {
+  if (typeof value === "number" && Number.isFinite(value)) return true;
+  if (typeof value === "string") {
+    const parsed = parseFloat(value);
+    return !Number.isNaN(parsed) && Number.isFinite(parsed);
+  }
+  return false;
+}
+
+function getValidCoordinate(value: number | string | null | undefined): number {
+  return typeof value === "string" ? parseFloat(value) : (value as number);
 }
 
 function hasValidCoordinates(
-  coords: { lat?: number | null; lng?: number | null } | null | undefined
+  coords: { lat?: number | string | null; lng?: number | string | null } | null | undefined
 ): coords is { lat: number; lng: number } {
   return Boolean(coords && isValidCoordinate(coords.lat) && isValidCoordinate(coords.lng));
 }
 
 type CoordinateCarrier = {
   locationMode?: "point" | "route" | "area";
-  coordinates?: { lat?: number | null; lng?: number | null } | null;
-  startCoordinates?: { lat?: number | null; lng?: number | null } | null;
-  endCoordinates?: { lat?: number | null; lng?: number | null } | null;
-  routePoints?: Array<{ lat?: number | null; lng?: number | null }> | null;
+  coordinates?: { lat?: number | string | null; lng?: number | string | null } | null;
+  startCoordinates?: { lat?: number | string | null; lng?: number | string | null } | null;
+  endCoordinates?: { lat?: number | string | null; lng?: number | string | null } | null;
+  routePoints?: Array<{ lat?: number | string | null; lng?: number | string | null }> | null;
 };
 
 function resolveMarkerCoordinates(item: CoordinateCarrier): { lat: number; lng: number } | null {
@@ -112,7 +121,7 @@ function resolveMarkerCoordinates(item: CoordinateCarrier): { lat: number; lng: 
       : [item.coordinates, item.startCoordinates, item.endCoordinates, routeStart];
 
   const valid = candidates.find((candidate) => hasValidCoordinates(candidate));
-  return valid ? { lat: valid.lat, lng: valid.lng } : null;
+  return valid ? { lat: getValidCoordinate(valid.lat), lng: getValidCoordinate(valid.lng) } : null;
 }
 
 export default function MapComponent({
@@ -158,8 +167,8 @@ export default function MapComponent({
         if (hasValidCoordinates(startStay?.coordinates)) {
           locs.push({
             name: `Start stay: ${startStay.label}`,
-            lat: startStay.coordinates.lat,
-            lng: startStay.coordinates.lng,
+            lat: getValidCoordinate(startStay.coordinates.lat),
+            lng: getValidCoordinate(startStay.coordinates.lng),
             slot: "stay-start",
             slotIndex: -1,
             actIndex: -1,
@@ -192,8 +201,8 @@ export default function MapComponent({
           if (hasValidCoordinates(restaurant.coordinates)) {
             locs.push({
               name: restaurant.name,
-              lat: restaurant.coordinates.lat,
-              lng: restaurant.coordinates.lng,
+              lat: getValidCoordinate(restaurant.coordinates.lat),
+              lng: getValidCoordinate(restaurant.coordinates.lng),
               slot: "restaurant",
               slotIndex: 100 + restIndex, // Put restaurants after activities
               actIndex: day.activities.length + restIndex,
@@ -209,8 +218,8 @@ export default function MapComponent({
         if (hasValidCoordinates(endStay?.coordinates)) {
           locs.push({
             name: `End stay: ${endStay.label}`,
-            lat: endStay.coordinates.lat,
-            lng: endStay.coordinates.lng,
+            lat: getValidCoordinate(endStay.coordinates.lat),
+            lng: getValidCoordinate(endStay.coordinates.lng),
             slot: "stay-end",
             slotIndex: 999,
             actIndex: day.activities.length + day.restaurants.length + 1,
@@ -221,7 +230,30 @@ export default function MapComponent({
         }
       });
     }
-    // Mode 2: Initial research recommendations
+    // Mode 2: Suggested activities (before day grouping)
+    else if (suggestedActivities && suggestedActivities.length > 0) {
+      suggestedActivities.forEach((activity, actIndex) => {
+        const isSelected = selectedSet.has(activity.id);
+        const markerCoordinates = resolveMarkerCoordinates(activity);
+        if (markerCoordinates) {
+          locs.push({
+            name: activity.name,
+            lat: markerCoordinates.lat,
+            lng: markerCoordinates.lng,
+            slot: activity.bestTimeOfDay || "any",
+            slotIndex: 0,
+            actIndex: actIndex,
+            day: 0, // No day assigned yet
+            desc: activity.type,
+            isSelected: isSelected,
+            activityId: activity.id,
+            photoUrl: activity.photo_url || null,
+            mode: "suggested",
+          });
+        }
+      });
+    }
+    // Mode 3: Initial research recommendations
     else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
       tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
         const markerCoordinates = resolveMarkerCoordinates(option);
@@ -243,29 +275,6 @@ export default function MapComponent({
         });
       });
     }
-    // Mode 3: Suggested activities (before day grouping)
-    else if (suggestedActivities && suggestedActivities.length > 0) {
-      suggestedActivities.forEach((activity, actIndex) => {
-        if (!selectedSet.has(activity.id)) return;
-        const markerCoordinates = resolveMarkerCoordinates(activity);
-        if (markerCoordinates) {
-          locs.push({
-            name: activity.name,
-            lat: markerCoordinates.lat,
-            lng: markerCoordinates.lng,
-            slot: activity.bestTimeOfDay || "any",
-            slotIndex: 0,
-            actIndex: actIndex,
-            day: 0, // No day assigned yet
-            desc: activity.type,
-            isSelected: true,
-            activityId: activity.id,
-            photoUrl: activity.photo_url || null,
-            mode: "suggested",
-          });
-        }
-      });
-    }
     // Mode 4: Legacy itinerary format
     else if (itinerary) {
       itinerary.forEach((day, dayIndex) => {
@@ -277,8 +286,8 @@ export default function MapComponent({
               if (hasValidCoordinates(act.coordinates)) {
                 locs.push({
                   name: act.name,
-                  lat: act.coordinates.lat,
-                  lng: act.coordinates.lng,
+                  lat: getValidCoordinate(act.coordinates.lat),
+                  lng: getValidCoordinate(act.coordinates.lng),
                   slot: slot,
                   slotIndex: slotIndex,
                   actIndex: actIndex,
@@ -304,11 +313,12 @@ export default function MapComponent({
       groupedDays.forEach((day) => {
         day.activities.forEach((activity, actIndex) => {
           if (activity.locationMode !== "route") return;
-          const points = activity.routePoints || [];
-          if (points.length < 2) return;
+          const rawPoints = activity.routePoints || [];
+          if (rawPoints.length < 2) return;
+          const points = rawPoints.map(p => ({ lat: getValidCoordinate(p.lat), lng: getValidCoordinate(p.lng) }));
           const explicitWaypoints = (activity.routeWaypoints || []).map((waypoint) => ({
             name: waypoint.name,
-            coordinates: waypoint.coordinates,
+            coordinates: { lat: getValidCoordinate(waypoint.coordinates.lat), lng: getValidCoordinate(waypoint.coordinates.lng) },
           }));
           const waypoints =
             explicitWaypoints.length > 0
@@ -328,41 +338,15 @@ export default function MapComponent({
           });
         });
       });
-    } else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
-      tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
-        if (option.locationMode !== "route") return;
-        const points = option.routePoints || [];
-        if (points.length < 2) return;
-        const explicitWaypoints = (option.routeWaypoints || []).map((waypoint) => ({
-          name: waypoint.name,
-          coordinates: waypoint.coordinates,
-        }));
-        const waypoints =
-          explicitWaypoints.length > 0
-            ? explicitWaypoints
-            : points.slice(1, -1).map((coordinates, index) => ({
-              name: `Waypoint ${index + 1}`,
-              coordinates,
-            }));
-        segments.push({
-          id: option.id,
-          activityId: option.id,
-          name: option.title,
-          baseLabel: optionIndex + 1,
-          day: null,
-          points,
-          waypoints,
-        });
-      });
     } else if (suggestedActivities && suggestedActivities.length > 0) {
       suggestedActivities.forEach((activity, actIndex) => {
-        if (!selectedSet.has(activity.id)) return;
         if (activity.locationMode !== "route") return;
-        const points = activity.routePoints || [];
-        if (points.length < 2) return;
+        const rawPoints = activity.routePoints || [];
+        if (rawPoints.length < 2) return;
+        const points = rawPoints.map(p => ({ lat: getValidCoordinate(p.lat), lng: getValidCoordinate(p.lng) }));
         const explicitWaypoints = (activity.routeWaypoints || []).map((waypoint) => ({
           name: waypoint.name,
-          coordinates: waypoint.coordinates,
+          coordinates: { lat: getValidCoordinate(waypoint.coordinates.lat), lng: getValidCoordinate(waypoint.coordinates.lng) },
         }));
         const waypoints =
           explicitWaypoints.length > 0
@@ -376,6 +360,33 @@ export default function MapComponent({
           activityId: activity.id,
           name: activity.name,
           baseLabel: actIndex + 1,
+          day: null,
+          points,
+          waypoints,
+        });
+      });
+    } else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
+      tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
+        if (option.locationMode !== "route") return;
+        const rawPoints = option.routePoints || [];
+        if (rawPoints.length < 2) return;
+        const points = rawPoints.map(p => ({ lat: getValidCoordinate(p.lat), lng: getValidCoordinate(p.lng) }));
+        const explicitWaypoints = (option.routeWaypoints || []).map((waypoint) => ({
+          name: waypoint.name,
+          coordinates: { lat: getValidCoordinate(waypoint.coordinates.lat), lng: getValidCoordinate(waypoint.coordinates.lng) },
+        }));
+        const waypoints =
+          explicitWaypoints.length > 0
+            ? explicitWaypoints
+            : points.slice(1, -1).map((coordinates, index) => ({
+              name: `Waypoint ${index + 1}`,
+              coordinates,
+            }));
+        segments.push({
+          id: option.id,
+          activityId: option.id,
+          name: option.title,
+          baseLabel: optionIndex + 1,
           day: null,
           points,
           waypoints,
@@ -416,11 +427,11 @@ export default function MapComponent({
   }
 
   const isGroupedMode = Boolean(groupedDays && groupedDays.length > 0);
-  const isResearchSelectionMode = Boolean(
-    !isGroupedMode && tripResearchBrief && tripResearchBrief.popularOptions.length > 0
-  );
   const isActivitySelectionMode = Boolean(
-    !isGroupedMode && !isResearchSelectionMode && suggestedActivities && suggestedActivities.length > 0
+    !isGroupedMode && suggestedActivities && suggestedActivities.length > 0
+  );
+  const isResearchSelectionMode = Boolean(
+    !isGroupedMode && !isActivitySelectionMode && tripResearchBrief && tripResearchBrief.popularOptions.length > 0
   );
 
   return (
@@ -887,39 +898,39 @@ function GoogleMapContent({
     >
       {isGroupedMode
         ? dayRouteLegs.map((leg) => {
-            const path = decodedDayRoutePaths[leg.id];
-            if (!path || path.length < 2) return null;
-            return (
-              <Polyline
-                key={`day-route-${leg.id}`}
-                path={path}
-                options={{
-                  strokeColor: getDayColor(leg.day),
-                  strokeOpacity: 0.6,
-                  strokeWeight: 3,
-                }}
-              />
-            );
-          })
+          const path = decodedDayRoutePaths[leg.id];
+          if (!path || path.length < 2) return null;
+          return (
+            <Polyline
+              key={`day-route-${leg.id}`}
+              path={path}
+              options={{
+                strokeColor: getDayColor(leg.day),
+                strokeOpacity: 0.6,
+                strokeWeight: 3,
+              }}
+            />
+          );
+        })
         : null}
 
       {isGroupedMode
         ? routeSegments.map((segment) => {
-            const decodedPath = decodedRoutePaths[segment.id];
-            if (!decodedPath || decodedPath.length < 2) return null;
-            const strokeColor = segment.day ? getDayColor(segment.day) : "#2563EB";
-            return (
-              <Polyline
-                key={`route-${segment.id}`}
-                path={decodedPath}
-                options={{
-                  strokeColor,
-                  strokeOpacity: 0.75,
-                  strokeWeight: 4,
-                }}
-              />
-            );
-          })
+          const decodedPath = decodedRoutePaths[segment.id];
+          if (!decodedPath || decodedPath.length < 2) return null;
+          const strokeColor = segment.day ? getDayColor(segment.day) : "#2563EB";
+          return (
+            <Polyline
+              key={`route-${segment.id}`}
+              path={decodedPath}
+              options={{
+                strokeColor,
+                strokeOpacity: 0.75,
+                strokeWeight: 4,
+              }}
+            />
+          );
+        })
         : null}
       {/* Route waypoints with segmented numbering, e.g. 3.1, 3.2 */}
       {routeSegments.flatMap((path) =>
@@ -928,28 +939,28 @@ function GoogleMapContent({
           const style = getWaypointMarkerStyle(path.activityId, path.day);
           const scale = isHovered ? 1.45 : 1.25;
           return (
-          <Marker
-            key={`${path.id}-${index}`}
-            position={waypoint.coordinates}
-            icon={{
-              path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
-              fillColor: style.fillColor,
-              fillOpacity: style.fillOpacity,
-              strokeColor: style.strokeColor,
-              strokeWeight: 1,
-              scale,
-              anchor: new window.google.maps.Point(12, 21),
-              labelOrigin: new window.google.maps.Point(12, 8),
-            }}
-            label={{
-              text: `${path.baseLabel}.${index + 1}`,
-              color: "white",
-              fontWeight: "700",
-              fontSize: "10px",
-            }}
-            zIndex={isHovered ? 2100 : 1600}
-            title={`${path.name}, ${waypoint.name}`}
-          />
+            <Marker
+              key={`${path.id}-${index}`}
+              position={waypoint.coordinates}
+              icon={{
+                path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
+                fillColor: style.fillColor,
+                fillOpacity: style.fillOpacity,
+                strokeColor: style.strokeColor,
+                strokeWeight: 1,
+                scale,
+                anchor: new window.google.maps.Point(12, 21),
+                labelOrigin: new window.google.maps.Point(12, 8),
+              }}
+              label={{
+                text: `${path.baseLabel}.${index + 1}`,
+                color: "white",
+                fontWeight: "700",
+                fontSize: "10px",
+              }}
+              zIndex={isHovered ? 2100 : 1600}
+              title={`${path.name}, ${waypoint.name}`}
+            />
           );
         })
       )}
@@ -966,11 +977,11 @@ function GoogleMapContent({
               isStayMarker
                 ? undefined
                 : {
-                    text: (loc.actIndex + 1).toString(),
-                    color: "white",
-                    fontWeight: "700",
-                    fontSize: (loc.activityId === hoveredActivityId || isGroupedMode) ? "11px" : "10px",
-                  }
+                  text: (loc.actIndex + 1).toString(),
+                  color: loc.mode === "research" || loc.mode === "suggested" ? (loc.isSelected ? "white" : "#6B7280") : "white",
+                  fontWeight: "700",
+                  fontSize: (loc.activityId === hoveredActivityId || isGroupedMode) ? "11px" : "10px",
+                }
             }
             onClick={() => {
               if (isActivitySelectionMode && onActivityClick && loc.activityId) {

@@ -3,8 +3,10 @@ import { z } from "zod";
 import {
   type AccommodationOption,
   type FlightOption,
+  type WorkflowState,
   type TripInfo,
   type SuggestedActivity,
+  type DayGroup,
   type GroupedDay,
   type TripResearchBrief,
   type ResearchOption,
@@ -1544,6 +1546,9 @@ class LLMClient {
             searchQuery,
             textSearchOptions,
           });
+
+          console.log(`[Research-Enrich] Searching for: "${searchQuery}" (Region: ${textSearchOptions.region})`);
+
           let places = await placesClient.searchPlaces(
             searchQuery,
             destinationCoords,
@@ -1563,6 +1568,12 @@ class LLMClient {
               types: place.types || [],
             })),
           });
+
+          if (places.length > 0) {
+            console.log(`[Research-Enrich] Found ${places.length} results for "${option.title}". Best match: "${places[0].name}"`);
+          } else {
+            console.log(`[Research-Enrich] No results for "${option.title}" in primary search.`);
+          }
           if (!places.length && destinationCoords) {
             places = await placesClient.searchPlaces(searchQuery, destinationCoords, 500000, null, textSearchOptions);
             this._logRouteDebug("placeSearchResults", {
@@ -2542,82 +2553,109 @@ class LLMClient {
   }
 
   async runOnDemandAiCheck({
+    workflowState,
     tripInfo,
+    suggestedActivities,
+    selectedActivityIds,
+    dayGroups,
     groupedDays,
+    restaurantSuggestions,
+    selectedRestaurantIds,
     selectedAccommodation,
     selectedFlight,
+    wantsAccommodation,
+    wantsFlight,
+    accommodationStatus,
+    flightStatus,
   }: {
+    workflowState: WorkflowState;
     tripInfo: TripInfo;
+    suggestedActivities: SuggestedActivity[];
+    selectedActivityIds: string[];
+    dayGroups: DayGroup[];
     groupedDays: GroupedDay[];
+    restaurantSuggestions: Array<{ id: string; name: string }>;
+    selectedRestaurantIds: string[];
     selectedAccommodation: AccommodationOption | null;
     selectedFlight: FlightOption | null;
+    wantsAccommodation: boolean | null;
+    wantsFlight: boolean | null;
+    accommodationStatus: "idle" | "running" | "complete" | "error";
+    flightStatus: "idle" | "running" | "complete" | "error";
   }): Promise<{
     success: boolean;
-    verdict: "LGTM" | "SUGGESTIONS";
-    summary: string;
-    suggestions: string[];
+    status: "OK" | "ERROR";
+    assessment: string;
   }> {
     try {
       const completion = await this.openai.chat.completions.create({
         model: this.model,
         temperature: 0.2,
-        response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "You are a strict travel-plan QA reviewer. Return concise quality feedback only. Respond in JSON with keys verdict, summary, suggestions. verdict must be LGTM or SUGGESTIONS. suggestions must be an array of short actionable bullets. If plan is good, return LGTM with empty suggestions.",
+              "You are a principal travel-planning reviewer. Evaluate itinerary quality so far for the current workflow stage. Respond in plain text only. Do not output verdict labels like LGTM/needs work. Give a concise overall assessment, then concrete improvements prioritized by impact, and finish with the single most important next step.",
           },
           {
             role: "user",
-            content: `Run an AI quality check on this trip plan and return your verdict.
+            content: `Run an AI quality check on this trip based on current workflow state.
+
+Workflow state:
+${workflowState}
 
 Trip info:
 ${JSON.stringify(tripInfo, null, 2)}
 
+Suggested activities:
+${JSON.stringify(suggestedActivities, null, 2)}
+
+Selected activity IDs:
+${JSON.stringify(selectedActivityIds, null, 2)}
+
+Day groups:
+${JSON.stringify(dayGroups, null, 2)}
+
 Grouped days:
 ${JSON.stringify(groupedDays, null, 2)}
+
+Restaurant suggestions:
+${JSON.stringify(restaurantSuggestions, null, 2)}
+
+Selected restaurant IDs:
+${JSON.stringify(selectedRestaurantIds, null, 2)}
 
 Selected accommodation:
 ${JSON.stringify(selectedAccommodation, null, 2)}
 
 Selected flight:
-${JSON.stringify(selectedFlight, null, 2)}`,
+${JSON.stringify(selectedFlight, null, 2)}
+
+Accommodation decision/status:
+${JSON.stringify({ wantsAccommodation, accommodationStatus }, null, 2)}
+
+Flight decision/status:
+${JSON.stringify({ wantsFlight, flightStatus }, null, 2)}`,
           },
         ],
       });
 
-      const response = this._parseJsonResponse(completion) as Record<string, unknown>;
-      const rawVerdict = typeof response.verdict === "string" ? response.verdict.toUpperCase() : "";
-      const suggestions = Array.isArray(response.suggestions)
-        ? response.suggestions
-            .filter((item): item is string => typeof item === "string")
-            .map((item) => item.trim())
-            .filter(Boolean)
-            .slice(0, 8)
-        : [];
-      const summary = typeof response.summary === "string" ? response.summary.trim() : "";
-
-      const verdict: "LGTM" | "SUGGESTIONS" =
-        rawVerdict === "LGTM" ? "LGTM" : suggestions.length > 0 ? "SUGGESTIONS" : "LGTM";
+      const content = completion.choices[0]?.message?.content?.trim() || "";
+      const assessment = content.trim();
 
       return {
         success: true,
-        verdict,
-        summary:
-          summary ||
-          (verdict === "LGTM"
-            ? "AI quality check passed. No major itinerary issues found."
-            : "AI quality check found a few improvements worth considering."),
-        suggestions: verdict === "LGTM" ? [] : suggestions,
+        status: "OK",
+        assessment:
+          assessment ||
+          "I reviewed the itinerary state and could not extract a full assessment. Try running AI Check again.",
       };
     } catch (error) {
       console.error("Error in runOnDemandAiCheck:", error);
       return {
         success: false,
-        verdict: "SUGGESTIONS",
-        summary: "AI quality check failed. Please try again.",
-        suggestions: [],
+        status: "ERROR",
+        assessment: "AI quality check failed. Please try again.",
       };
     }
   }

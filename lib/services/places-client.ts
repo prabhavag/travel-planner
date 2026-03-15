@@ -33,17 +33,19 @@ class PlacesClient {
   private apiKey: string;
 
   constructor() {
-    const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-    if (!apiKey) {
+    const rawApiKey = process.env.GOOGLE_PLACES_API_KEY;
+    if (!rawApiKey) {
       throw new Error("GOOGLE_PLACES_API_KEY not set.");
     }
 
-    if (!apiKey.trim()) {
-      throw new Error("GOOGLE_PLACES_API_KEY is empty.");
+    // Sanitize API key: remove any non-printable characters or whitespace
+    this.apiKey = rawApiKey.replace(/[^\x20-\x7E]/g, "").trim();
+
+    if (!this.apiKey) {
+      throw new Error("GOOGLE_PLACES_API_KEY is empty after sanitation.");
     }
 
     this.client = new Client({});
-    this.apiKey = apiKey.trim();
   }
 
   async searchPlaces(
@@ -56,12 +58,13 @@ class PlacesClient {
       region?: string;
     } = {}
   ): Promise<PlaceResult[]> {
+    const cleanQuery = query.replace(/[^\x20-\x7E]/g, "").trim();
     try {
       const useTextSearch = !location || options.preferTextSearch;
       if (useTextSearch) {
         const params: Record<string, unknown> = {
           key: this.apiKey,
-          query: query,
+          query: cleanQuery,
         };
         if (placeType) params.type = placeType;
         if (location) {
@@ -81,7 +84,7 @@ class PlacesClient {
         key: this.apiKey,
         location: location,
         radius: radius,
-        keyword: query,
+        keyword: cleanQuery,
       };
       if (placeType) params.type = placeType;
 
@@ -90,7 +93,17 @@ class PlacesClient {
       });
       return this._processResults(response.data.results || []);
     } catch (error) {
-      console.error("Error searching places:", (error as Error).message);
+      const axiosError = error as any;
+      const status = axiosError.response?.status;
+      const message = axiosError.message;
+      const data = axiosError.response?.data;
+
+      console.error(`Error searching places for '${cleanQuery}':`, {
+        status,
+        message,
+        data: data ? (typeof data === 'string' ? data.substring(0, 200) : data) : 'No response data'
+      });
+
       return [];
     }
   }

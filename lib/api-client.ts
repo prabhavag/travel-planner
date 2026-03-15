@@ -124,9 +124,8 @@ export interface SessionResponse {
 }
 
 export interface AiCheckResult {
-  verdict: "LGTM" | "SUGGESTIONS" | "ERROR";
+  status: "OK" | "ERROR";
   summary: string;
-  suggestions: string[];
   checkedAt: string;
 }
 

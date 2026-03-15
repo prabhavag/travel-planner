@@ -1173,11 +1173,9 @@ export default function PlannerPage() {
         !selectedActivityIds.every(id => lastGroupedActivityIds.includes(id)));
 
     const aiCheckBadgeTone =
-      aiCheckResult?.verdict === "LGTM"
-        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-        : aiCheckResult?.verdict === "SUGGESTIONS"
-          ? "bg-amber-50 text-amber-700 border-amber-200"
-          : "bg-red-50 text-red-700 border-red-200";
+      aiCheckResult?.status === "ERROR"
+        ? "bg-red-50 text-red-700 border-red-200"
+        : "bg-sky-50 text-sky-700 border-sky-200";
 
     return (
       <div className="flex h-full min-h-0 flex-col bg-gray-100">
@@ -1223,7 +1221,7 @@ export default function PlannerPage() {
             <div className="min-w-0 text-xs text-gray-600">
               {aiCheckResult ? (
                 <span className={`inline-flex items-center rounded-full border px-2 py-1 ${aiCheckBadgeTone}`}>
-                  {aiCheckResult.verdict === "LGTM" ? "AI Check: LGTM" : "AI Check: Suggestions"}
+                  {aiCheckResult.status === "ERROR" ? "AI Check: Error" : "AI Check: Reviewed"}
                 </span>
               ) : (
                 <span>No AI check run yet.</span>

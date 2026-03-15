@@ -189,8 +189,8 @@ function computeDayCentroid(activities: SuggestedActivity[]): { lat: number; lng
 
   for (const activity of activities) {
     for (const point of listActivityDistancePoints(activity)) {
-      sumLat += point.lat;
-      sumLng += point.lng;
+      sumLat += typeof point.lat === "string" ? parseFloat(point.lat) : point.lat;
+      sumLng += typeof point.lng === "string" ? parseFloat(point.lng) : point.lng;
       count += 1;
     }
   }

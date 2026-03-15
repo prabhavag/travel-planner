@@ -35,9 +35,8 @@ export interface ConversationMessage {
 }
 
 export interface AiCheckResult {
-  verdict: "LGTM" | "SUGGESTIONS" | "ERROR";
+  status: "OK" | "ERROR";
   summary: string;
-  suggestions: string[];
   checkedAt: string;
 }
 
