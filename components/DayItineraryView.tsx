@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp, MapPin, Utensils, ExternalLink, Clock, Star, Plane, Building2, Home } from "lucide-react";
+import { ChevronDown, ChevronUp, MapPin, Utensils, ExternalLink, Clock, Star, Plane, Building2, Home, AlertTriangle } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -474,13 +474,19 @@ export function DayItineraryView({
         : 0;
     const totalCommuteHoursEstimate =
       (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
-    const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 2);
+    const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
     const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
+    const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
+    const showFreeSlotNotice = freeActivityHours >= 0.75;
+    const scaleFactor =
+      totalRequestedHours > 0 && totalRequestedHours > remainingForActivities && remainingForActivities > 0
+        ? remainingForActivities / totalRequestedHours
+        : 1;
 
     const timelineRows: Array<{
       label: string;
       detail: string;
-      type: "activity" | "commute" | "lunch" | "stay";
+      type: "activity" | "commute" | "lunch" | "stay" | "free";
     }> = [];
 
     if (startStayLabel) {
@@ -500,8 +506,7 @@ export function DayItineraryView({
 
     sortedActivities.forEach((activity, index) => {
       const requestedHours = parseEstimatedHours(activity.estimatedDuration);
-      const allocatedHours =
-        totalRequestedHours > 0 ? Math.max(0.75, (requestedHours / totalRequestedHours) * remainingForActivities) : 1.5;
+      const allocatedHours = Math.max(0.75, requestedHours * scaleFactor);
 
       timelineRows.push({
         label: activity.name,
@@ -545,6 +550,14 @@ export function DayItineraryView({
       );
     }
 
+    if (showFreeSlotNotice) {
+      timelineRows.push({
+        label: "Free slot",
+        detail: "A slot is free, consider adding or moving an activity.",
+        type: "free",
+      });
+    }
+
     if (endStayLabel) {
       if (stayEndCommuteMinutes > 0) {
         timelineRows.push({
@@ -568,6 +581,14 @@ export function DayItineraryView({
             {formatHourLabel(availableVisitHours)} day budget
           </span>
         </div>
+        {showFreeSlotNotice ? (
+          <div className="mb-2 rounded-md border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] text-emerald-900">
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>A slot is free, consider adding or moving an activity.</span>
+            </div>
+          </div>
+        ) : null}
         <div className="space-y-2">
           {timelineRows.map((row, index) => {
             const badgeClass =
@@ -575,6 +596,8 @@ export function DayItineraryView({
                 ? "bg-white text-sky-700 border-sky-200"
                 : row.type === "lunch"
                   ? "bg-amber-50 text-amber-700 border-amber-200"
+                  : row.type === "free"
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                   : row.type === "stay"
                     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                     : "bg-gray-50 text-gray-600 border-gray-200";
@@ -582,7 +605,15 @@ export function DayItineraryView({
             return (
               <div key={`${row.label}-${index}`} className="flex items-start gap-2 text-xs">
                 <Badge variant="outline" className={`shrink-0 h-5 ${badgeClass}`}>
-                  {row.type === "activity" ? "Stop" : row.type === "lunch" ? "Lunch" : row.type === "stay" ? "Stay" : "Commute"}
+                  {row.type === "activity"
+                    ? "Stop"
+                    : row.type === "lunch"
+                      ? "Lunch"
+                      : row.type === "stay"
+                        ? "Stay"
+                        : row.type === "free"
+                          ? "Free"
+                          : "Commute"}
                 </Badge>
                 <div className="min-w-0">
                   <p className="font-medium text-gray-800 line-clamp-1">{row.label}</p>

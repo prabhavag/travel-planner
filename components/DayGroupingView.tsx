@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { MapPin, ListChecks, Home } from "lucide-react";
+import { MapPin, ListChecks, Home, AlertTriangle, Utensils } from "lucide-react";
 import { computeRoutes } from "@/lib/api-client";
 import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
@@ -415,7 +415,7 @@ export function DayGroupingView({
           affordLabel: string;
         }
       | {
-          type: "lunch" | "commute" | "continue";
+          type: "lunch" | "commute" | "continue" | "free";
           id: string;
           title: string;
           detail: string;
@@ -558,6 +558,22 @@ export function DayGroupingView({
       });
     }
 
+    if (showFreeSlotNotice) {
+      const freeMinutes = roundToQuarter(freeActivityHours * 60);
+      if (freeMinutes > 0) {
+        const freeStart = roundToQuarter(cursorMinutes);
+        const freeEnd = freeStart + freeMinutes;
+        timelineItems.push({
+          type: "free",
+          id: `free-slot-${day.dayNumber}`,
+          title: "Free slot",
+          detail: "A slot is free, consider adding or moving an activity.",
+          timeRange: toRangeLabel(freeStart, freeEnd),
+        });
+        cursorMinutes = freeEnd;
+      }
+    }
+
     if (endStayLabel) {
       if (stayEndCommuteMinutes > 0) {
         const bufferedCommuteMinutes = roundToQuarter(stayEndCommuteMinutes + 15);
@@ -586,17 +602,20 @@ export function DayGroupingView({
 
     return (
       <>
-        <div className="rounded-lg border border-sky-100 bg-sky-50/40 p-2 text-[11px] text-sky-800">
-          Timeline is approximate. Daily budget: {formatHourLabel(availableVisitHours)}
-        </div>
         {showFreeSlotNotice ? (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-2 text-[11px] text-emerald-900">
-            Open slot: ~{formatHourLabel(freeActivityHours)} unplanned. Consider adding an activity or moving one here.
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>A slot is free, consider adding or moving an activity.</span>
+            </div>
           </div>
         ) : null}
         {isOverloaded ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2 text-[11px] text-amber-900">
-            Overloaded day: ~{formatHourLabel(totalPlannedHours)} of activity + drive. Consider moving an activity.
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>Overloaded day: ~{formatHourLabel(totalPlannedHours)} of activity + drive. Consider moving an activity.</span>
+            </div>
           </div>
         ) : null}
         <div className="space-y-2">
@@ -607,6 +626,8 @@ export function DayGroupingView({
                 ? "bg-sky-500 border-sky-600"
                 : item.type === "lunch"
                   ? "bg-amber-400 border-amber-500"
+                  : item.type === "free"
+                    ? "bg-emerald-300 border-emerald-400"
                   : item.type === "continue"
                     ? "bg-sky-300 border-sky-400"
                     : item.type === "stay"
@@ -629,12 +650,11 @@ export function DayGroupingView({
                       affordLabel={item.affordLabel}
                     />
                   ) : item.type === "stay" ? (
-                    <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-2 text-xs">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="font-medium text-emerald-900">{item.title}</p>
-                          <p className="text-emerald-700">{item.detail}</p>
-                        </div>
+                    <div className="flex items-center justify-between gap-3 text-xs text-emerald-800">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Home className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                        <span className="font-medium text-emerald-900">{item.title}</span>
+                        <span className="text-emerald-700 truncate">· {item.detail}</span>
                       </div>
                     </div>
                   ) : item.type === "commute" ? (
@@ -647,11 +667,22 @@ export function DayGroupingView({
                         {item.timeRange}
                       </Badge>
                     </div>
+                  ) : item.type === "lunch" ? (
+                    <div className="flex items-center justify-between gap-3 text-xs text-amber-800">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Utensils className="h-3.5 w-3.5 shrink-0 text-amber-700" />
+                        <span className="font-medium text-amber-900">{item.title}</span>
+                        <span className="text-amber-700 truncate">· {item.detail}</span>
+                      </div>
+                      <Badge variant="outline" className="h-5 bg-amber-50 text-amber-700 border-amber-200">
+                        {item.timeRange}
+                      </Badge>
+                    </div>
                   ) : (
                     <div
                       className={`rounded-md border p-2 text-xs ${
-                        item.type === "lunch"
-                          ? "border-amber-200 bg-amber-50/60"
+                        item.type === "free"
+                            ? "border-emerald-200 bg-emerald-50/70"
                           : item.type === "continue"
                             ? "border-sky-200 bg-sky-50/60"
                             : "border-gray-200 bg-gray-50"
@@ -665,8 +696,8 @@ export function DayGroupingView({
                         <Badge
                           variant="outline"
                           className={`h-5 ${
-                            item.type === "lunch"
-                              ? "bg-amber-50 text-amber-700 border-amber-200"
+                            item.type === "free"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                               : item.type === "continue"
                                 ? "bg-sky-50 text-sky-700 border-sky-200"
                                 : "bg-gray-50 text-gray-600 border-gray-200"
@@ -707,7 +738,10 @@ export function DayGroupingView({
       <div className="flex-1 flex flex-col min-h-0">
         {/* Day tabs */}
         <div className="flex items-center justify-between mb-4 shrink-0 px-2">
-          <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest px-1">Planned Highlights</h3>
+          <div className="flex items-baseline gap-2 px-1">
+            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Planned Highlights</h3>
+            <span className="text-[10px] text-gray-400">Timeline is approximate. Daily budget: 8 hrs</span>
+          </div>
           <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
             {groupedDays.map((day) => (
               <Button
