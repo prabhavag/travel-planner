@@ -86,6 +86,35 @@ interface MapComponentProps {
   highlightedDay?: number | null;
 }
 
+function isValidCoordinate(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function hasValidCoordinates(
+  coords: { lat?: number | null; lng?: number | null } | null | undefined
+): coords is { lat: number; lng: number } {
+  return Boolean(coords && isValidCoordinate(coords.lat) && isValidCoordinate(coords.lng));
+}
+
+type CoordinateCarrier = {
+  locationMode?: "point" | "route" | "area";
+  coordinates?: { lat?: number | null; lng?: number | null } | null;
+  startCoordinates?: { lat?: number | null; lng?: number | null } | null;
+  endCoordinates?: { lat?: number | null; lng?: number | null } | null;
+  routePoints?: Array<{ lat?: number | null; lng?: number | null }> | null;
+};
+
+function resolveMarkerCoordinates(item: CoordinateCarrier): { lat: number; lng: number } | null {
+  const routeStart = item.routePoints?.[0];
+  const candidates =
+    item.locationMode === "route"
+      ? [routeStart, item.startCoordinates, item.endCoordinates, item.coordinates]
+      : [item.coordinates, item.startCoordinates, item.endCoordinates, routeStart];
+
+  const valid = candidates.find((candidate) => hasValidCoordinates(candidate));
+  return valid ? { lat: valid.lat, lng: valid.lng } : null;
+}
+
 export default function MapComponent({
   itinerary,
   destination,
@@ -126,7 +155,7 @@ export default function MapComponent({
 
       groupedDays.forEach((day) => {
         const startStay = stayByDay.get(day.dayNumber - 1) ?? day.nightStay;
-        if (startStay?.coordinates) {
+        if (hasValidCoordinates(startStay?.coordinates)) {
           locs.push({
             name: `Start stay: ${startStay.label}`,
             lat: startStay.coordinates.lat,
@@ -141,11 +170,8 @@ export default function MapComponent({
         }
 
         day.activities.forEach((activity, actIndex) => {
-          const markerCoordinates =
-            activity.locationMode === "route" && (activity.routePoints?.[0] || activity.startCoordinates)
-              ? (activity.routePoints?.[0] || activity.startCoordinates)
-              : activity.coordinates;
-          if (markerCoordinates && markerCoordinates.lat && markerCoordinates.lng) {
+          const markerCoordinates = resolveMarkerCoordinates(activity);
+          if (markerCoordinates) {
             locs.push({
               name: activity.name,
               lat: markerCoordinates.lat,
@@ -163,7 +189,7 @@ export default function MapComponent({
         });
         // Also add restaurants if present
         day.restaurants.forEach((restaurant, restIndex) => {
-          if (restaurant.coordinates && restaurant.coordinates.lat && restaurant.coordinates.lng) {
+          if (hasValidCoordinates(restaurant.coordinates)) {
             locs.push({
               name: restaurant.name,
               lat: restaurant.coordinates.lat,
@@ -180,7 +206,7 @@ export default function MapComponent({
         });
 
         const endStay = day.nightStay;
-        if (endStay?.coordinates) {
+        if (hasValidCoordinates(endStay?.coordinates)) {
           locs.push({
             name: `End stay: ${endStay.label}`,
             lat: endStay.coordinates.lat,
@@ -198,11 +224,8 @@ export default function MapComponent({
     // Mode 2: Initial research recommendations
     else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
       tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
-        const markerCoordinates =
-          option.locationMode === "route" && (option.routePoints?.[0] || option.startCoordinates)
-            ? (option.routePoints?.[0] || option.startCoordinates)
-            : option.coordinates;
-        if (!markerCoordinates?.lat || !markerCoordinates?.lng) return;
+        const markerCoordinates = resolveMarkerCoordinates(option);
+        if (!markerCoordinates) return;
         const preference = researchOptionSelections?.[option.id] || "maybe";
         locs.push({
           name: option.title,
@@ -224,11 +247,8 @@ export default function MapComponent({
     else if (suggestedActivities && suggestedActivities.length > 0) {
       suggestedActivities.forEach((activity, actIndex) => {
         if (!selectedSet.has(activity.id)) return;
-        const markerCoordinates =
-          activity.locationMode === "route" && (activity.routePoints?.[0] || activity.startCoordinates)
-            ? (activity.routePoints?.[0] || activity.startCoordinates)
-            : activity.coordinates;
-        if (markerCoordinates && markerCoordinates.lat && markerCoordinates.lng) {
+        const markerCoordinates = resolveMarkerCoordinates(activity);
+        if (markerCoordinates) {
           locs.push({
             name: activity.name,
             lat: markerCoordinates.lat,
@@ -254,7 +274,7 @@ export default function MapComponent({
           const activities = day[slot];
           if (activities) {
             activities.forEach((act, actIndex) => {
-              if (act.coordinates && act.coordinates.lat && act.coordinates.lng) {
+              if (hasValidCoordinates(act.coordinates)) {
                 locs.push({
                   name: act.name,
                   lat: act.coordinates.lat,

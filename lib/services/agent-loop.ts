@@ -12,7 +12,13 @@ import type {
   ToolAction,
 } from "@/lib/models/travel-plan";
 import { AgentTurnRequestSchema, LoopResultSchema, ToolActionSchema } from "@/lib/models/travel-plan";
-import { sessionStore, WORKFLOW_STATES, type Session, type WorkflowState } from "@/lib/services/session-store";
+import {
+  sessionStore,
+  WORKFLOW_STATES,
+  type AiCheckResult,
+  type Session,
+  type WorkflowState,
+} from "@/lib/services/session-store";
 import { requiresTravelOfferCompletionForState, validateWorkflowTransition } from "@/lib/services/workflow-transition";
 import { buildGroupedDays, groupActivitiesByDay, generateDayTheme } from "@/lib/services/day-grouping";
 import { assignNightStays } from "@/lib/services/night-stays";
@@ -131,6 +137,7 @@ type TurnResponse = {
   wantsFlight: Session["wantsFlight"];
   accommodationLastSearchedAt: Session["accommodationLastSearchedAt"];
   flightLastSearchedAt: Session["flightLastSearchedAt"];
+  aiCheckResult: Session["aiCheckResult"];
   activeLoop: LoopId;
   loopResult: LoopResult | null;
 };
@@ -163,6 +170,7 @@ function buildSessionSnapshot(session: Session, message: string): TurnResponse {
     wantsFlight: session.wantsFlight,
     accommodationLastSearchedAt: session.accommodationLastSearchedAt,
     flightLastSearchedAt: session.flightLastSearchedAt,
+    aiCheckResult: session.aiCheckResult,
     activeLoop: session.activeLoop,
     loopResult: session.lastLoopResult,
   };
@@ -728,6 +736,17 @@ function appendRecoveryHint(existing: string[], hint: string): string[] {
   return next.slice(-20);
 }
 
+function formatAiCheckMessage(result: AiCheckResult): string {
+  if (result.verdict === "LGTM") {
+    return `AI Check: LGTM\n\n${result.summary}`;
+  }
+  if (result.suggestions.length === 0) {
+    return `AI Check: Suggestions\n\n${result.summary}`;
+  }
+  const bullets = result.suggestions.map((item) => `- ${item}`).join("\n");
+  return `AI Check: Suggestions\n\n${result.summary}\n\n${bullets}`;
+}
+
 async function runLoop({
   session,
   request,
@@ -883,6 +902,7 @@ async function runLoop({
 
   const normalizedStopReason: StopReason =
     nextWorkflowState === WORKFLOW_STATES.FINALIZE ? "terminal" : stopReason;
+  const nextAiCheckResult = hasExecutedActions ? null : session.aiCheckResult;
   const normalizedLoopResult: LoopResult = {
     assistantMessage,
     confidence: loopConfidence,
@@ -910,6 +930,7 @@ async function runLoop({
     wantsFlight: working.wantsFlight,
     accommodationLastSearchedAt: working.accommodationLastSearchedAt,
     flightLastSearchedAt: working.flightLastSearchedAt,
+    aiCheckResult: nextAiCheckResult,
     workflowState: nextWorkflowState,
     activeLoop: "SUPERVISOR",
     lastTurnId: turnId,
@@ -975,6 +996,7 @@ async function runInfoGatheringTurn({
       accommodationLastSearchedAt: null,
       flightLastSearchedAt: null,
       finalPlan: null,
+      aiCheckResult: null,
     });
   } else {
     sessionStore.update(session.sessionId, { tripInfo: result.tripInfo! });
@@ -1134,6 +1156,7 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
       wantsFlight: null,
       accommodationLastSearchedAt: null,
       flightLastSearchedAt: null,
+      aiCheckResult: null,
       activeLoop: "SUPERVISOR",
       loopResult: null,
     };
@@ -1179,6 +1202,7 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
       wantsFlight: null,
       accommodationLastSearchedAt: null,
       flightLastSearchedAt: null,
+      aiCheckResult: null,
       activeLoop: "SUPERVISOR",
       loopResult: null,
     };
@@ -1214,6 +1238,53 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
     // Deterministic state mutation bypassing LLM
     const uiType = request.uiAction?.type || "";
     const payload = request.uiAction?.payload || {};
+
+    if (uiType === "run_ai_check") {
+      const llmClient = getLLMClient();
+      const checkedAt = new Date().toISOString();
+      let aiCheckResult: AiCheckResult;
+
+      if (!session.groupedDays || session.groupedDays.length === 0) {
+        aiCheckResult = {
+          verdict: "SUGGESTIONS",
+          summary: "I need at least one planned day before I can run a meaningful AI quality check.",
+          suggestions: ["Build your day-by-day itinerary first, then run AI Check again."],
+          checkedAt,
+        };
+      } else {
+        const selectedAccommodation =
+          session.selectedAccommodationOptionId != null
+            ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
+            : null;
+        const selectedFlight =
+          session.selectedFlightOptionId != null
+            ? session.flightOptions.find((option) => option.id === session.selectedFlightOptionId) || null
+            : null;
+
+        const result = await llmClient.runOnDemandAiCheck({
+          tripInfo: session.tripInfo,
+          groupedDays: session.groupedDays,
+          selectedAccommodation,
+          selectedFlight,
+        });
+        aiCheckResult = {
+          verdict: result.success ? result.verdict : "ERROR",
+          summary: result.summary,
+          suggestions: result.suggestions,
+          checkedAt,
+        };
+      }
+
+      const finalMessage = formatAiCheckMessage(aiCheckResult);
+      sessionStore.update(session.sessionId, {
+        aiCheckResult,
+        activeLoop: "SUPERVISOR",
+        lastTurnId: randomUUID(),
+      });
+      sessionStore.addToConversation(session.sessionId, "assistant", finalMessage);
+      const refreshed = sessionStore.get(session.sessionId)!;
+      return buildSessionSnapshot(refreshed, finalMessage);
+    }
 
     // Convert UI Action to Tool Action
     let toolName: ToolAction["tool"] | null = null;
@@ -1325,6 +1396,7 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
           wantsFlight: working.wantsFlight,
           accommodationLastSearchedAt: working.accommodationLastSearchedAt,
           flightLastSearchedAt: working.flightLastSearchedAt,
+          aiCheckResult: null,
           workflowState: proposedTransition || session.workflowState,
           lastTurnId: randomUUID(),
         });

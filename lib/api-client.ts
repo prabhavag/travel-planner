@@ -119,7 +119,15 @@ export interface SessionResponse {
   wantsFlight?: boolean | null;
   accommodationLastSearchedAt?: string | null;
   flightLastSearchedAt?: string | null;
+  aiCheckResult?: AiCheckResult | null;
   deepResearchedOptionIds?: string[];
+}
+
+export interface AiCheckResult {
+  verdict: "LGTM" | "SUGGESTIONS" | "ERROR";
+  summary: string;
+  suggestions: string[];
+  checkedAt: string;
 }
 
 export type AgentTurnTrigger = "user_message" | "ui_action" | "auto";

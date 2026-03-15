@@ -2541,6 +2541,87 @@ class LLMClient {
     }
   }
 
+  async runOnDemandAiCheck({
+    tripInfo,
+    groupedDays,
+    selectedAccommodation,
+    selectedFlight,
+  }: {
+    tripInfo: TripInfo;
+    groupedDays: GroupedDay[];
+    selectedAccommodation: AccommodationOption | null;
+    selectedFlight: FlightOption | null;
+  }): Promise<{
+    success: boolean;
+    verdict: "LGTM" | "SUGGESTIONS";
+    summary: string;
+    suggestions: string[];
+  }> {
+    try {
+      const completion = await this.openai.chat.completions.create({
+        model: this.model,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a strict travel-plan QA reviewer. Return concise quality feedback only. Respond in JSON with keys verdict, summary, suggestions. verdict must be LGTM or SUGGESTIONS. suggestions must be an array of short actionable bullets. If plan is good, return LGTM with empty suggestions.",
+          },
+          {
+            role: "user",
+            content: `Run an AI quality check on this trip plan and return your verdict.
+
+Trip info:
+${JSON.stringify(tripInfo, null, 2)}
+
+Grouped days:
+${JSON.stringify(groupedDays, null, 2)}
+
+Selected accommodation:
+${JSON.stringify(selectedAccommodation, null, 2)}
+
+Selected flight:
+${JSON.stringify(selectedFlight, null, 2)}`,
+          },
+        ],
+      });
+
+      const response = this._parseJsonResponse(completion) as Record<string, unknown>;
+      const rawVerdict = typeof response.verdict === "string" ? response.verdict.toUpperCase() : "";
+      const suggestions = Array.isArray(response.suggestions)
+        ? response.suggestions
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .slice(0, 8)
+        : [];
+      const summary = typeof response.summary === "string" ? response.summary.trim() : "";
+
+      const verdict: "LGTM" | "SUGGESTIONS" =
+        rawVerdict === "LGTM" ? "LGTM" : suggestions.length > 0 ? "SUGGESTIONS" : "LGTM";
+
+      return {
+        success: true,
+        verdict,
+        summary:
+          summary ||
+          (verdict === "LGTM"
+            ? "AI quality check passed. No major itinerary issues found."
+            : "AI quality check found a few improvements worth considering."),
+        suggestions: verdict === "LGTM" ? [] : suggestions,
+      };
+    } catch (error) {
+      console.error("Error in runOnDemandAiCheck:", error);
+      return {
+        success: false,
+        verdict: "SUGGESTIONS",
+        summary: "AI quality check failed. Please try again.",
+        suggestions: [],
+      };
+    }
+  }
+
   async determineNightStays({
     tripInfo,
     groupedDays,

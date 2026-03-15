@@ -34,6 +34,13 @@ export interface ConversationMessage {
   content: string;
 }
 
+export interface AiCheckResult {
+  verdict: "LGTM" | "SUGGESTIONS" | "ERROR";
+  summary: string;
+  suggestions: string[];
+  checkedAt: string;
+}
+
 export interface Session {
   sessionId: string;
   createdAt: number;
@@ -69,6 +76,7 @@ export interface Session {
   wantsFlight: boolean | null;
   accommodationLastSearchedAt: string | null;
   flightLastSearchedAt: string | null;
+  aiCheckResult: AiCheckResult | null;
 }
 
 class SessionStore {
@@ -130,6 +138,7 @@ class SessionStore {
       wantsFlight: null,
       accommodationLastSearchedAt: null,
       flightLastSearchedAt: null,
+      aiCheckResult: null,
     };
 
     this.sessions.set(sessionId, session);

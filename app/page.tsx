@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Send, MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw, ChevronUp, ChevronDown } from "lucide-react";
+import { Loader2, Send, MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw, ChevronUp, ChevronDown, Sparkles } from "lucide-react";
 import MapComponent from "@/components/MapComponent";
 import { InitialResearchView } from "@/components/InitialResearchView";
 import { DayGroupingView } from "@/components/DayGroupingView";
@@ -28,6 +28,7 @@ import {
   deepResearchSelectedOptions,
   enrichResearchPhotos,
   type SessionResponse,
+  type AiCheckResult,
   type TripInfo,
   type SuggestedActivity,
   type GroupedDay,
@@ -141,6 +142,7 @@ export default function PlannerPage() {
   const [reviewOfferTab, setReviewOfferTab] = useState<"hotels" | "flights">("hotels");
   const [accommodationLastSearchedAt, setAccommodationLastSearchedAt] = useState<string | null>(null);
   const [flightLastSearchedAt, setFlightLastSearchedAt] = useState<string | null>(null);
+  const [aiCheckResult, setAiCheckResult] = useState<AiCheckResult | null>(null);
   const [maxReachedState, setMaxReachedState] = useState(WORKFLOW_STATES.INFO_GATHERING);
   const [lastGroupedActivityIds, setLastGroupedActivityIds] = useState<string[]>([]);
 
@@ -345,6 +347,7 @@ export default function PlannerPage() {
     }
     if (response.accommodationLastSearchedAt !== undefined) setAccommodationLastSearchedAt(response.accommodationLastSearchedAt ?? null);
     if (response.flightLastSearchedAt !== undefined) setFlightLastSearchedAt(response.flightLastSearchedAt ?? null);
+    if (response.aiCheckResult !== undefined) setAiCheckResult(response.aiCheckResult ?? null);
     if (response.workflowState) {
       setWorkflowState(response.workflowState);
       updateMaxReachedState(response.workflowState);
@@ -950,6 +953,24 @@ export default function PlannerPage() {
     }
   };
 
+  const handleRunAiCheck = async () => {
+    if (!sessionId || loading || workflowState === WORKFLOW_STATES.FINALIZE) return;
+    setLoading(true);
+    try {
+      const response = await agentTurn(sessionId, "ui_action", undefined, {
+        type: "run_ai_check",
+      });
+      if (response.success) {
+        applySessionResponse(response, true);
+      }
+    } catch (error) {
+      console.error("Run AI check error:", error);
+      alert("Failed to run AI check. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Update preferences
   const handleUpdatePreferences = async (newPreferences: string[]) => {
     if (!sessionId) return;
@@ -1134,6 +1155,8 @@ export default function PlannerPage() {
     return UI_STAGE_LABELS[getCurrentUiStageIndex()] || "";
   };
 
+  const isFinalized = workflowState === WORKFLOW_STATES.FINALIZE;
+
   // Render left panel content based on state
   const renderLeftPanelContent = () => {
     const currentIndex = WORKFLOW_ORDER.indexOf(workflowState);
@@ -1148,6 +1171,13 @@ export default function PlannerPage() {
       (workflowState === WORKFLOW_STATES.GROUP_DAYS || workflowState === WORKFLOW_STATES.DAY_ITINERARY) &&
       (selectedActivityIds.length !== lastGroupedActivityIds.length ||
         !selectedActivityIds.every(id => lastGroupedActivityIds.includes(id)));
+
+    const aiCheckBadgeTone =
+      aiCheckResult?.verdict === "LGTM"
+        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+        : aiCheckResult?.verdict === "SUGGESTIONS"
+          ? "bg-amber-50 text-amber-700 border-amber-200"
+          : "bg-red-50 text-red-700 border-red-200";
 
     return (
       <div className="flex h-full min-h-0 flex-col bg-gray-100">
@@ -1185,6 +1215,24 @@ export default function PlannerPage() {
                 Complete accommodation and flight searches to continue.
               </span>
             )}
+          </div>
+        )}
+
+        {!isFinalized && (
+          <div className="flex items-center justify-between gap-2 px-4 py-2 bg-white border-b border-gray-200">
+            <div className="min-w-0 text-xs text-gray-600">
+              {aiCheckResult ? (
+                <span className={`inline-flex items-center rounded-full border px-2 py-1 ${aiCheckBadgeTone}`}>
+                  {aiCheckResult.verdict === "LGTM" ? "AI Check: LGTM" : "AI Check: Suggestions"}
+                </span>
+              ) : (
+                <span>No AI check run yet.</span>
+              )}
+            </div>
+            <Button variant="outline" size="sm" onClick={handleRunAiCheck} disabled={loading || !sessionId}>
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              Run AI Check
+            </Button>
           </div>
         )}
 
@@ -1407,6 +1455,7 @@ export default function PlannerPage() {
                     <DayGroupingView
                       groupedDays={groupedDays}
                       userPreferences={tripInfo?.preferences || []}
+                      destination={tripInfo?.destination || null}
                       onMoveActivity={handleMoveActivity}
                       onConfirm={handleConfirmDayGrouping}
                       onDayChange={setActiveDay}
@@ -1566,8 +1615,6 @@ export default function PlannerPage() {
       </div>
     );
   }
-
-  const isFinalized = workflowState === WORKFLOW_STATES.FINALIZE;
 
   return (
     <div className="h-screen overflow-hidden bg-gray-100">

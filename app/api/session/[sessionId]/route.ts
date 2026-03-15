@@ -53,6 +53,7 @@ export async function GET(
       wantsFlight: session.wantsFlight,
       accommodationLastSearchedAt: session.accommodationLastSearchedAt,
       flightLastSearchedAt: session.flightLastSearchedAt,
+      aiCheckResult: session.aiCheckResult,
       finalPlan: session.finalPlan,
       conversationHistory: session.conversationHistory,
     });
