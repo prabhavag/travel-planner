@@ -2581,7 +2581,12 @@ export default function PlannerPage() {
                 researchOptionSelections={Object.fromEntries(
                   selectedResearchOptionIds.map((id) => [id, "selected" as const])
                 )}
-                suggestedActivities={suggestedActivities}
+                suggestedActivities={
+                  workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES ||
+                    workflowState === WORKFLOW_STATES.SELECT_ACTIVITIES
+                    ? suggestedActivities
+                    : undefined
+                }
                 selectedActivityIds={selectedActivityIds}
                 groupedDays={
                   workflowState === WORKFLOW_STATES.GROUP_DAYS ||
