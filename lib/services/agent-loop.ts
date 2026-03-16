@@ -767,7 +767,7 @@ function formatAiCheckMessage(result: AiCheckResult): string {
   if (result.status === "ERROR") {
     return `AI Check: Error\n\n${result.summary}`;
   }
-  return `AI Check Review\n\n${result.summary}`;
+  return `AI Check Commentary\n\n${result.summary}`;
 }
 
 function inferProceedFromConfirmationContext({

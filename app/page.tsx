@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -111,6 +111,141 @@ const LAST_TIMELINE_CACHE_META_KEY = `timeline-analysis:${TIMELINE_ANALYSIS_CACH
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+type MarkdownBlock =
+  | { type: "heading"; text: string }
+  | { type: "paragraph"; text: string }
+  | { type: "ul"; items: string[] }
+  | { type: "ol"; items: string[] };
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const tokens = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).filter(Boolean);
+  return tokens.map((token, index) => {
+    if (token.startsWith("**") && token.endsWith("**") && token.length > 4) {
+      return <strong key={index}>{token.slice(2, -2)}</strong>;
+    }
+    if (token.startsWith("`") && token.endsWith("`") && token.length > 2) {
+      return (
+        <code key={index} className="rounded bg-gray-100 px-1 py-0.5 text-[0.95em] text-gray-900">
+          {token.slice(1, -1)}
+        </code>
+      );
+    }
+    if (token.startsWith("*") && token.endsWith("*") && token.length > 2) {
+      return <em key={index}>{token.slice(1, -1)}</em>;
+    }
+    return <span key={index}>{token}</span>;
+  });
+}
+
+function parseSimpleMarkdown(content: string): MarkdownBlock[] {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const blocks: MarkdownBlock[] = [];
+  let paragraph: string[] = [];
+  let currentListType: "ul" | "ol" | null = null;
+  let listItems: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length > 0) {
+      blocks.push({ type: "paragraph", text: paragraph.join(" ").trim() });
+      paragraph = [];
+    }
+  };
+
+  const flushList = () => {
+    if (currentListType && listItems.length > 0) {
+      blocks.push({ type: currentListType, items: [...listItems] });
+    }
+    currentListType = null;
+    listItems = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = line.match(/^#{1,3}\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      blocks.push({ type: "heading", text: headingMatch[1].trim() });
+      continue;
+    }
+
+    const unorderedMatch = line.match(/^[-*]\s+(.+)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      if (currentListType !== "ul") {
+        flushList();
+        currentListType = "ul";
+      }
+      listItems.push(unorderedMatch[1].trim());
+      continue;
+    }
+
+    const orderedMatch = line.match(/^\d+\.\s+(.+)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (currentListType !== "ol") {
+        flushList();
+        currentListType = "ol";
+      }
+      listItems.push(orderedMatch[1].trim());
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks;
+}
+
+function renderAiCommentary(content: string): ReactNode {
+  const blocks = parseSimpleMarkdown(content);
+  return (
+    <div className="space-y-2">
+      {blocks.map((block, index) => {
+        if (block.type === "heading") {
+          return (
+            <h4 key={index} className="text-sm font-semibold text-gray-900">
+              {renderInlineMarkdown(block.text)}
+            </h4>
+          );
+        }
+        if (block.type === "paragraph") {
+          return (
+            <p key={index} className="text-sm text-gray-800 leading-relaxed">
+              {renderInlineMarkdown(block.text)}
+            </p>
+          );
+        }
+        if (block.type === "ul") {
+          return (
+            <ul key={index} className="list-disc pl-5 text-sm text-gray-800 space-y-1">
+              {block.items.map((item, itemIndex) => (
+                <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <ol key={index} className="list-decimal pl-5 text-sm text-gray-800 space-y-1">
+            {block.items.map((item, itemIndex) => (
+              <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+            ))}
+          </ol>
+        );
+      })}
+    </div>
+  );
 }
 
 type TimelineCacheMetadata = {
@@ -421,6 +556,7 @@ export default function PlannerPage() {
   const [accommodationLastSearchedAt, setAccommodationLastSearchedAt] = useState<string | null>(null);
   const [flightLastSearchedAt, setFlightLastSearchedAt] = useState<string | null>(null);
   const [aiCheckResult, setAiCheckResult] = useState<AiCheckResult | null>(null);
+  const [isAiCheckCollapsed, setIsAiCheckCollapsed] = useState(true);
   const [maxReachedState, setMaxReachedState] = useState(WORKFLOW_STATES.INFO_GATHERING);
   const [lastGroupedActivityIds, setLastGroupedActivityIds] = useState<string[]>([]);
 
@@ -450,6 +586,7 @@ export default function PlannerPage() {
   const [photoEnrichmentInProgress, setPhotoEnrichmentInProgress] = useState(false);
   const [mapsReady, setMapsReady] = useState(false);
   const photoEnrichmentSignatureRef = useRef<string>("");
+  const lastSeenAiCheckAtRef = useRef<string | null>(null);
 
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -894,7 +1031,17 @@ export default function PlannerPage() {
     }
     if (response.accommodationLastSearchedAt !== undefined) setAccommodationLastSearchedAt(response.accommodationLastSearchedAt ?? null);
     if (response.flightLastSearchedAt !== undefined) setFlightLastSearchedAt(response.flightLastSearchedAt ?? null);
-    if (response.aiCheckResult !== undefined) setAiCheckResult(response.aiCheckResult ?? null);
+    if (response.aiCheckResult !== undefined) {
+      const incomingAiCheck = response.aiCheckResult ?? null;
+      setAiCheckResult(incomingAiCheck);
+      if (incomingAiCheck && incomingAiCheck.checkedAt !== lastSeenAiCheckAtRef.current) {
+        setIsAiCheckCollapsed(false);
+        lastSeenAiCheckAtRef.current = incomingAiCheck.checkedAt;
+      }
+      if (!incomingAiCheck) {
+        lastSeenAiCheckAtRef.current = null;
+      }
+    }
     if (response.workflowState) {
       setWorkflowState(response.workflowState);
       updateMaxReachedState(response.workflowState);
@@ -1747,6 +1894,20 @@ export default function PlannerPage() {
       aiCheckResult?.status === "ERROR"
         ? "bg-red-50 text-red-700 border-red-200"
         : "bg-sky-50 text-sky-700 border-sky-200";
+    const aiCheckPanelTone =
+      aiCheckResult?.status === "ERROR"
+        ? "border-red-200 bg-red-50"
+        : "border-sky-200 bg-sky-50";
+    const aiCheckCheckedLabel = aiCheckResult
+      ? new Date(aiCheckResult.checkedAt).toLocaleString()
+      : null;
+    const aiCheckPreview = aiCheckResult
+      ? aiCheckResult.summary
+        .replace(/\r\n/g, "\n")
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => Boolean(line)) || "AI commentary available."
+      : null;
 
     return (
       <div className="flex h-full min-h-0 flex-col bg-gray-100">
@@ -1792,7 +1953,7 @@ export default function PlannerPage() {
             <div className="min-w-0 text-xs text-gray-600">
               {aiCheckResult ? (
                 <span className={`inline-flex items-center rounded-full border px-2 py-1 ${aiCheckBadgeTone}`}>
-                  {aiCheckResult.status === "ERROR" ? "AI Check: Error" : "AI Check: Reviewed"}
+                  {aiCheckResult.status === "ERROR" ? "AI Check: Error" : "AI Check: Commentary Ready"}
                 </span>
               ) : (
                 <span>No AI check run yet.</span>
@@ -1802,6 +1963,37 @@ export default function PlannerPage() {
               {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
               Run AI Check
             </Button>
+          </div>
+        )}
+        {!isFinalized && aiCheckResult && (
+          <div className={`px-4 py-3 border-b border-gray-200 ${aiCheckPanelTone}`}>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium text-gray-700">
+                Latest AI commentary{aiCheckCheckedLabel ? ` (${aiCheckCheckedLabel})` : ""}
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsAiCheckCollapsed((current) => !current)}
+                className="h-7 px-2 text-xs text-gray-600 hover:text-gray-900"
+              >
+                {isAiCheckCollapsed ? (
+                  <>
+                    Expand <ChevronDown className="ml-1 h-3.5 w-3.5" />
+                  </>
+                ) : (
+                  <>
+                    Collapse <ChevronUp className="ml-1 h-3.5 w-3.5" />
+                  </>
+                )}
+              </Button>
+            </div>
+            {isAiCheckCollapsed ? (
+              <p className="mt-1 text-sm text-gray-700">{aiCheckPreview}</p>
+            ) : (
+              <div className="mt-2">{renderAiCommentary(aiCheckResult.summary)}</div>
+            )}
           </div>
         )}
 
