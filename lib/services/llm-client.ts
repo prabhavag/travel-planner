@@ -2605,29 +2605,6 @@ class LLMClient {
     status: "OK" | "ERROR";
     assessment: string;
   }> {
-    const stageSpecificGuidance = (() => {
-      switch (workflowState) {
-        case "INFO_GATHERING":
-          return "Focus on missing or inconsistent trip basics (dates, destination, trip length, traveler profile, budget/preferences) and what to clarify next.";
-        case "INITIAL_RESEARCH":
-          return "Focus on whether the option pool is diverse and aligned to user preferences, and call out clear additions/removals before selection.";
-        case "SUGGEST_ACTIVITIES":
-        case "SELECT_ACTIVITIES":
-          return "Focus on selection quality. Recommend 3-5 specific places from the provided list to prioritize now, and mention any obvious gaps.";
-        case "GROUP_DAYS":
-        case "DAY_ITINERARY":
-          return "Focus on day-level organization: pacing, geographic clustering, transit burden, opening-hours risk, and missing essentials. Suggest concrete day edits.";
-        case "MEAL_PREFERENCES":
-          return "Focus on restaurant coverage and fit: cuisine variety, placement by day/location, dietary fit, and whether meal timing looks practical.";
-        case "REVIEW":
-          return "Treat this as a near-final pass. Highlight only high-impact issues and specific final polish actions.";
-        case "FINALIZE":
-          return "Provide a concise final sanity check and any last operational reminders.";
-        default:
-          return "Provide practical stage-aware commentary on progress and improvements.";
-      }
-    })();
-
     try {
       const completion = await this.openai.chat.completions.create({
         model: this.model,
@@ -2636,7 +2613,7 @@ class LLMClient {
           {
             role: "system",
             content:
-              "You are a principal travel-planning reviewer. Provide free-form commentary on itinerary progress for the current workflow stage. Respond in plain text only. Do not output verdict labels like LGTM/needs work/reviewed. Write natural, actionable commentary as if speaking to the traveler directly.",
+              "You are a principal travel-planning reviewer. Provide free-form commentary on itinerary progress for the current workflow stage. Respond in plain text only. Do not output verdict labels like LGTM/needs work/reviewed. Let the structure be fully your choice (paragraphs, bullets, or mixed), and do not force a day-by-day breakdown unless it is genuinely the best way to explain something.",
           },
           {
             role: "user",
@@ -2644,9 +2621,6 @@ class LLMClient {
 
 Workflow state:
 ${workflowState}
-
-Stage guidance:
-${stageSpecificGuidance}
 
 Trip info:
 ${JSON.stringify(tripInfo, null, 2)}
