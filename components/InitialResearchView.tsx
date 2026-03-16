@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useRef, useLayoutEffect } from "react";
+import { useMemo, useState, useRef, useLayoutEffect, type ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
@@ -23,6 +23,7 @@ interface InitialResearchViewProps {
   onProceed: () => void;
   canProceed?: boolean;
   isLoading?: boolean;
+  headerActions?: ReactNode;
 }
 
 export function InitialResearchView({
@@ -41,6 +42,7 @@ export function InitialResearchView({
   onProceed,
   canProceed = true,
   isLoading = false,
+  headerActions = null,
 }: InitialResearchViewProps) {
   const [showAssumptions, setShowAssumptions] = useState(false);
   const [activeInterest, setActiveInterest] = useState<string>("All");
@@ -161,6 +163,7 @@ export function InitialResearchView({
           <p className="text-sm text-gray-500">Select the cards that fit your trip, then continue to day grouping.</p>
         </div>
         <div className="flex items-center gap-2">
+          {headerActions}
           <Button
             variant="outline"
             size="sm"

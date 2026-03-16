@@ -2570,6 +2570,157 @@ class LLMClient {
     }
   }
 
+  private _parseEstimatedHoursForAiCheck(duration?: string | null): number {
+    if (!duration) return 2;
+    const text = duration.toLowerCase().trim();
+    if (!text) return 2;
+
+    const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
+    if (rangeMatch) {
+      const min = Number(rangeMatch[1]);
+      const max = Number(rangeMatch[2]);
+      if (Number.isFinite(min) && Number.isFinite(max) && max >= min) {
+        return (min + max) / 2;
+      }
+    }
+
+    const singleHourMatch = text.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)/);
+    if (singleHourMatch) {
+      const value = Number(singleHourMatch[1]);
+      if (Number.isFinite(value)) return value;
+    }
+
+    if (/half\s*day/.test(text)) return 4;
+    if (/full\s*day|all\s*day/.test(text)) return 7;
+    if (/30\s*min/.test(text)) return 0.5;
+    if (/45\s*min/.test(text)) return 0.75;
+    return 2;
+  }
+
+  private _roundToSingleDecimal(value: number): number {
+    return Math.round(value * 10) / 10;
+  }
+
+  private _haversineKmForAiCheck(
+    from: { lat: number; lng: number } | null | undefined,
+    to: { lat: number; lng: number } | null | undefined,
+  ): number | null {
+    if (!from || !to) return null;
+    const toRad = (v: number) => (v * Math.PI) / 180;
+    const earthRadiusKm = 6371;
+    const dLat = toRad(to.lat - from.lat);
+    const dLng = toRad(to.lng - from.lng);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadiusKm * c;
+  }
+
+  private _pickCommuteModeForAiCheck(distanceKm: number | null): "WALK" | "TRANSIT" | "DRIVE" {
+    if (distanceKm == null) return "DRIVE";
+    if (distanceKm <= 1.5) return "WALK";
+    if (distanceKm <= 10) return "TRANSIT";
+    return "DRIVE";
+  }
+
+  private _estimateCommuteMinutesForAiCheck(
+    distanceKm: number | null,
+    mode: "WALK" | "TRANSIT" | "DRIVE",
+  ): number {
+    if (distanceKm == null) return 25;
+    const speedKmPerHour = mode === "WALK" ? 4.5 : mode === "TRANSIT" ? 20 : 28;
+    const baseMinutes = Math.round((distanceKm / speedKmPerHour) * 60);
+    const transferBuffer = mode === "DRIVE" ? 10 : 8;
+    return Math.max(8, Math.min(120, baseMinutes + transferBuffer));
+  }
+
+  private _getAnchorCoordinatesForAiCheck(activity: SuggestedActivity): { lat: number; lng: number } | null {
+    if (activity.locationMode === "route") {
+      return activity.startCoordinates || activity.endCoordinates || activity.coordinates || null;
+    }
+    return activity.coordinates || activity.startCoordinates || activity.endCoordinates || null;
+  }
+
+  private _buildAiCheckTimingSummary(groupedDays: GroupedDay[]) {
+    const slotOrder: Record<"morning" | "afternoon" | "evening" | "any", number> = {
+      morning: 0,
+      afternoon: 1,
+      evening: 2,
+      any: 3,
+    };
+
+    return groupedDays
+      .slice()
+      .sort((a, b) => a.dayNumber - b.dayNumber)
+      .map((day) => {
+        const orderedActivities = [...day.activities].sort((a, b) => {
+          const scoreA = slotOrder[a.bestTimeOfDay || "any"] ?? 3;
+          const scoreB = slotOrder[b.bestTimeOfDay || "any"] ?? 3;
+          return scoreA - scoreB;
+        });
+
+        const activities = orderedActivities.map((activity) => {
+          const estimatedHours = this._roundToSingleDecimal(
+            this._parseEstimatedHoursForAiCheck(activity.estimatedDuration)
+          );
+          return {
+            id: activity.id,
+            name: activity.name,
+            bestTimeOfDay: activity.bestTimeOfDay || "any",
+            estimatedDurationText: activity.estimatedDuration || null,
+            estimatedDurationHours: estimatedHours,
+          };
+        });
+
+        const commuteLegs: Array<{
+          from: string;
+          to: string;
+          mode: "WALK" | "TRANSIT" | "DRIVE";
+          distanceKm: number | null;
+          estimatedMinutes: number;
+        }> = [];
+
+        for (let index = 0; index < orderedActivities.length - 1; index += 1) {
+          const from = orderedActivities[index];
+          const to = orderedActivities[index + 1];
+          const distanceKmRaw = this._haversineKmForAiCheck(
+            this._getAnchorCoordinatesForAiCheck(from),
+            this._getAnchorCoordinatesForAiCheck(to),
+          );
+          const distanceKm =
+            distanceKmRaw == null ? null : this._roundToSingleDecimal(distanceKmRaw);
+          const mode = this._pickCommuteModeForAiCheck(distanceKmRaw);
+          const estimatedMinutes = this._estimateCommuteMinutesForAiCheck(distanceKmRaw, mode);
+          commuteLegs.push({
+            from: from.name,
+            to: to.name,
+            mode,
+            distanceKm,
+            estimatedMinutes,
+          });
+        }
+
+        const totalActivityHours = this._roundToSingleDecimal(
+          activities.reduce((sum, activity) => sum + activity.estimatedDurationHours, 0),
+        );
+        const totalCommuteMinutes = commuteLegs.reduce((sum, leg) => sum + leg.estimatedMinutes, 0);
+        const totalPlannedHours = this._roundToSingleDecimal(totalActivityHours + totalCommuteMinutes / 60);
+
+        return {
+          dayNumber: day.dayNumber,
+          date: day.date,
+          theme: day.theme,
+          totalActivityHours,
+          totalCommuteMinutes,
+          totalPlannedHours,
+          activityCount: activities.length,
+          activities,
+          commuteLegs,
+        };
+      });
+  }
+
   async runOnDemandAiCheck({
     workflowState,
     tripInfo,
@@ -2606,6 +2757,7 @@ class LLMClient {
     assessment: string;
   }> {
     try {
+      const dayTimingSummary = this._buildAiCheckTimingSummary(groupedDays);
       const completion = await this.openai.chat.completions.create({
         model: this.model,
         temperature: 0.2,
@@ -2613,7 +2765,7 @@ class LLMClient {
           {
             role: "system",
             content:
-              "You are a principal travel-planning reviewer. Provide free-form commentary on itinerary progress for the current workflow stage. Respond in plain text only. Do not output verdict labels like LGTM/needs work/reviewed. Let the structure be fully your choice (paragraphs, bullets, or mixed), and do not force a day-by-day breakdown unless it is genuinely the best way to explain something.",
+              "You are a principal travel-planning reviewer. Respond in plain text only. Be concise and high-signal. Focus only on the most important findings for decision-making right now. Do not recap each day or narrate the itinerary chronologically unless a critical issue depends on specific day sequencing. Prefer 3-5 short bullets total. Each bullet should be one key issue, risk, or recommendation. Avoid filler, repetition, and obvious statements. Treat provided timing/commute estimates as approximate but actionable for identifying overloaded days, long transfers, and sequencing risks. If there are no meaningful issues, say exactly: Everything looks good.",
           },
           {
             role: "user",
@@ -2636,6 +2788,9 @@ ${JSON.stringify(dayGroups, null, 2)}
 
 Grouped days:
 ${JSON.stringify(groupedDays, null, 2)}
+
+Derived day timing and commute summary (approximate):
+${JSON.stringify(dayTimingSummary, null, 2)}
 
 Restaurant suggestions:
 ${JSON.stringify(restaurantSuggestions, null, 2)}

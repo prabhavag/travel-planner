@@ -1035,7 +1035,7 @@ export default function PlannerPage() {
       const incomingAiCheck = response.aiCheckResult ?? null;
       setAiCheckResult(incomingAiCheck);
       if (incomingAiCheck && incomingAiCheck.checkedAt !== lastSeenAiCheckAtRef.current) {
-        setIsAiCheckCollapsed(false);
+        setIsAiCheckCollapsed(true);
         lastSeenAiCheckAtRef.current = incomingAiCheck.checkedAt;
       }
       if (!incomingAiCheck) {
@@ -1890,11 +1890,11 @@ export default function PlannerPage() {
       )
       : [];
 
-    const aiCheckBadgeTone =
+    const aiCheckInsightTone =
       aiCheckResult?.status === "ERROR"
-        ? "bg-red-50 text-red-700 border-red-200"
-        : "bg-sky-50 text-sky-700 border-sky-200";
-    const aiCheckPanelTone =
+        ? "border-red-200 bg-red-50 text-red-800 hover:bg-red-100"
+        : "border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100";
+    const aiCheckDetailTone =
       aiCheckResult?.status === "ERROR"
         ? "border-red-200 bg-red-50"
         : "border-sky-200 bg-sky-50";
@@ -1908,6 +1908,37 @@ export default function PlannerPage() {
         .map((line) => line.trim())
         .find((line) => Boolean(line)) || "AI commentary available."
       : null;
+    const showAiCheckInHeaderActionBars =
+      workflowState === WORKFLOW_STATES.INITIAL_RESEARCH || workflowState === WORKFLOW_STATES.GROUP_DAYS;
+    const aiInlineActions = !isFinalized && showAiCheckInHeaderActionBars ? (
+      <>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleRunAiCheck}
+          disabled={loading || !sessionId}
+          className="h-8 px-2 text-xs text-gray-500 hover:text-gray-800"
+        >
+          {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+          Run check
+        </Button>
+        {aiCheckResult ? (
+          <button
+            type="button"
+            onClick={() => setIsAiCheckCollapsed((current) => !current)}
+            className={`inline-flex max-w-[280px] items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors ${aiCheckInsightTone}`}
+          >
+            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">AI insight: {aiCheckPreview}</span>
+            {isAiCheckCollapsed ? (
+              <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <ChevronUp className="h-3.5 w-3.5 shrink-0" />
+            )}
+          </button>
+        ) : null}
+      </>
+    ) : null;
 
     return (
       <div className="flex h-full min-h-0 flex-col bg-gray-100">
@@ -1948,52 +1979,23 @@ export default function PlannerPage() {
           </div>
         )}
 
-        {!isFinalized && (
-          <div className="flex items-center justify-between gap-2 px-4 py-2 bg-white border-b border-gray-200">
-            <div className="min-w-0 text-xs text-gray-600">
-              {aiCheckResult ? (
-                <span className={`inline-flex items-center rounded-full border px-2 py-1 ${aiCheckBadgeTone}`}>
-                  {aiCheckResult.status === "ERROR" ? "AI Check: Error" : "AI Check: Commentary Ready"}
-                </span>
-              ) : (
-                <span>No AI check run yet.</span>
-              )}
-            </div>
-            <Button variant="outline" size="sm" onClick={handleRunAiCheck} disabled={loading || !sessionId}>
-              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-              Run AI Check
-            </Button>
-          </div>
-        )}
-        {!isFinalized && aiCheckResult && (
-          <div className={`px-4 py-3 border-b border-gray-200 ${aiCheckPanelTone}`}>
+        {!isFinalized && aiCheckResult && !isAiCheckCollapsed && (
+          <div className={`mx-4 mt-2 rounded-lg border px-4 py-3 ${aiCheckDetailTone}`}>
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs font-medium text-gray-700">
-                Latest AI commentary{aiCheckCheckedLabel ? ` (${aiCheckCheckedLabel})` : ""}
+                AI insight{aiCheckCheckedLabel ? ` (${aiCheckCheckedLabel})` : ""}
               </p>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => setIsAiCheckCollapsed((current) => !current)}
+                onClick={() => setIsAiCheckCollapsed(true)}
                 className="h-7 px-2 text-xs text-gray-600 hover:text-gray-900"
               >
-                {isAiCheckCollapsed ? (
-                  <>
-                    Expand <ChevronDown className="ml-1 h-3.5 w-3.5" />
-                  </>
-                ) : (
-                  <>
-                    Collapse <ChevronUp className="ml-1 h-3.5 w-3.5" />
-                  </>
-                )}
+                Hide <ChevronUp className="ml-1 h-3.5 w-3.5" />
               </Button>
             </div>
-            {isAiCheckCollapsed ? (
-              <p className="mt-1 text-sm text-gray-700">{aiCheckPreview}</p>
-            ) : (
-              <div className="mt-2">{renderAiCommentary(aiCheckResult.summary)}</div>
-            )}
+            <div className="mt-2">{renderAiCommentary(aiCheckResult.summary)}</div>
           </div>
         )}
 
@@ -2337,6 +2339,7 @@ export default function PlannerPage() {
                     onProceed={handleProceedFromResearch}
                     canProceed={hasAnySelectedResearchOption}
                     isLoading={loading}
+                    headerActions={aiInlineActions}
                   />
                 );
 
@@ -2352,6 +2355,7 @@ export default function PlannerPage() {
                       onConfirm={handleConfirmDayGrouping}
                       onDayChange={setActiveDay}
                       isLoading={loading}
+                      headerActions={aiInlineActions}
                     />
                   </div>
                 );

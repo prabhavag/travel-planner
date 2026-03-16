@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ interface DayGroupingViewProps {
   onConfirm: () => void;
   onDayChange?: (dayNumber: number) => void;
   isLoading?: boolean;
+  headerActions?: ReactNode;
 }
 
 export function DayGroupingView({
@@ -37,6 +38,7 @@ export function DayGroupingView({
   onConfirm,
   onDayChange,
   isLoading = false,
+  headerActions = null,
 }: DayGroupingViewProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [movingActivity, setMovingActivity] = useState<{
@@ -801,9 +803,12 @@ export function DayGroupingView({
             Review the daily flow or shuffle activities to perfect your trip
           </p>
         </div>
-        <Button onClick={onConfirm} disabled={isLoading} className="bg-primary hover:bg-primary/90 text-white font-semibold px-6 h-11 shrink-0">
-          {isLoading ? "Confirming..." : "Confirm Grouping"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {headerActions}
+          <Button onClick={onConfirm} disabled={isLoading} className="bg-primary hover:bg-primary/90 text-white font-semibold px-6 h-11 shrink-0">
+            {isLoading ? "Confirming..." : "Confirm Grouping"}
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 flex flex-col min-h-0">
@@ -814,18 +819,28 @@ export function DayGroupingView({
             <span className="text-[10px] text-gray-400">Timeline is approximate. Daily budget: 8 hrs</span>
           </div>
           <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
-            {groupedDays.map((day) => (
-              <Button
-                key={day.dayNumber}
-                type="button"
-                variant={activeDayNumber === day.dayNumber ? "default" : "outline"}
-                size="sm"
-                onClick={() => scrollToDay(day.dayNumber)}
-                className="h-8 px-3 whitespace-nowrap"
-              >
-                Day {day.dayNumber}
-              </Button>
-            ))}
+            {groupedDays.map((day) => {
+              const dayColor = getDayColor(day.dayNumber);
+              const isActive = activeDayNumber === day.dayNumber;
+              return (
+                <Button
+                  key={day.dayNumber}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => scrollToDay(day.dayNumber)}
+                  className="h-8 px-3 whitespace-nowrap border font-semibold transition-colors"
+                  style={{
+                    backgroundColor: isActive ? dayColor : `${dayColor}1A`,
+                    borderColor: isActive ? dayColor : `${dayColor}66`,
+                    color: isActive ? "#FFFFFF" : dayColor,
+                    boxShadow: isActive ? `0 0 0 2px ${dayColor}33` : "none",
+                  }}
+                >
+                  Day {day.dayNumber}
+                </Button>
+              );
+            })}
           </div>
         </div>
 
