@@ -87,7 +87,11 @@ export function ActivityCard({
   const difficultyLevel = activity.difficultyLevel || "moderate";
   const bestTimeOfDay = activity.bestTimeOfDay && activity.bestTimeOfDay !== "any" ? activity.bestTimeOfDay : null;
   const fixedTimeLabel = activity.isFixedStartTime && activity.fixedStartTime ? activity.fixedStartTime : null;
-  const displayTimeSlot = timeSlotLabel || fixedTimeLabel || bestTimeOfDay;
+  const recommendedStartWindowLabel =
+    activity.recommendedStartWindow?.start && activity.recommendedStartWindow?.end
+      ? `${activity.recommendedStartWindow.start}-${activity.recommendedStartWindow.end}`
+      : null;
+  const displayTimeSlot = timeSlotLabel || fixedTimeLabel || recommendedStartWindowLabel || bestTimeOfDay;
 
   return (
     <Card

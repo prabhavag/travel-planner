@@ -592,6 +592,30 @@ export default function PlannerPage() {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
+  const aiInsightPopupRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isAiCheckCollapsed) return;
+
+    const handleMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && aiInsightPopupRef.current?.contains(target)) return;
+      setIsAiCheckCollapsed(true);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsAiCheckCollapsed(true);
+      }
+    };
+
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAiCheckCollapsed]);
 
   const clearLastTimelineCacheMetadata = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -1911,7 +1935,7 @@ export default function PlannerPage() {
     const showAiCheckInHeaderActionBars =
       workflowState === WORKFLOW_STATES.INITIAL_RESEARCH || workflowState === WORKFLOW_STATES.GROUP_DAYS;
     const aiInlineActions = !isFinalized && showAiCheckInHeaderActionBars ? (
-      <>
+      <div className="relative flex items-center gap-2">
         <Button
           variant="ghost"
           size="sm"
@@ -1923,21 +1947,44 @@ export default function PlannerPage() {
           Run check
         </Button>
         {aiCheckResult ? (
-          <button
-            type="button"
-            onClick={() => setIsAiCheckCollapsed((current) => !current)}
-            className={`inline-flex max-w-[280px] items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors ${aiCheckInsightTone}`}
-          >
-            <Sparkles className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">AI insight: {aiCheckPreview}</span>
-            {isAiCheckCollapsed ? (
-              <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-            ) : (
-              <ChevronUp className="h-3.5 w-3.5 shrink-0" />
-            )}
-          </button>
+          <div ref={aiInsightPopupRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setIsAiCheckCollapsed((current) => !current)}
+              className={`inline-flex max-w-[280px] items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors ${aiCheckInsightTone}`}
+            >
+              <Sparkles className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">AI insight: {aiCheckPreview}</span>
+              {isAiCheckCollapsed ? (
+                <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <ChevronUp className="h-3.5 w-3.5 shrink-0" />
+              )}
+            </button>
+            {!isAiCheckCollapsed ? (
+              <div
+                className={`absolute right-0 top-full z-50 mt-2 w-[min(36rem,calc(100vw-2rem))] rounded-lg border px-4 py-3 shadow-lg ${aiCheckDetailTone}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-medium text-gray-700">
+                    AI insight{aiCheckCheckedLabel ? ` (${aiCheckCheckedLabel})` : ""}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsAiCheckCollapsed(true)}
+                    className="h-7 px-2 text-xs text-gray-600 hover:text-gray-900"
+                  >
+                    Hide <ChevronUp className="ml-1 h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="mt-2 max-h-[50vh] overflow-y-auto pr-1">{renderAiCommentary(aiCheckResult.summary)}</div>
+              </div>
+            ) : null}
+          </div>
         ) : null}
-      </>
+      </div>
     ) : null;
 
     return (
@@ -1976,26 +2023,6 @@ export default function PlannerPage() {
                 Complete accommodation and flight searches to continue.
               </span>
             )}
-          </div>
-        )}
-
-        {!isFinalized && aiCheckResult && !isAiCheckCollapsed && (
-          <div className={`mx-4 mt-2 rounded-lg border px-4 py-3 ${aiCheckDetailTone}`}>
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-medium text-gray-700">
-                AI insight{aiCheckCheckedLabel ? ` (${aiCheckCheckedLabel})` : ""}
-              </p>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsAiCheckCollapsed(true)}
-                className="h-7 px-2 text-xs text-gray-600 hover:text-gray-900"
-              >
-                Hide <ChevronUp className="ml-1 h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <div className="mt-2">{renderAiCommentary(aiCheckResult.summary)}</div>
           </div>
         )}
 

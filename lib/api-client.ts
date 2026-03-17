@@ -193,6 +193,12 @@ export interface ResearchSource {
   snippet?: string | null;
 }
 
+export interface RecommendedStartWindow {
+  start: string;
+  end: string;
+  reason?: string | null;
+}
+
 export interface RouteWaypoint {
   name: string;
   place_id?: string | null;
@@ -213,6 +219,7 @@ export interface ResearchOption {
   bestTimeOfDay?: "morning" | "afternoon" | "evening" | "any";
   isFixedStartTime?: boolean;
   fixedStartTime?: string | null;
+  recommendedStartWindow?: RecommendedStartWindow | null;
   timeReason?: string | null;
   timeSourceLinks?: ResearchSource[];
   locationMode?: "point" | "route" | "area";
@@ -508,6 +515,7 @@ export interface SuggestedActivity {
   bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
   isFixedStartTime?: boolean;
   fixedStartTime?: string | null;
+  recommendedStartWindow?: RecommendedStartWindow | null;
   timeReason?: string | null;
   timeSourceLinks?: ResearchSource[];
   neighborhood?: string | null;

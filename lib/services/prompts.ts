@@ -107,6 +107,7 @@ RESPONSE FORMAT (JSON):
         "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
         "isFixedStartTime": "true|false (optional, set true for sunrise/sunset or ticketed start-time events)",
         "fixedStartTime": "Specific anchor such as 'sunrise', 'sunset', '6:20 AM', or '18:30' when isFixedStartTime is true",
+        "recommendedStartWindow": { "start": "HH:mm or h:mm AM/PM", "end": "HH:mm or h:mm AM/PM", "reason": "Soft recommendation reason like traffic/crowds (optional)" },
         "timeReason": "Short reason for bestTimeOfDay (optional)",
         "sourceLinks": [
           {
@@ -186,6 +187,7 @@ RESPONSE FORMAT (JSON):
         "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
         "isFixedStartTime": "true|false (optional, set true for sunrise/sunset or ticketed start-time events)",
         "fixedStartTime": "Specific anchor such as 'sunrise', 'sunset', '6:20 AM', or '18:30' when isFixedStartTime is true",
+        "recommendedStartWindow": { "start": "HH:mm or h:mm AM/PM", "end": "HH:mm or h:mm AM/PM", "reason": "Soft recommendation reason like traffic/crowds (optional)" },
         "timeReason": "Short reason for bestTimeOfDay (optional)",
         "sourceLinks": [
           {
@@ -286,6 +288,7 @@ Output must be strict JSON with this shape:
       "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
       "isFixedStartTime": "true|false (optional, set true for sunrise/sunset or ticketed start-time events)",
       "fixedStartTime": "Specific anchor such as 'sunrise', 'sunset', '6:20 AM', or '18:30' when isFixedStartTime is true",
+      "recommendedStartWindow": { "start": "HH:mm or h:mm AM/PM", "end": "HH:mm or h:mm AM/PM", "reason": "Soft recommendation reason like traffic/crowds (optional)" },
       "timeReason": "Short reason for bestTimeOfDay (optional)",
       "sourceLinks": [
         {

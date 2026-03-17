@@ -29,20 +29,26 @@ const TYPE_THEME_MAP: Record<string, string> = {
 
 const MAX_DAY_HOURS = 8;
 const MAX_OPTIMIZATION_PASSES = 4;
+const EARLY_FIXED_ACTIVITY_LOAD_FACTOR = 0.7;
+const EARLY_FIXED_ACTIVITY_CUTOFF_MINUTES = 7 * 60;
 const SLOT_CAPACITY_HOURS: Record<Exclude<SuggestedActivity["bestTimeOfDay"], "any">, number> = {
   morning: 4,
   afternoon: 4,
   evening: 3,
 };
+const SOFT_DAY_START_MINUTES = 9 * 60 + 30;
 
 const COST_WEIGHTS = {
   overflow: 50,
   overflowQuadratic: 8,
-  commute: 3.5,
-  commuteImbalance: 2.5,
+  commute: 0.25,
+  commuteImbalance: 0.15,
+  longLeg: 1.6,
+  spread: 0.8,
   variety: 3,
   slotOverflow: 8,
   slotMismatch: 5,
+  recommendedStartMiss: 7,
   balance: 0.7,
   fullDayNearbyOverflowRelief: 9,
   fullDayFarPenalty: 3,
@@ -51,6 +57,7 @@ const COST_WEIGHTS = {
 type PreparedActivity = {
   activity: SuggestedActivity;
   durationHours: number;
+  loadDurationHours: number;
   isFullDay: boolean;
 };
 
@@ -62,6 +69,12 @@ type DayBucket = {
   activities: SuggestedActivity[];
   originalIndex: number;
 };
+
+type Coordinate = { lat: number; lng: number };
+type ActivityCommuteMatrix = Map<string, number>;
+
+const ROUTE_MATRIX_API_URL = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix";
+const ROUTE_MATRIX_MAX_LOCATIONS = 25;
 
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
@@ -129,10 +142,58 @@ function parseDurationHours(estimatedDuration: string | null | undefined): numbe
   return Math.max(0.5, Math.min(10, value));
 }
 
+function parseFixedStartTimeMinutes(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const text = value.trim().toLowerCase();
+  if (!text) return null;
+  if (text === "sunrise") return 6 * 60;
+  if (text === "sunset") return 18 * 60;
+
+  const meridiemMatch = text.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+  if (meridiemMatch) {
+    let hour = Number(meridiemMatch[1]) % 12;
+    const minute = Number(meridiemMatch[2] || "0");
+    if (meridiemMatch[3].toLowerCase() === "pm") hour += 12;
+    if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) return hour * 60 + minute;
+  }
+
+  const twentyFourMatch = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (twentyFourMatch) {
+    const hour = Number(twentyFourMatch[1]);
+    const minute = Number(twentyFourMatch[2]);
+    return hour * 60 + minute;
+  }
+
+  return null;
+}
+
+function recommendedWindowLatestStartMinutes(activity: SuggestedActivity): number | null {
+  return parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end || null);
+}
+
+function activityLoadFactor(activity: SuggestedActivity): number {
+  if (!activity.isFixedStartTime) return 1;
+  const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+  if (fixedStartMinutes != null && fixedStartMinutes <= EARLY_FIXED_ACTIVITY_CUTOFF_MINUTES) {
+    return EARLY_FIXED_ACTIVITY_LOAD_FACTOR;
+  }
+  if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") {
+    return EARLY_FIXED_ACTIVITY_LOAD_FACTOR;
+  }
+  if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") {
+    return EARLY_FIXED_ACTIVITY_LOAD_FACTOR;
+  }
+  return 1;
+}
+
 function isFullDayDuration(estimatedDuration: string | null | undefined, durationHours: number): boolean {
   if (!estimatedDuration) return durationHours >= MAX_DAY_HOURS;
   const text = estimatedDuration.toLowerCase();
   return text.includes("full day") || text.includes("all day") || durationHours >= MAX_DAY_HOURS;
+}
+
+function getLoadDurationHours(preparedMap: Map<string, PreparedActivity>, activityId: string): number {
+  return preparedMap.get(activityId)?.loadDurationHours ?? 0;
 }
 
 function haversineDistanceKm(
@@ -153,6 +214,186 @@ function haversineDistanceKm(
     Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2);
   const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
   return r * c;
+}
+
+function getRoutesApiKey(): string | null {
+  return process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_PLACES_API_KEY || null;
+}
+
+function parseRouteDurationSeconds(duration?: string): number | null {
+  if (!duration) return null;
+  const match = duration.match(/^\s*([\d.]+)s\s*$/);
+  if (!match) return null;
+  const seconds = Number.parseFloat(match[1]);
+  return Number.isFinite(seconds) ? Math.round(seconds) : null;
+}
+
+function estimateDriveMinutesFallback(
+  from: Coordinate | null | undefined,
+  to: Coordinate | null | undefined
+): number {
+  if (!from || !to) return 25;
+  const distanceKm = haversineDistanceKm(from, to);
+  const roadDistanceKm =
+    distanceKm < 10
+      ? distanceKm * 1.35
+      : distanceKm < 30
+        ? distanceKm * 1.6
+        : distanceKm * 1.75;
+  const speedKph =
+    distanceKm < 10
+      ? 28
+      : distanceKm < 30
+        ? 20
+        : 40;
+  return Math.max(10, Math.round((roadDistanceKm / speedKph) * 60));
+}
+
+function getActivityRoutingPoint(activity: SuggestedActivity): Coordinate | null {
+  if (activity.locationMode === "route") {
+    return activity.startCoordinates || activity.coordinates || activity.endCoordinates || null;
+  }
+  return activity.coordinates || activity.startCoordinates || activity.endCoordinates || null;
+}
+
+function activityPairKey(fromId: string, toId: string): string {
+  return `${fromId}->${toId}`;
+}
+
+function parseRouteMatrixEntries(rawText: string): Array<Record<string, unknown>> {
+  const trimmed = rawText.trim();
+  if (!trimmed) return [];
+
+  const normalized = trimmed.startsWith(")]}'") ? trimmed.slice(4).trim() : trimmed;
+  try {
+    const parsed = JSON.parse(normalized);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is Record<string, unknown> => item !== null && typeof item === "object");
+    }
+  } catch {
+    // The Route Matrix REST response is often NDJSON.
+  }
+
+  return normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        const parsed = JSON.parse(line);
+        return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+}
+
+async function computeActivityCommuteMatrix(activities: SuggestedActivity[]): Promise<ActivityCommuteMatrix> {
+  const commuteMinutesByPair: ActivityCommuteMatrix = new Map();
+  if (activities.length <= 1) {
+    return commuteMinutesByPair;
+  }
+
+  for (const from of activities) {
+    for (const to of activities) {
+      if (from.id === to.id) {
+        commuteMinutesByPair.set(activityPairKey(from.id, to.id), 0);
+      }
+    }
+  }
+
+  const points = activities.map((activity) => ({
+    id: activity.id,
+    point: getActivityRoutingPoint(activity),
+  }));
+  const valid = points.filter((entry): entry is { id: string; point: Coordinate } => entry.point !== null);
+
+  const apiKey = getRoutesApiKey();
+  if (apiKey && valid.length > 1) {
+    try {
+      for (let originStart = 0; originStart < valid.length; originStart += ROUTE_MATRIX_MAX_LOCATIONS) {
+        const originChunk = valid.slice(originStart, originStart + ROUTE_MATRIX_MAX_LOCATIONS);
+        for (let destinationStart = 0; destinationStart < valid.length; destinationStart += ROUTE_MATRIX_MAX_LOCATIONS) {
+          const destinationChunk = valid.slice(destinationStart, destinationStart + ROUTE_MATRIX_MAX_LOCATIONS);
+          const body = {
+            origins: originChunk.map((origin) => ({
+              waypoint: {
+                location: {
+                  latLng: {
+                    latitude: origin.point.lat,
+                    longitude: origin.point.lng,
+                  },
+                },
+              },
+            })),
+            destinations: destinationChunk.map((destination) => ({
+              waypoint: {
+                location: {
+                  latLng: {
+                    latitude: destination.point.lat,
+                    longitude: destination.point.lng,
+                  },
+                },
+              },
+            })),
+            travelMode: "DRIVE",
+            routingPreference: "TRAFFIC_UNAWARE",
+            languageCode: "en-US",
+          };
+
+          const response = await fetch(ROUTE_MATRIX_API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Goog-Api-Key": apiKey,
+              "X-Goog-FieldMask": "originIndex,destinationIndex,duration,distanceMeters,status,condition",
+            },
+            body: JSON.stringify(body),
+          });
+
+          if (!response.ok) {
+            continue;
+          }
+
+          const raw = await response.text();
+          const entries = parseRouteMatrixEntries(raw);
+          for (const entry of entries) {
+            const originIndex = typeof entry.originIndex === "number" ? entry.originIndex : null;
+            const destinationIndex = typeof entry.destinationIndex === "number" ? entry.destinationIndex : null;
+            if (originIndex == null || destinationIndex == null) continue;
+            const origin = originChunk[originIndex];
+            const destination = destinationChunk[destinationIndex];
+            if (!origin || !destination) continue;
+
+            const durationSeconds = parseRouteDurationSeconds(
+              typeof entry.duration === "string" ? entry.duration : undefined
+            );
+            if (durationSeconds == null) continue;
+            commuteMinutesByPair.set(
+              activityPairKey(origin.id, destination.id),
+              Math.max(5, Math.round(durationSeconds / 60))
+            );
+          }
+        }
+      }
+    } catch {
+      // Ignore matrix errors and fall back to local estimates below.
+    }
+  }
+
+  for (const from of activities) {
+    const fromPoint = getActivityRoutingPoint(from);
+    for (const to of activities) {
+      if (from.id === to.id) continue;
+      const key = activityPairKey(from.id, to.id);
+      if (commuteMinutesByPair.has(key)) continue;
+      const toPoint = getActivityRoutingPoint(to);
+      commuteMinutesByPair.set(key, estimateDriveMinutesFallback(fromPoint, toPoint));
+    }
+  }
+
+  return commuteMinutesByPair;
 }
 
 function listActivityDistancePoints(activity: SuggestedActivity): Array<{ lat: number; lng: number }> {
@@ -348,9 +589,23 @@ function getPermutations<T>(array: T[]): T[][] {
   return result;
 }
 
+function activityCommuteMinutes(
+  from: SuggestedActivity,
+  to: SuggestedActivity,
+  commuteMinutesByPair: ActivityCommuteMatrix
+): number {
+  if (from.id === to.id) return 0;
+  const fromMatrix = commuteMinutesByPair.get(activityPairKey(from.id, to.id));
+  if (typeof fromMatrix === "number" && Number.isFinite(fromMatrix)) {
+    return fromMatrix;
+  }
+  return estimateDriveMinutesFallback(getActivityRoutingPoint(from), getActivityRoutingPoint(to));
+}
+
 function buildOptimalDayRoute(
   activities: SuggestedActivity[],
-  preparedMap: Map<string, PreparedActivity>
+  preparedMap: Map<string, PreparedActivity>,
+  commuteMinutesByPair: ActivityCommuteMatrix
 ): SuggestedActivity[] {
   if (activities.length <= 1) return [...activities];
 
@@ -367,17 +622,17 @@ function buildOptimalDayRoute(
         const activity = route[i];
 
         if (i > 0) {
-          cost += activityDistanceProxy(route[i - 1], activity) * COST_WEIGHTS.commute;
+          cost += activityCommuteMinutes(route[i - 1], activity, commuteMinutesByPair) * COST_WEIGHTS.commute;
         }
 
-        const duration = preparedMap.get(activity.id)?.durationHours ?? 0;
-        const midHour = currentHour + duration / 2;
+        const loadDuration = getLoadDurationHours(preparedMap, activity.id);
+        const midHour = currentHour + loadDuration / 2;
         const assignedSlot = slotForHour(midHour);
         if (activity.bestTimeOfDay !== "any") {
-          cost += slotDistance(activity.bestTimeOfDay, assignedSlot) * duration * COST_WEIGHTS.slotMismatch;
+          cost += slotDistance(activity.bestTimeOfDay, assignedSlot) * loadDuration * COST_WEIGHTS.slotMismatch;
         }
 
-        currentHour += duration;
+        currentHour += loadDuration;
       }
 
       let tieBreaker = 0;
@@ -411,7 +666,7 @@ function buildOptimalDayRoute(
 
       for (const candidate of activities) {
         if (used.has(candidate.id)) continue;
-        const distance = activityDistanceProxy(current, candidate);
+        const distance = activityCommuteMinutes(current, candidate, commuteMinutesByPair);
         if (distance < bestNextDistance) {
           bestNextDistance = distance;
           bestNext = candidate;
@@ -426,7 +681,7 @@ function buildOptimalDayRoute(
 
     let totalDistance = 0;
     for (let i = 1; i < ordered.length; i += 1) {
-      totalDistance += activityDistanceProxy(ordered[i - 1], ordered[i]);
+      totalDistance += activityCommuteMinutes(ordered[i - 1], ordered[i], commuteMinutesByPair);
     }
 
     if (totalDistance < bestDistance) {
@@ -446,18 +701,20 @@ function slotForHour(hour: number): Exclude<SuggestedActivity["bestTimeOfDay"], 
 
 function computeDayCommuteProxy(
   day: WorkingDay,
-  preparedMap: Map<string, PreparedActivity>
+  preparedMap: Map<string, PreparedActivity>,
+  commuteMinutesByPair: ActivityCommuteMatrix
 ): number {
   const activities = buildOptimalDayRoute(
     day.activityIds
       .map((id) => preparedMap.get(id)?.activity)
       .filter((activity): activity is SuggestedActivity => activity !== undefined),
-    preparedMap
+    preparedMap,
+    commuteMinutesByPair
   );
 
   let commuteProxy = 0;
   for (let i = 1; i < activities.length; i += 1) {
-    commuteProxy += activityDistanceProxy(activities[i - 1], activities[i]);
+    commuteProxy += activityCommuteMinutes(activities[i - 1], activities[i], commuteMinutesByPair);
   }
   return commuteProxy;
 }
@@ -465,7 +722,8 @@ function computeDayCommuteProxy(
 function computeDayBaseCost(
   day: WorkingDay,
   preparedMap: Map<string, PreparedActivity>,
-  targetHours: number
+  targetHours: number,
+  commuteMinutesByPair: ActivityCommuteMatrix
 ): number {
   if (day.activityIds.length === 0) {
     return targetHours * COST_WEIGHTS.balance;
@@ -475,13 +733,22 @@ function computeDayBaseCost(
     day.activityIds
       .map((id) => preparedMap.get(id)?.activity)
       .filter((activity): activity is SuggestedActivity => activity !== undefined),
-    preparedMap
+    preparedMap,
+    commuteMinutesByPair
   );
 
-  const totalHours = activities.reduce((sum, activity) => sum + (preparedMap.get(activity.id)?.durationHours ?? 0), 0);
+  const totalHours = activities.reduce((sum, activity) => sum + getLoadDurationHours(preparedMap, activity.id), 0);
   const overflow = Math.max(0, totalHours - MAX_DAY_HOURS);
 
-  const commuteProxy = computeDayCommuteProxy(day, preparedMap);
+  const commuteProxy = computeDayCommuteProxy(day, preparedMap, commuteMinutesByPair);
+  const legDistances: number[] = [];
+  for (let i = 1; i < activities.length; i += 1) {
+    legDistances.push(activityCommuteMinutes(activities[i - 1], activities[i], commuteMinutesByPair));
+  }
+  const longestLeg = legDistances.length > 0 ? Math.max(...legDistances) : 0;
+  const averageLeg = legDistances.length > 0 ? legDistances.reduce((sum, d) => sum + d, 0) / legDistances.length : 0;
+  const longLegPenalty = Math.max(0, longestLeg - 75);
+  const spreadPenalty = Math.max(0, averageLeg - 45);
 
   const uniqueTypes = new Set(activities.map((activity) => activity.type.trim().toLowerCase())).size;
   const varietyPenalty = activities.length > 1 ? (activities.length - uniqueTypes) / activities.length : 0;
@@ -493,7 +760,7 @@ function computeDayBaseCost(
   };
   for (const activity of activities) {
     if (activity.bestTimeOfDay === "any") continue;
-    slotHours[activity.bestTimeOfDay] += preparedMap.get(activity.id)?.durationHours ?? 0;
+    slotHours[activity.bestTimeOfDay] += getLoadDurationHours(preparedMap, activity.id);
   }
 
   const slotOverflowPenalty = Object.entries(slotHours).reduce((sum, [slot, hours]) => {
@@ -502,13 +769,23 @@ function computeDayBaseCost(
   }, 0);
 
   let slotMismatchPenalty = 0;
+  let recommendedStartMissPenalty = 0;
   let currentHour = 0;
   for (const activity of activities) {
-    const duration = preparedMap.get(activity.id)?.durationHours ?? 0;
+    const duration = getLoadDurationHours(preparedMap, activity.id);
     const midHour = currentHour + duration / 2;
     const assignedSlot = slotForHour(midHour);
     if (activity.bestTimeOfDay !== "any") {
       slotMismatchPenalty += slotDistance(activity.bestTimeOfDay, assignedSlot) * duration;
+    }
+    const latestRecommendedStartMinutes = recommendedWindowLatestStartMinutes(activity);
+    const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+    const effectiveStartMinutes =
+      fixedStartMinutes != null
+        ? fixedStartMinutes
+        : SOFT_DAY_START_MINUTES + Math.round(currentHour * 60);
+    if (latestRecommendedStartMinutes != null && effectiveStartMinutes > latestRecommendedStartMinutes) {
+      recommendedStartMissPenalty += (effectiveStartMinutes - latestRecommendedStartMinutes) / 60;
     }
     currentHour += duration;
   }
@@ -526,7 +803,7 @@ function computeDayBaseCost(
     for (const activity of activities) {
       if (preparedMap.get(activity.id)?.isFullDay) continue;
 
-      const duration = preparedMap.get(activity.id)?.durationHours ?? 0;
+      const duration = getLoadDurationHours(preparedMap, activity.id);
       let minDistance = Number.POSITIVE_INFINITY;
       for (const fullDayActivity of fullDayActivities) {
         minDistance = Math.min(minDistance, activityDistanceProxy(activity, fullDayActivity));
@@ -548,25 +825,32 @@ function computeDayBaseCost(
   return (
     overflowPenalty +
     commuteProxy * COST_WEIGHTS.commute +
+    longLegPenalty * COST_WEIGHTS.longLeg +
+    spreadPenalty * COST_WEIGHTS.spread +
     varietyPenalty * COST_WEIGHTS.variety +
     slotOverflowPenalty * COST_WEIGHTS.slotOverflow +
     slotMismatchPenalty * COST_WEIGHTS.slotMismatch +
+    recommendedStartMissPenalty * COST_WEIGHTS.recommendedStartMiss +
     balancePenalty * COST_WEIGHTS.balance +
     fullDayFitPenalty
   );
 }
 
-function computeTotalCost(days: WorkingDay[], preparedMap: Map<string, PreparedActivity>): number {
+function computeTotalCost(
+  days: WorkingDay[],
+  preparedMap: Map<string, PreparedActivity>,
+  commuteMinutesByPair: ActivityCommuteMatrix
+): number {
   const allActivityIds = days.flatMap((day) => day.activityIds);
-  const totalHours = allActivityIds.reduce((sum, id) => sum + (preparedMap.get(id)?.durationHours ?? 0), 0);
+  const totalHours = allActivityIds.reduce((sum, id) => sum + getLoadDurationHours(preparedMap, id), 0);
   const targetHours = Math.min(MAX_DAY_HOURS, totalHours / Math.max(1, days.length));
 
   const baseCost = days.reduce(
-    (sum, day) => sum + computeDayBaseCost(day, preparedMap, targetHours),
+    (sum, day) => sum + computeDayBaseCost(day, preparedMap, targetHours, commuteMinutesByPair),
     0
   );
 
-  const dayCommutes = days.map((day) => computeDayCommuteProxy(day, preparedMap));
+  const dayCommutes = days.map((day) => computeDayCommuteProxy(day, preparedMap, commuteMinutesByPair));
   const totalCommute = dayCommutes.reduce((sum, value) => sum + value, 0);
   const avgCommute = totalCommute / Math.max(1, dayCommutes.length);
   const maxCommute = dayCommutes.reduce((max, value) => Math.max(max, value), 0);
@@ -619,10 +903,12 @@ function assignActivityToBestDay({
   days,
   activityId,
   preparedMap,
+  commuteMinutesByPair,
 }: {
   days: WorkingDay[];
   activityId: string;
   preparedMap: Map<string, PreparedActivity>;
+  commuteMinutesByPair: ActivityCommuteMatrix;
 }): void {
   const candidateIndices = days.map((_, index) => index);
 
@@ -635,7 +921,7 @@ function assignActivityToBestDay({
     }));
     clone[index].activityIds.push(activityId);
 
-    const cost = computeTotalCost(clone, preparedMap);
+    const cost = computeTotalCost(clone, preparedMap, commuteMinutesByPair);
     if (cost < bestCost) {
       bestCost = cost;
       bestIndex = index;
@@ -645,13 +931,17 @@ function assignActivityToBestDay({
   days[bestIndex].activityIds.push(activityId);
 }
 
-function optimizeByMovesAndSwaps(days: WorkingDay[], preparedMap: Map<string, PreparedActivity>): void {
+function optimizeByMovesAndSwaps(
+  days: WorkingDay[],
+  preparedMap: Map<string, PreparedActivity>,
+  commuteMinutesByPair: ActivityCommuteMatrix
+): void {
   for (let pass = 0; pass < MAX_OPTIMIZATION_PASSES; pass += 1) {
     let improved = false;
 
     for (let i = 0; i < days.length; i += 1) {
       for (const activityId of [...days[i].activityIds]) {
-        let currentBestCost = computeTotalCost(days, preparedMap);
+        let currentBestCost = computeTotalCost(days, preparedMap, commuteMinutesByPair);
         let bestMoveTarget = -1;
 
         for (let j = 0; j < days.length; j += 1) {
@@ -664,7 +954,7 @@ function optimizeByMovesAndSwaps(days: WorkingDay[], preparedMap: Map<string, Pr
           candidate[i].activityIds = candidate[i].activityIds.filter((id) => id !== activityId);
           candidate[j].activityIds.push(activityId);
 
-          const cost = computeTotalCost(candidate, preparedMap);
+          const cost = computeTotalCost(candidate, preparedMap, commuteMinutesByPair);
           if (cost + 1e-6 < currentBestCost) {
             currentBestCost = cost;
             bestMoveTarget = j;
@@ -683,7 +973,7 @@ function optimizeByMovesAndSwaps(days: WorkingDay[], preparedMap: Map<string, Pr
       for (let j = i + 1; j < days.length; j += 1) {
         for (const leftId of [...days[i].activityIds]) {
           for (const rightId of [...days[j].activityIds]) {
-            const currentCost = computeTotalCost(days, preparedMap);
+            const currentCost = computeTotalCost(days, preparedMap, commuteMinutesByPair);
             const candidate = days.map((day) => ({
               activityIds: [...day.activityIds],
             }));
@@ -693,7 +983,7 @@ function optimizeByMovesAndSwaps(days: WorkingDay[], preparedMap: Map<string, Pr
             candidate[i].activityIds.push(rightId);
             candidate[j].activityIds.push(leftId);
 
-            const swappedCost = computeTotalCost(candidate, preparedMap);
+            const swappedCost = computeTotalCost(candidate, preparedMap, commuteMinutesByPair);
             if (swappedCost + 1e-6 < currentCost) {
               days[i].activityIds = days[i].activityIds.filter((id) => id !== leftId);
               days[j].activityIds = days[j].activityIds.filter((id) => id !== rightId);
@@ -731,14 +1021,15 @@ export function generateDayTheme(activities: SuggestedActivity[]): string {
   return `${topCategories[0]} & ${topCategories[1]}`;
 }
 
-export function groupActivitiesByDay({
+export async function groupActivitiesByDay({
   tripInfo,
   activities,
 }: {
   tripInfo: TripInfo;
   activities: SuggestedActivity[];
-}): DayGroup[] {
+}): Promise<DayGroup[]> {
   distanceCache.clear();
+  const commuteMinutesByPair = await computeActivityCommuteMatrix(activities);
   const dayCount = computeDayCount(tripInfo, activities.length);
   const dates = buildTripDates(tripInfo, dayCount);
   const preparedMap = new Map<string, PreparedActivity>(
@@ -749,6 +1040,7 @@ export function groupActivitiesByDay({
         {
           activity,
           durationHours,
+          loadDurationHours: durationHours * activityLoadFactor(activity),
           isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
         },
       ];
@@ -785,7 +1077,7 @@ export function groupActivitiesByDay({
   const remainingAnchors = anchorActivities
     .filter((activity) => !selectedSeedIds.has(activity.id))
     .sort((a, b) => {
-      const durationDelta = (preparedMap.get(b.id)?.durationHours ?? 0) - (preparedMap.get(a.id)?.durationHours ?? 0);
+      const durationDelta = getLoadDurationHours(preparedMap, b.id) - getLoadDurationHours(preparedMap, a.id);
       if (durationDelta !== 0) return durationDelta;
       return a.name.localeCompare(b.name);
     });
@@ -795,13 +1087,14 @@ export function groupActivitiesByDay({
       days,
       activityId: anchor.id,
       preparedMap,
+      commuteMinutesByPair,
     });
   }
 
   const remainingFlex = activities
     .filter((activity) => !selectedSeedIds.has(activity.id) && !days.some((day) => day.activityIds.includes(activity.id)))
     .sort((a, b) => {
-      const durationDelta = (preparedMap.get(b.id)?.durationHours ?? 0) - (preparedMap.get(a.id)?.durationHours ?? 0);
+      const durationDelta = getLoadDurationHours(preparedMap, b.id) - getLoadDurationHours(preparedMap, a.id);
       if (durationDelta !== 0) return durationDelta;
       const timeDelta = TIME_ORDER[a.bestTimeOfDay] - TIME_ORDER[b.bestTimeOfDay];
       if (timeDelta !== 0) return timeDelta;
@@ -813,17 +1106,19 @@ export function groupActivitiesByDay({
       days,
       activityId: activity.id,
       preparedMap,
+      commuteMinutesByPair,
     });
   }
 
-  optimizeByMovesAndSwaps(days, preparedMap);
+  optimizeByMovesAndSwaps(days, preparedMap, commuteMinutesByPair);
 
   const buckets = days.map((day) =>
     buildOptimalDayRoute(
       day.activityIds
         .map((id) => preparedMap.get(id)?.activity)
         .filter((activity): activity is SuggestedActivity => activity !== undefined),
-      preparedMap
+      preparedMap,
+      commuteMinutesByPair
     )
   );
 

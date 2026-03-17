@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     const selectedActivities = session.suggestedActivities.filter((activity) =>
       selectedActivityIds.includes(activity.id)
     );
-    const dayGroups = groupActivitiesByDay({
+    const dayGroups = await groupActivitiesByDay({
       tripInfo: session.tripInfo,
       activities: selectedActivities,
     });

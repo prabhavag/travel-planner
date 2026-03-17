@@ -516,6 +516,21 @@ export function DayItineraryView({
     return null;
   }
 
+  const formatRecommendedStartWindowLabel = (activity: SuggestedActivity): string | null => {
+    const window = activity.recommendedStartWindow;
+    if (!window?.start || !window?.end) return null;
+    return `${window.start}-${window.end}`;
+  };
+
+  function activityLoadFactor(activity: SuggestedActivity): number {
+    if (!activity.isFixedStartTime) return 1;
+    const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
+    if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
+    if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") return 0.7;
+    if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") return 0.7;
+    return 1;
+  }
+
   function haversineKm(
     from: { lat: number; lng: number } | null | undefined,
     to: { lat: number; lng: number } | null | undefined,
@@ -629,13 +644,33 @@ export function DayItineraryView({
     const totalCommuteHoursEstimate =
       (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
-    const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
+    const totalRequestedHours = day.activities.reduce(
+      (sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration) * activityLoadFactor(activity),
+      0
+    );
     const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
-    const showFreeSlotNotice = freeActivityHours >= 0.75;
+    const earliestFixedStartMinutes = sortedActivities
+      .filter((activity) => activity.isFixedStartTime)
+      .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
+      .filter((minutes): minutes is number => minutes != null)
+      .sort((a, b) => a - b)[0];
+    const hadVeryEarlyFixedStart =
+      (earliestFixedStartMinutes != null && earliestFixedStartMinutes <= 6 * 60) ||
+      sortedActivities.some((activity) => activity.isFixedStartTime && activity.fixedStartTime?.toLowerCase() === "sunrise");
+    const freeSlotSuggestion = hadVeryEarlyFixedStart
+      ? "Optional light add-on: beach, cafe, or sunset viewpoint near your stay."
+      : "A slot is free, consider adding or moving an activity.";
     const scaleFactor =
       totalRequestedHours > 0 && totalRequestedHours > remainingForActivities && remainingForActivities > 0
         ? remainingForActivities / totalRequestedHours
         : 1;
+    const eveningCutoffMinutes = 18 * 60;
+    const defaultDayStartMinutes = 9 * 60 + 30;
+    const dayStartMinutes = earliestFixedStartMinutes != null ? Math.max(0, earliestFixedStartMinutes - stayStartCommuteMinutes - 15) : defaultDayStartMinutes;
+    const estimatedDayEndMinutes = dayStartMinutes + Math.round((totalRequestedHours + lunchHours + totalCommuteHoursEstimate) * 60);
+    const freeHoursBeforeEvening = Math.max(0, (eveningCutoffMinutes - estimatedDayEndMinutes) / 60);
+    const effectiveFreeHours = Math.min(freeActivityHours, freeHoursBeforeEvening);
+    const showFreeSlotNotice = effectiveFreeHours >= 0.75;
 
     const timelineRows: Array<{
       label: string;
@@ -659,12 +694,17 @@ export function DayItineraryView({
     }
 
     sortedActivities.forEach((activity, index) => {
-      const requestedHours = parseEstimatedHours(activity.estimatedDuration);
+      const requestedHours = parseEstimatedHours(activity.estimatedDuration) * activityLoadFactor(activity);
       const allocatedHours = Math.max(0.75, requestedHours * scaleFactor);
+      const recommendedStartWindowLabel = formatRecommendedStartWindowLabel(activity);
+      const recommendedStartSuffix =
+        !activity.isFixedStartTime && recommendedStartWindowLabel
+          ? ` Recommended start: ${recommendedStartWindowLabel}${activity.recommendedStartWindow?.reason ? ` (${activity.recommendedStartWindow.reason})` : ""}.`
+          : "";
 
       timelineRows.push({
         label: activity.name,
-        detail: `${activity.isFixedStartTime && activity.fixedStartTime ? `Starts at ${activity.fixedStartTime}. ` : ""}Visit up to ${formatHourLabel(allocatedHours)} (${activity.estimatedDuration || "estimated"})`,
+        detail: `${activity.isFixedStartTime && activity.fixedStartTime ? `Starts at ${activity.fixedStartTime}. ` : ""}Visit up to ${formatHourLabel(allocatedHours)} (${activity.estimatedDuration || "estimated"}).${recommendedStartSuffix}`,
         type: "activity",
       });
 
@@ -709,7 +749,7 @@ export function DayItineraryView({
     if (showFreeSlotNotice) {
       timelineRows.push({
         label: "Free slot",
-        detail: "A slot is free, consider adding or moving an activity.",
+        detail: freeSlotSuggestion,
         type: "free",
       });
     }
@@ -741,7 +781,7 @@ export function DayItineraryView({
           <div className="mb-2 rounded-md border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] text-emerald-900">
             <div className="flex items-center gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>A slot is free, consider adding or moving an activity.</span>
+              <span>{freeSlotSuggestion}</span>
             </div>
           </div>
         ) : null}

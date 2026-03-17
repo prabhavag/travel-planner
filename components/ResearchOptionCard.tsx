@@ -65,7 +65,11 @@ export function ResearchOptionCard({
 
   const displayedDuration = activityDuration || option.estimatedDuration || null;
   const bestTimeOfDay = option.bestTimeOfDay && option.bestTimeOfDay !== "any" ? option.bestTimeOfDay : null;
-  const displayTimeSlot = timeSlotLabel || bestTimeOfDay;
+  const recommendedStartWindowLabel =
+    option.recommendedStartWindow?.start && option.recommendedStartWindow?.end
+      ? `${option.recommendedStartWindow.start}-${option.recommendedStartWindow.end}`
+      : null;
+  const displayTimeSlot = timeSlotLabel || bestTimeOfDay || recommendedStartWindowLabel;
 
   return (
     <Card

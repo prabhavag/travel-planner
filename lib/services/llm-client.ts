@@ -65,6 +65,16 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
               bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
               isFixedStartTime: { type: "boolean" },
               fixedStartTime: { type: ["string", "null"] },
+              recommendedStartWindow: {
+                type: ["object", "null"],
+                additionalProperties: false,
+                required: ["start", "end"],
+                properties: {
+                  start: { type: "string" },
+                  end: { type: "string" },
+                  reason: { type: ["string", "null"] },
+                },
+              },
               timeReason: { type: ["string", "null"] },
               timeSourceLinks: {
                 type: "array",
@@ -177,6 +187,16 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
           bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
           isFixedStartTime: { type: "boolean" },
           fixedStartTime: { type: ["string", "null"] },
+          recommendedStartWindow: {
+            type: ["object", "null"],
+            additionalProperties: false,
+            required: ["start", "end"],
+            properties: {
+              start: { type: "string" },
+              end: { type: "string" },
+              reason: { type: ["string", "null"] },
+            },
+          },
           timeReason: { type: ["string", "null"] },
           timeSourceLinks: {
             type: "array",
@@ -263,6 +283,16 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
         bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
         isFixedStartTime: { type: "boolean" },
         fixedStartTime: { type: ["string", "null"] },
+        recommendedStartWindow: {
+          type: ["object", "null"],
+          additionalProperties: false,
+          required: ["start", "end"],
+          properties: {
+            start: { type: "string" },
+            end: { type: "string" },
+            reason: { type: ["string", "null"] },
+          },
+        },
         timeReason: { type: ["string", "null"] },
         timeSourceLinks: {
           type: "array",
@@ -746,6 +776,7 @@ class LLMClient {
     const normalizedBestTimeOfDay = this._normalizeBestTimeOfDay(activity.bestTimeOfDay);
     const normalizedFixedStartTime = this._normalizeFixedStartTime(activity.fixedStartTime);
     const isFixedStartTime = Boolean(activity.isFixedStartTime || normalizedFixedStartTime);
+    const recommendedStartWindow = this._normalizeRecommendedStartWindow(activity.recommendedStartWindow);
 
     return {
       ...activity,
@@ -754,6 +785,7 @@ class LLMClient {
       fixedStartTime: isFixedStartTime
         ? normalizedFixedStartTime || this._fallbackFixedStartFromBestTime(normalizedBestTimeOfDay)
         : null,
+      recommendedStartWindow,
       interestTags: this._normalizeInterestTags((activity as SuggestedActivity & { interestTags?: unknown }).interestTags),
     };
   }
@@ -1352,6 +1384,18 @@ class LLMClient {
     return normalized.length > 0 ? normalized : null;
   }
 
+  private _normalizeRecommendedStartWindow(
+    value: unknown
+  ): { start: string; end: string; reason: string | null } | null {
+    if (!value || typeof value !== "object") return null;
+    const raw = value as Record<string, unknown>;
+    const start = this._normalizeFixedStartTime(raw.start);
+    const end = this._normalizeFixedStartTime(raw.end);
+    if (!start || !end) return null;
+    const reason = typeof raw.reason === "string" && raw.reason.trim() ? raw.reason.trim() : null;
+    return { start, end, reason };
+  }
+
   private _fallbackFixedStartFromBestTime(bestTimeOfDay: "morning" | "afternoon" | "evening" | "any"): string {
     if (bestTimeOfDay === "morning") return "09:00";
     if (bestTimeOfDay === "afternoon") return "13:00";
@@ -1381,6 +1425,34 @@ class LLMClient {
 
     const timeMatch = text.match(/\b(?:[01]?\d(?::[0-5]\d)?\s?(?:am|pm)|[01]\d:[0-5]\d|2[0-3]:[0-5]\d)\b/i);
     return timeMatch ? timeMatch[0].toUpperCase() : null;
+  }
+
+  private _inferRecommendedStartWindow({
+    title,
+    category,
+    whyItMatches,
+    bestForDates,
+    reviewSummary,
+    timeReason,
+  }: {
+    title: string;
+    category: string;
+    whyItMatches: string;
+    bestForDates: string;
+    reviewSummary: string;
+    timeReason: string;
+  }): { start: string; end: string; reason: string | null } | null {
+    const text = `${title} ${category} ${whyItMatches} ${bestForDates} ${reviewSummary} ${timeReason}`.toLowerCase();
+
+    if (/(road to hana|hana highway)/i.test(text)) {
+      return {
+        start: "06:00",
+        end: "08:00",
+        reason: "Start early to avoid heavy traffic and crowds.",
+      };
+    }
+
+    return null;
   }
 
   private _inferEstimatedDuration({
@@ -1586,6 +1658,14 @@ class LLMClient {
             whyItMatches: option.whyItMatches,
             bestForDates: option.bestForDates,
             reviewSummary: option.reviewSummary,
+          });
+          const inferredRecommendedStartWindow = this._inferRecommendedStartWindow({
+            title: option.title,
+            category: option.category,
+            whyItMatches: option.whyItMatches,
+            bestForDates: option.bestForDates,
+            reviewSummary: option.reviewSummary,
+            timeReason: option.timeReason || "",
           });
           const inferredDifficulty = this._inferDifficultyLevel({
             title: option.title,
@@ -1836,6 +1916,7 @@ class LLMClient {
               bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
               isFixedStartTime: option.isFixedStartTime || false,
               fixedStartTime: option.fixedStartTime || null,
+              recommendedStartWindow: option.recommendedStartWindow || inferredRecommendedStartWindow,
               timeReason: option.timeReason || inferredTime.timeReason,
               timeSourceLinks: option.timeSourceLinks || inferredTime.timeSourceLinks,
               locationMode: inferredLocationMode,
@@ -1857,6 +1938,7 @@ class LLMClient {
             bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
             isFixedStartTime: option.isFixedStartTime || false,
             fixedStartTime: option.fixedStartTime || null,
+            recommendedStartWindow: option.recommendedStartWindow || inferredRecommendedStartWindow,
             timeReason: option.timeReason || inferredTime.timeReason,
             timeSourceLinks: option.timeSourceLinks || inferredTime.timeSourceLinks,
             locationMode: inferredLocationMode,
@@ -1981,7 +2063,16 @@ class LLMClient {
             timeReason: typeof opt.timeReason === "string" ? opt.timeReason : "",
             sourceLinks,
           });
+          const inferredRecommendedStartWindow = this._inferRecommendedStartWindow({
+            title: typeof opt.title === "string" ? opt.title : "",
+            category: typeof opt.category === "string" ? opt.category : "other",
+            whyItMatches: typeof opt.whyItMatches === "string" ? opt.whyItMatches : "",
+            bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
+            reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
+            timeReason: typeof opt.timeReason === "string" ? opt.timeReason : "",
+          });
           const fixedStartTimeFromModel = this._normalizeFixedStartTime(opt.fixedStartTime);
+          const recommendedStartWindowFromModel = this._normalizeRecommendedStartWindow(opt.recommendedStartWindow);
           const rawIsFixedStartTime = opt.isFixedStartTime === true;
           const isFixedStartTime = rawIsFixedStartTime || Boolean(fixedStartTimeFromModel) || Boolean(inferredFixedStartTime);
           const fixedStartTime = isFixedStartTime
@@ -2006,6 +2097,7 @@ class LLMClient {
             bestTimeOfDay: hasExplicitBestTimeOfDay ? bestTimeOfDay : inferredTime.bestTimeOfDay,
             isFixedStartTime,
             fixedStartTime,
+            recommendedStartWindow: recommendedStartWindowFromModel || inferredRecommendedStartWindow,
             timeReason:
               typeof opt.timeReason === "string" && opt.timeReason.trim()
                 ? opt.timeReason.trim()

@@ -235,6 +235,14 @@ export const ResearchSourceSchema = z.object({
 
 export type ResearchSource = z.infer<typeof ResearchSourceSchema>;
 
+export const RecommendedStartWindowSchema = z.object({
+  start: z.string(),
+  end: z.string(),
+  reason: z.string().optional().nullable(),
+});
+
+export type RecommendedStartWindow = z.infer<typeof RecommendedStartWindowSchema>;
+
 // "selected" is the current frontend model; legacy values remain for compatibility.
 export const ResearchOptionPreferenceSchema = z.enum(["selected", "keep", "maybe", "reject"]);
 export type ResearchOptionPreference = z.infer<typeof ResearchOptionPreferenceSchema>;
@@ -253,6 +261,7 @@ export const ResearchOptionSchema = z.object({
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]).optional(),
   isFixedStartTime: z.boolean().optional(),
   fixedStartTime: z.string().nullable().optional(),
+  recommendedStartWindow: RecommendedStartWindowSchema.optional().nullable(),
   timeReason: z.string().optional().nullable(),
   timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
   locationMode: z.enum(["point", "route", "area"]).optional(),
@@ -290,6 +299,7 @@ export const SuggestedActivitySchema = z.object({
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]),
   isFixedStartTime: z.boolean().optional().default(false),
   fixedStartTime: z.string().nullable().optional(),
+  recommendedStartWindow: RecommendedStartWindowSchema.optional().nullable(),
   timeReason: z.string().nullable().optional(),
   timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
   neighborhood: z.string().nullable().optional(),

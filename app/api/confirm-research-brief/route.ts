@@ -28,6 +28,18 @@ function fallbackFixedStartFromBestTime(bestTimeOfDay: ResearchOption["bestTimeO
   return "09:00";
 }
 
+function inferRecommendedStartWindowFromText(option: ResearchOption): { start: string; end: string; reason: string | null } | null {
+  const text = `${option.title} ${option.category} ${option.whyItMatches} ${option.bestForDates} ${option.reviewSummary} ${option.timeReason || ""}`.toLowerCase();
+  if (/(road to hana|hana highway)/i.test(text)) {
+    return {
+      start: "06:00",
+      end: "08:00",
+      reason: "Start early to avoid traffic and crowds.",
+    };
+  }
+  return null;
+}
+
 function mapResearchOptionToSuggestedActivity(option: ResearchOption): SuggestedActivity {
   const fallbackDuration =
     option.category === "food"
@@ -42,6 +54,7 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
   const fixedStartTime = isFixedStartTime
     ? explicitFixedStartTime || inferredFixedStartTime || fallbackFixedStartFromBestTime(option.bestTimeOfDay)
     : null;
+  const recommendedStartWindow = option.recommendedStartWindow || inferRecommendedStartWindowFromText(option);
 
   return {
     id: option.id,
@@ -56,6 +69,7 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
     bestTimeOfDay: option.bestTimeOfDay || "any",
     isFixedStartTime,
     fixedStartTime,
+    recommendedStartWindow,
     timeReason: option.timeReason || null,
     timeSourceLinks: option.timeSourceLinks || [],
     neighborhood: null,
@@ -141,7 +155,7 @@ export async function POST(request: NextRequest) {
       .filter(Boolean);
 
     const selectedActivities = suggestedActivities.filter((activity) => selectedActivityIds.includes(activity.id));
-    const dayGroups = groupActivitiesByDay({
+    const dayGroups = await groupActivitiesByDay({
       tripInfo: session.tripInfo,
       activities: selectedActivities,
     });

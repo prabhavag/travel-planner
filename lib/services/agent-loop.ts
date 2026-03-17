@@ -415,7 +415,7 @@ async function executeAction({
     const selectedActivities = session.suggestedActivities.filter((activity) =>
       parsed.selectedActivityIds.includes(activity.id),
     );
-    const dayGroups = groupActivitiesByDay({
+    const dayGroups = await groupActivitiesByDay({
       tripInfo: session.tripInfo,
       activities: selectedActivities,
     });

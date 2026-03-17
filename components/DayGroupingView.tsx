@@ -410,11 +410,20 @@ export function DayGroupingView({
   ): number {
     const distanceKm = haversineKm(from, to);
     if (distanceKm == null) return 25;
-    // Fallback only: use conservative speeds and no low hard cap, especially for winding mountain roads.
-    const isLongDrive = distanceKm >= 20;
-    const speedKph = isLongDrive ? 28 : 32;
-    const terrainFactor = isLongDrive ? 1.2 : 1;
-    const minutes = Math.round(((distanceKm / speedKph) * 60) * terrainFactor);
+    // Fallback only: inflate straight-line distance into road distance and use conservative speeds.
+    const roadDistanceKm =
+      distanceKm < 10
+        ? distanceKm * 1.35
+        : distanceKm < 30
+          ? distanceKm * 1.6
+          : distanceKm * 1.75;
+    const speedKph =
+      distanceKm < 10
+        ? 28
+        : distanceKm < 30
+          ? 20
+          : 40;
+    const minutes = Math.round((roadDistanceKm / speedKph) * 60);
     return Math.max(10, minutes);
   }
 
@@ -427,7 +436,7 @@ export function DayGroupingView({
     if (distanceKm == null) return railFriendlyDestination ? "TRAIN" : "DRIVE";
     if (distanceKm <= 1.5) return "WALK";
     if (railFriendlyDestination && distanceKm >= 3 && distanceKm <= 250) return "TRAIN";
-    if (distanceKm <= 10) return "TRANSIT";
+    // Default to driving for non-rail destinations; transit heuristics produce unrealistic legs.
     return "DRIVE";
   }
 
@@ -462,6 +471,15 @@ export function DayGroupingView({
   const toRangeLabel = (startMinutes: number, endMinutes: number): string =>
     `${toClockLabel(startMinutes)}-${toClockLabel(endMinutes)}`;
 
+  const formatRecommendedStartWindowLabel = (activity: SuggestedActivity): string | null => {
+    const window = activity.recommendedStartWindow;
+    if (!window?.start || !window?.end) return null;
+    const start = parseFixedStartTimeMinutes(window.start);
+    const end = parseFixedStartTimeMinutes(window.end);
+    if (start == null || end == null) return null;
+    return `${toClockLabel(start)}-${toClockLabel(end)}`;
+  };
+
   const roundToQuarter = (value: number): number => Math.round(value / 15) * 15;
 
   function parseFixedStartTimeMinutes(value?: string | null): number | null {
@@ -487,6 +505,15 @@ export function DayGroupingView({
     }
 
     return null;
+  }
+
+  function activityLoadFactor(activity: SuggestedActivity): number {
+    if (!activity.isFixedStartTime) return 1;
+    const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
+    if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
+    if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") return 0.7;
+    if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") return 0.7;
+    return 1;
   }
 
   const DayTimelineRows = ({
@@ -540,9 +567,22 @@ export function DayGroupingView({
           : "DRIVE";
     const totalCommuteHoursEstimate = (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
-    const totalRequestedHours = day.activities.reduce((sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration), 0);
+    const totalRequestedHours = day.activities.reduce(
+      (sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration) * activityLoadFactor(activity),
+      0
+    );
     const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
-    const showFreeSlotNotice = freeActivityHours >= 0.75;
+    const earliestFixedStartMinutes = sortedActivities
+      .filter((activity) => activity.isFixedStartTime)
+      .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
+      .filter((minutes): minutes is number => minutes != null)
+      .sort((a, b) => a - b)[0];
+    const hadVeryEarlyFixedStart =
+      (earliestFixedStartMinutes != null && earliestFixedStartMinutes <= 6 * 60) ||
+      sortedActivities.some((activity) => activity.isFixedStartTime && activity.fixedStartTime?.toLowerCase() === "sunrise");
+    const freeSlotSuggestion = hadVeryEarlyFixedStart
+      ? "Optional light add-on: beach, cafe, or sunset viewpoint near your stay."
+      : "A slot is free, consider adding or moving an activity.";
     const scaleFactor =
       totalRequestedHours > 0 && totalRequestedHours > remainingForActivities && remainingForActivities > 0
         ? remainingForActivities / totalRequestedHours
@@ -581,11 +621,7 @@ export function DayGroupingView({
         };
 
     const timelineItems: TimelineItem[] = [];
-    const earliestFixedStartMinutes = sortedActivities
-      .filter((activity) => activity.isFixedStartTime)
-      .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
-      .filter((minutes): minutes is number => minutes != null)
-      .sort((a, b) => a - b)[0];
+    const eveningCutoffMinutes = 18 * 60;
     const preDayBufferMinutes = 15;
     const bufferedStayStartCommuteMinutes =
       stayStartCommuteMinutes > 0 ? roundToQuarter(stayStartCommuteMinutes + preDayBufferMinutes) : 0;
@@ -621,7 +657,7 @@ export function DayGroupingView({
     let lunchInserted = false;
 
     sortedActivities.forEach((activity, index) => {
-      const requestedHours = parseEstimatedHours(activity.estimatedDuration);
+      const requestedHours = parseEstimatedHours(activity.estimatedDuration) * activityLoadFactor(activity);
       const allocatedHours = Math.max(0.75, requestedHours * scaleFactor);
       const activityMinutes = Math.max(45, roundToQuarter(allocatedHours * 60 + 15));
       const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
@@ -631,6 +667,12 @@ export function DayGroupingView({
         ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes)
         : roundToQuarter(cursorMinutes);
       const activityEnd = activityStart + activityMinutes;
+      const recommendedWindowEndMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end);
+      const recommendedWindowLabel = formatRecommendedStartWindowLabel(activity);
+      const lateStartWarning =
+        recommendedWindowEndMinutes != null && activityStart > recommendedWindowEndMinutes
+          ? `Late-start risk: recommended ${recommendedWindowLabel || "earlier"}${activity.recommendedStartWindow?.reason ? ` (${activity.recommendedStartWindow.reason})` : ""}.`
+          : null;
       const lunchMinutes = roundToQuarter(60 + 15);
 
       // If a long activity crosses lunch, split it into before-lunch and continue-after-lunch.
@@ -648,7 +690,7 @@ export function DayGroupingView({
           id: `activity-${activity.id}`,
           activity,
           timeRange: toRangeLabel(activityStart, beforeLunchEnd),
-          affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here`,
+          affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here${lateStartWarning ? ` • ${lateStartWarning}` : ""}`,
         });
         timelineItems.push({
           type: "lunch",
@@ -690,7 +732,7 @@ export function DayGroupingView({
           id: `activity-${activity.id}`,
           activity,
           timeRange: toRangeLabel(nextActivityStart, nextActivityEnd),
-          affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here`,
+          affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here${lateStartWarning ? ` • ${lateStartWarning}` : ""}`,
         });
         cursorMinutes = nextActivityEnd;
       }
@@ -735,8 +777,12 @@ export function DayGroupingView({
       });
     }
 
-    if (showFreeSlotNotice) {
-      const freeMinutes = roundToQuarter(freeActivityHours * 60);
+    let freeSlotMinutesBeforeEvening = 0;
+    if (freeActivityHours > 0) {
+      const freeStart = roundToQuarter(cursorMinutes);
+      const cappedByEveningMinutes = Math.max(0, eveningCutoffMinutes - freeStart);
+      const freeMinutes = Math.min(roundToQuarter(freeActivityHours * 60), roundToQuarter(cappedByEveningMinutes));
+      freeSlotMinutesBeforeEvening = freeMinutes;
       if (freeMinutes > 0) {
         const freeStart = roundToQuarter(cursorMinutes);
         const freeEnd = freeStart + freeMinutes;
@@ -744,12 +790,13 @@ export function DayGroupingView({
           type: "free",
           id: `free-slot-${day.dayNumber}`,
           title: "Free slot",
-          detail: "A slot is free, consider adding or moving an activity.",
+          detail: freeSlotSuggestion,
           timeRange: toRangeLabel(freeStart, freeEnd),
         });
         cursorMinutes = freeEnd;
       }
     }
+    const showFreeSlotNotice = freeSlotMinutesBeforeEvening >= 45;
 
     if (endStayLabel) {
       if (stayEndCommuteMinutes > 0) {
@@ -783,7 +830,7 @@ export function DayGroupingView({
           <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-2 text-[11px] text-emerald-900">
             <div className="flex items-center gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>A slot is free, consider adding or moving an activity.</span>
+              <span>{freeSlotSuggestion}</span>
             </div>
           </div>
         ) : null}
