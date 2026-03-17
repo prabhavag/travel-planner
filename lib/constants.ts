@@ -1,21 +1,21 @@
 
 // Color palette for different days
 export const DAY_COLORS = [
-    "#E53935", // Red
-    "#1E88E5", // Blue
-    "#43A047", // Green
-    "#FB8C00", // Orange
-    "#8E24AA", // Purple
-    "#00ACC1", // Cyan
-    "#FFB300", // Amber
-    "#5E35B1", // Deep Purple
-    "#D81B60", // Pink
-    "#00897B", // Teal
+    "#C58F8D", // Muted Red
+    "#8EA9C8", // Muted Blue
+    "#94B59D", // Muted Green
+    "#C8A78A", // Muted Orange
+    "#AE9BC4", // Muted Purple
+    "#89B8BF", // Muted Cyan
+    "#C7BA8A", // Muted Amber
+    "#9A97C1", // Muted Violet
+    "#C39AAF", // Muted Pink
+    "#84B0A5", // Muted Teal
 ];
 
 // Unselected activity color
-export const UNSELECTED_COLOR = "#9CA3AF";
-export const SELECTED_COLOR = "#3B82F6";
+export const UNSELECTED_COLOR = "#A8B0BA";
+export const SELECTED_COLOR = "#8EA9C8";
 
 /**
  * Get color for a specific day number
@@ -31,18 +31,18 @@ export function getDayColor(dayNumber: number): string {
  */
 export function getDayBadgeColors(dayNumber: number): string {
     const colorMap: Record<number, string> = {
-        1: "bg-red-500 text-white",
-        2: "bg-blue-500 text-white",
-        3: "bg-green-600 text-white",
-        4: "bg-orange-500 text-white",
-        5: "bg-purple-600 text-white",
-        6: "bg-cyan-600 text-white",
-        7: "bg-amber-500 text-white",
-        8: "bg-violet-700 text-white",
-        9: "bg-pink-600 text-white",
-        10: "bg-teal-600 text-white",
+        1: "bg-red-200 text-red-900",
+        2: "bg-blue-200 text-blue-900",
+        3: "bg-green-200 text-green-900",
+        4: "bg-orange-200 text-orange-900",
+        5: "bg-purple-200 text-purple-900",
+        6: "bg-cyan-200 text-cyan-900",
+        7: "bg-amber-200 text-amber-900",
+        8: "bg-violet-200 text-violet-900",
+        9: "bg-pink-200 text-pink-900",
+        10: "bg-teal-200 text-teal-900",
     };
 
     const num = ((dayNumber - 1) % 10) + 1;
-    return colorMap[num] || "bg-gray-500 text-white";
+    return colorMap[num] || "bg-gray-200 text-gray-900";
 }

@@ -2674,7 +2674,7 @@ export default function PlannerPage() {
                       {chatHistory.map((msg, idx) => (
                         <div
                           key={idx}
-                          className={`p-3 rounded-2xl max-w-[85%] text-sm ${msg.role === "user" ? "bg-blue-500 text-white ml-auto" : "bg-gray-200 text-gray-800"
+                          className={`p-3 rounded-2xl max-w-[85%] text-sm ${msg.role === "user" ? "bg-blue-300 text-slate-900 ml-auto" : "bg-gray-200 text-gray-800"
                             }`}
                         >
                           <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -2682,7 +2682,7 @@ export default function PlannerPage() {
                       ))}
                       {loading && (
                         <div className="flex justify-center">
-                          <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                          <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
                         </div>
                       )}
                     </div>
@@ -2693,13 +2693,13 @@ export default function PlannerPage() {
                         <div className="mt-4 flex flex-wrap gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
                           <button
                             onClick={() => handleSuggestionClick("Plan a 4-day moderate trip to Maui from San Francisco from May 10th to May 14th 2026. I'm interested in snorkeling, hiking, and visting local places.")}
-                            className="px-3 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+                            className="px-3 py-2 rounded-full border border-blue-200 bg-blue-100/80 text-blue-800 text-xs font-medium hover:bg-blue-200/80 transition-colors shadow-sm"
                           >
                             🌴 Maui: 4-day adventure
                           </button>
                           <button
                             onClick={() => handleSuggestionClick("Plan a 4-day relaxed trip to Switzerland from San Francisco from June 15th to June 19th 2026. I'm interested in scenic trains, chocolate, and mountain views.")}
-                            className="px-3 py-2 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+                            className="px-3 py-2 rounded-full border border-blue-200 bg-blue-100/80 text-blue-800 text-xs font-medium hover:bg-blue-200/80 transition-colors shadow-sm"
                           >
                             🏔️ Switzerland: 4-day escape
                           </button>
