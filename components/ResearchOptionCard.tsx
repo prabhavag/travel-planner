@@ -10,6 +10,7 @@ import type { ResearchOption } from "@/lib/api-client";
 interface ResearchOptionCardProps {
   option: ResearchOption;
   isSelected: boolean;
+  className?: string;
   onToggleSelect?: (optionId: string) => void;
   onDeepResearch?: (optionId: string) => void;
   deepResearchLoading?: boolean;
@@ -38,6 +39,7 @@ const categoryClassMap: Record<string, string> = {
 export function ResearchOptionCard({
   option,
   isSelected,
+  className,
   onToggleSelect,
   onDeepResearch,
   deepResearchLoading = false,
@@ -67,66 +69,127 @@ export function ResearchOptionCard({
 
   return (
     <Card
-      className={`cursor-pointer transition-all hover:shadow-md ${isSelected ? "ring-2 ring-primary bg-primary/5" : "border-gray-200"}`}
+      className={`cursor-pointer transition-all hover:shadow-md ${isSelected ? "ring-2 ring-primary bg-primary/5" : "border-gray-200"} ${className || ""}`}
       onClick={() => {
         if (!readOnly) onToggleSelect?.(option.id);
       }}
     >
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-base flex-1">{option.title}</CardTitle>
-          <div className="flex items-center gap-1">
-            {showDurationBadge && displayedDuration ? (
-              <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
-                <Clock className="mr-1 h-3 w-3" />
-                {displayedDuration}
-              </Badge>
-            ) : null}
-            {displayTimeSlot ? (
-              <Badge className="border border-violet-200 bg-violet-50 text-violet-800 capitalize">
-                {displayTimeSlot}
-              </Badge>
-            ) : null}
-            <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>
-              {option.category}
-            </Badge>
-            {isSelected ? (
-              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white">
-                <Check className="h-4 w-4" />
+      <CardHeader className={collapsed ? "py-2 space-y-2" : "pb-2"}>
+        {collapsed ? (
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="text-sm line-clamp-1 flex-1">{option.title}</CardTitle>
+              <div className="flex items-center gap-1">
+                {isSelected ? (
+                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white">
+                    <Check className="h-4 w-4" />
+                  </div>
+                ) : null}
+                {onToggleCollapse ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleCollapse();
+                    }}
+                    className="h-6 w-6 p-0 text-gray-400 hover:text-primary"
+                    title={collapsed ? "Expand card" : "Collapse card"}
+                  >
+                    {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                  </Button>
+                ) : null}
+                {onRemove ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemove(option.id);
+                    }}
+                    className="h-6 w-6 p-0 text-gray-400 hover:text-red-600"
+                    title="Remove card"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                ) : null}
               </div>
-            ) : null}
-            {onToggleCollapse ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleCollapse();
-                }}
-                className="h-6 w-6 p-0 text-gray-400 hover:text-primary"
-                title={collapsed ? "Expand card" : "Collapse card"}
-              >
-                {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-              </Button>
-            ) : null}
-            {onRemove ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemove(option.id);
-                }}
-                className="h-6 w-6 p-0 text-gray-400 hover:text-red-600"
-                title="Remove card"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            ) : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-1">
+              {showDurationBadge && displayedDuration ? (
+                <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
+                  <Clock className="mr-1 h-3 w-3" />
+                  {displayedDuration}
+                </Badge>
+              ) : null}
+              {displayTimeSlot ? (
+                <Badge className="border border-violet-200 bg-violet-50 text-violet-800 capitalize">
+                  {displayTimeSlot}
+                </Badge>
+              ) : null}
+              <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>
+                {option.category}
+              </Badge>
+            </div>
+          </>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="text-base flex-1">{option.title}</CardTitle>
+            <div className="flex items-center gap-1">
+              {showDurationBadge && displayedDuration ? (
+                <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
+                  <Clock className="mr-1 h-3 w-3" />
+                  {displayedDuration}
+                </Badge>
+              ) : null}
+              {displayTimeSlot ? (
+                <Badge className="border border-violet-200 bg-violet-50 text-violet-800 capitalize">
+                  {displayTimeSlot}
+                </Badge>
+              ) : null}
+              <Badge className={`capitalize border ${categoryClassMap[option.category] || categoryClassMap.other}`}>
+                {option.category}
+              </Badge>
+              {isSelected ? (
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white">
+                  <Check className="h-4 w-4" />
+                </div>
+              ) : null}
+              {onToggleCollapse ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleCollapse();
+                  }}
+                  className="h-6 w-6 p-0 text-gray-400 hover:text-primary"
+                  title={collapsed ? "Expand card" : "Collapse card"}
+                >
+                  {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                </Button>
+              ) : null}
+              {onRemove ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemove(option.id);
+                  }}
+                  className="h-6 w-6 p-0 text-gray-400 hover:text-red-600"
+                  title="Remove card"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              ) : null}
+            </div>
           </div>
-        </div>
+        )}
       </CardHeader>
       {!collapsed ? (
         <CardContent className="space-y-3">

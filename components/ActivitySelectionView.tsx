@@ -90,6 +90,7 @@ export function ActivitySelectionView({
               activity={activity}
               index={index}
               isSelected={isSelected}
+              collapsed={isSelected}
               userPreferences={userPreferences}
               onClick={() => toggleActivity(activity.id)}
               onHoverActivity={onHoverActivity}

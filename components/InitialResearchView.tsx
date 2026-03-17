@@ -87,7 +87,7 @@ export function InitialResearchView({
   const dietaryHints = allPreferences.filter((item) =>
     /vegetarian|vegan|no meat|no seafood|halal|kosher|gluten/i.test(item)
   );
-  const selectedSet = new Set(selectedOptionIds);
+  const selectedSet = useMemo(() => new Set(selectedOptionIds), [selectedOptionIds]);
 
   const overviewOpening = useMemo(() => {
     if (!researchBrief.summary) return "";
@@ -154,6 +154,15 @@ export function InitialResearchView({
       return matchesInterest(option, activeInterest);
     });
   }, [activeInterest, researchBrief.popularOptions, allPreferences]);
+
+  const selectedVisibleOptions = useMemo(
+    () => visibleOptions.filter((option) => selectedSet.has(option.id)),
+    [visibleOptions, selectedSet]
+  );
+  const unselectedVisibleOptions = useMemo(
+    () => visibleOptions.filter((option) => !selectedSet.has(option.id)),
+    [visibleOptions, selectedSet]
+  );
 
   return (
     <div className="space-y-4 p-4">
@@ -302,20 +311,44 @@ export function InitialResearchView({
 
       <div className="min-h-[200px]">
         {visibleOptions.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {visibleOptions.map((option) => (
-              <ResearchOptionCard
-                key={option.id}
-                option={option}
-                isSelected={selectedSet.has(option.id)}
-                onToggleSelect={(id) => onSelectionChange(id, !selectedSet.has(id))}
-                onDeepResearch={onDeepResearchOption}
-                onRemove={onRemoveOption}
-                deepResearchLoading={isLoading && deepResearchOptionId === option.id}
-                deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
-                lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}
-              />
-            ))}
+          <div className="space-y-4">
+            {selectedVisibleOptions.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-gray-500">Selected ({selectedVisibleOptions.length})</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {selectedVisibleOptions.map((option) => (
+                    <ResearchOptionCard
+                      key={option.id}
+                      option={option}
+                      isSelected={true}
+                      collapsed={true}
+                      onToggleSelect={(id) => onSelectionChange(id, false)}
+                      onDeepResearch={onDeepResearchOption}
+                      onRemove={onRemoveOption}
+                      deepResearchLoading={isLoading && deepResearchOptionId === option.id}
+                      deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
+                      lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {unselectedVisibleOptions.map((option) => (
+                <ResearchOptionCard
+                  key={option.id}
+                  option={option}
+                  isSelected={false}
+                  onToggleSelect={(id) => onSelectionChange(id, true)}
+                  onDeepResearch={onDeepResearchOption}
+                  onRemove={onRemoveOption}
+                  deepResearchLoading={isLoading && deepResearchOptionId === option.id}
+                  deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
+                  lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}
+                />
+              ))}
+            </div>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center p-8 text-center bg-gray-50/50 rounded-lg border border-dashed border-gray-200 h-full">
