@@ -177,6 +177,54 @@ function resolveMarkerCoordinates(item: CoordinateCarrier): { lat: number; lng: 
   return valid ? { lat: getValidCoordinate(valid.lat), lng: getValidCoordinate(valid.lng) } : null;
 }
 
+type RouteActivityLike = {
+  id: string;
+  name?: string;
+  title?: string;
+  locationMode?: "point" | "route" | "area";
+  routePoints?: Array<{ lat: number | string; lng: number | string }> | null;
+  routeWaypoints?: Array<{ name: string; coordinates: { lat: number | string; lng: number | string } }> | null;
+};
+
+function toRouteSegment(
+  activity: RouteActivityLike,
+  baseLabel: number,
+  day: number | null
+): RouteSegment | null {
+  if (activity.locationMode !== "route") return null;
+  const rawPoints = activity.routePoints || [];
+  if (rawPoints.length < 2) return null;
+
+  const points = rawPoints.map((point) => ({
+    lat: getValidCoordinate(point.lat),
+    lng: getValidCoordinate(point.lng),
+  }));
+  const explicitWaypoints = (activity.routeWaypoints || []).map((waypoint) => ({
+    name: waypoint.name,
+    coordinates: {
+      lat: getValidCoordinate(waypoint.coordinates.lat),
+      lng: getValidCoordinate(waypoint.coordinates.lng),
+    },
+  }));
+  const waypoints =
+    explicitWaypoints.length > 0
+      ? explicitWaypoints
+      : points.slice(1, -1).map((coordinates, index) => ({
+        name: `Waypoint ${index + 1}`,
+        coordinates,
+      }));
+
+  return {
+    id: activity.id,
+    activityId: activity.id,
+    name: activity.name || activity.title || "Route",
+    baseLabel,
+    day,
+    points,
+    waypoints,
+  };
+}
+
 export default function MapComponent({
   itinerary,
   destination,
@@ -383,95 +431,34 @@ export default function MapComponent({
 
   const routeSegments = useMemo(() => {
     const segments: RouteSegment[] = [];
-    const selectedSet = new Set(selectedActivityIds || []);
 
     if (groupedDays && groupedDays.length > 0) {
       groupedDays.forEach((day) => {
         day.activities.forEach((activity, actIndex) => {
-          if (activity.locationMode !== "route") return;
-          const rawPoints = activity.routePoints || [];
-          if (rawPoints.length < 2) return;
-          const points = rawPoints.map(p => ({ lat: getValidCoordinate(p.lat), lng: getValidCoordinate(p.lng) }));
-          const explicitWaypoints = (activity.routeWaypoints || []).map((waypoint) => ({
-            name: waypoint.name,
-            coordinates: { lat: getValidCoordinate(waypoint.coordinates.lat), lng: getValidCoordinate(waypoint.coordinates.lng) },
-          }));
-          const waypoints =
-            explicitWaypoints.length > 0
-              ? explicitWaypoints
-              : points.slice(1, -1).map((coordinates, index) => ({
-                name: `Waypoint ${index + 1}`,
-                coordinates,
-              }));
-          segments.push({
-            id: activity.id,
-            activityId: activity.id,
-            name: activity.name,
-            baseLabel: actIndex + 1,
-            day: day.dayNumber,
-            points,
-            waypoints,
-          });
+          const segment = toRouteSegment(activity, actIndex + 1, day.dayNumber);
+          if (segment) {
+            segments.push(segment);
+          }
         });
       });
     } else if (suggestedActivities && suggestedActivities.length > 0) {
       suggestedActivities.forEach((activity, actIndex) => {
-        if (activity.locationMode !== "route") return;
-        const rawPoints = activity.routePoints || [];
-        if (rawPoints.length < 2) return;
-        const points = rawPoints.map(p => ({ lat: getValidCoordinate(p.lat), lng: getValidCoordinate(p.lng) }));
-        const explicitWaypoints = (activity.routeWaypoints || []).map((waypoint) => ({
-          name: waypoint.name,
-          coordinates: { lat: getValidCoordinate(waypoint.coordinates.lat), lng: getValidCoordinate(waypoint.coordinates.lng) },
-        }));
-        const waypoints =
-          explicitWaypoints.length > 0
-            ? explicitWaypoints
-            : points.slice(1, -1).map((coordinates, index) => ({
-              name: `Waypoint ${index + 1}`,
-              coordinates,
-            }));
-        segments.push({
-          id: activity.id,
-          activityId: activity.id,
-          name: activity.name,
-          baseLabel: actIndex + 1,
-          day: null,
-          points,
-          waypoints,
-        });
+        const segment = toRouteSegment(activity, actIndex + 1, null);
+        if (segment) {
+          segments.push(segment);
+        }
       });
     } else if (tripResearchBrief && tripResearchBrief.popularOptions.length > 0) {
       tripResearchBrief.popularOptions.forEach((option, optionIndex) => {
-        if (option.locationMode !== "route") return;
-        const rawPoints = option.routePoints || [];
-        if (rawPoints.length < 2) return;
-        const points = rawPoints.map(p => ({ lat: getValidCoordinate(p.lat), lng: getValidCoordinate(p.lng) }));
-        const explicitWaypoints = (option.routeWaypoints || []).map((waypoint) => ({
-          name: waypoint.name,
-          coordinates: { lat: getValidCoordinate(waypoint.coordinates.lat), lng: getValidCoordinate(waypoint.coordinates.lng) },
-        }));
-        const waypoints =
-          explicitWaypoints.length > 0
-            ? explicitWaypoints
-            : points.slice(1, -1).map((coordinates, index) => ({
-              name: `Waypoint ${index + 1}`,
-              coordinates,
-            }));
-        segments.push({
-          id: option.id,
-          activityId: option.id,
-          name: option.title,
-          baseLabel: optionIndex + 1,
-          day: null,
-          points,
-          waypoints,
-        });
+        const segment = toRouteSegment(option, optionIndex + 1, null);
+        if (segment) {
+          segments.push(segment);
+        }
       });
     }
 
     return segments;
-  }, [tripResearchBrief, suggestedActivities, selectedActivityIds, groupedDays]);
+  }, [tripResearchBrief, suggestedActivities, groupedDays]);
 
   if (loading) {
     return (
@@ -519,7 +506,6 @@ export default function MapComponent({
       <GoogleMapContent
         apiKey={apiKey}
         locations={locations}
-        itinerary={itinerary}
         destination={destination}
         routeSegments={routeSegments}
         isGroupedMode={isGroupedMode}
@@ -545,7 +531,6 @@ interface GoogleMapContentProps {
   apiKey: string;
   locations: Location[];
   routeSegments: RouteSegment[];
-  itinerary?: DayItinerary[];
   destination?: string | null;
   isGroupedMode?: boolean;
   isResearchSelectionMode?: boolean;
@@ -602,7 +587,6 @@ function GoogleMapContent({
   apiKey,
   locations,
   routeSegments,
-  itinerary,
   destination,
   isGroupedMode,
   isResearchSelectionMode,

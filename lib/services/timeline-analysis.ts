@@ -381,19 +381,6 @@ const DESTINATION_ANCHOR_TYPES = new Set([
   "zoo",
 ]);
 
-const DESTINATION_LABEL_TYPES = new Set([
-  "amusement_park",
-  "aquarium",
-  "art_gallery",
-  "beach",
-  "campground",
-  "museum",
-  "natural_feature",
-  "park",
-  "tourist_attraction",
-  "zoo",
-]);
-
 const COUNTRY_LABELS = new Set([
   "australia",
   "canada",
@@ -414,10 +401,6 @@ const COUNTRY_LABELS = new Set([
   "united states",
   "usa",
 ]);
-
-const GENERIC_DESTINATION_NAME_PATTERNS = [
-  /\b(academy|apartment|bhawan|caterers|cinema|club|colony|corner|fitness|health club|mall|mandir|mart|multiplex|salon|shopping centre|sports|temple|tower|water tank)\b/i,
-];
 
 const PARK_COORDINATE_FALLBACKS: ParkCoordinateFallback[] = [
   { canonical: "Yosemite National Park", lat: 37.8651, lng: -119.5383, radiusKm: 45 },
@@ -999,21 +982,6 @@ function extractDestinationLocalityLabel(place: AggregatedPlace): string | null 
   if (region && locality.toLowerCase() === region.toLowerCase()) return locality;
 
   return region ? `${locality}, ${region}` : locality;
-}
-
-function getDestinationAnchorName(place: AggregatedPlace): string | null {
-  const parkMatch = getParkMatchFromText(getPlaceSearchText(place));
-  if (parkMatch) return parkMatch;
-
-  if (!hasResolvedPlaceName(place)) return null;
-
-  const types = getPlaceTypes(place);
-  if (!types.some((type) => DESTINATION_LABEL_TYPES.has(type))) return null;
-
-  const name = getDisplayName(place);
-  if (!name.trim()) return null;
-  if (GENERIC_DESTINATION_NAME_PATTERNS.some((pattern) => pattern.test(name))) return null;
-  return name;
 }
 
 function voteClusterLocalityLabels(cluster: TravelCluster): Map<string, number> {

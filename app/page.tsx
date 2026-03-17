@@ -33,7 +33,6 @@ import {
   type TripInfo,
   type SuggestedActivity,
   type GroupedDay,
-  type DayGroup,
   type TripResearchBrief,
   type RestaurantSuggestion,
   type SubAgentStatus,
@@ -537,11 +536,9 @@ export default function PlannerPage() {
   // New activity-first flow state
   const [suggestedActivities, setSuggestedActivities] = useState<SuggestedActivity[]>([]);
   const [selectedActivityIds, setSelectedActivityIds] = useState<string[]>([]);
-  const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
   const [groupedDays, setGroupedDays] = useState<GroupedDay[]>([]);
   const [restaurantSuggestions, setRestaurantSuggestions] = useState<RestaurantSuggestion[]>([]);
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState<string[]>([]);
-  const [wantsRestaurants, setWantsRestaurants] = useState<boolean | null>(null);
   const [accommodationStatus, setAccommodationStatus] = useState<SubAgentStatus>("idle");
   const [flightStatus, setFlightStatus] = useState<SubAgentStatus>("idle");
   const [accommodationError, setAccommodationError] = useState<string | null>(null);
@@ -664,7 +661,7 @@ export default function PlannerPage() {
     });
   }, [persistTripInfoUpdate, tripInfo.foodPreferences, tripInfo.preferences, tripInfo.visitedDestinations]);
 
-  const computeTimelineCacheKey = async (file: File, buffer: ArrayBuffer) => {
+  const computeTimelineCacheKey = async (buffer: ArrayBuffer) => {
     const digest = await crypto.subtle.digest("SHA-256", buffer);
     const hash = Array.from(new Uint8Array(digest))
       .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -684,7 +681,7 @@ export default function PlannerPage() {
 
     try {
       const buffer = await file.arrayBuffer();
-      const cacheKey = await computeTimelineCacheKey(file, buffer);
+      const cacheKey = await computeTimelineCacheKey(buffer);
       setTimelineCacheKey(cacheKey);
       const cachedValue = window.localStorage.getItem(cacheKey);
       if (cachedValue) {
@@ -1030,11 +1027,9 @@ export default function PlannerPage() {
     }
     if (response.suggestedActivities !== undefined) setSuggestedActivities(response.suggestedActivities);
     if (response.selectedActivityIds !== undefined) setSelectedActivityIds(response.selectedActivityIds);
-    if (response.dayGroups !== undefined) setDayGroups(response.dayGroups);
     if (response.groupedDays !== undefined) setGroupedDays(response.groupedDays);
     if (response.restaurantSuggestions !== undefined) setRestaurantSuggestions(response.restaurantSuggestions);
     if (response.selectedRestaurantIds !== undefined) setSelectedRestaurantIds(response.selectedRestaurantIds);
-    if (response.wantsRestaurants !== undefined) setWantsRestaurants(response.wantsRestaurants);
     if (response.accommodationStatus !== undefined) setAccommodationStatus(response.accommodationStatus);
     if (response.flightStatus !== undefined) setFlightStatus(response.flightStatus);
     if (response.accommodationError !== undefined) setAccommodationError(response.accommodationError ?? null);
@@ -1381,11 +1376,6 @@ export default function PlannerPage() {
     }
   };
 
-  // Handle activity selection change
-  const handleActivitySelectionChange = (ids: string[]) => {
-    setSelectedActivityIds(ids);
-  };
-
   // Confirm activity selection and group into days
   const handleConfirmActivitySelection = async () => {
     handleConfirmActivitySelectionInternal(selectedActivityIds);
@@ -1399,7 +1389,6 @@ export default function PlannerPage() {
     try {
       const response = await adjustDayGroups(sessionId, activityId, fromDay, toDay);
       if (response.success) {
-        setDayGroups(response.dayGroups || []);
         setGroupedDays(response.groupedDays || []);
       }
     } catch (error) {
@@ -1882,11 +1871,6 @@ export default function PlannerPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  // Get state label
-  const getStateLabel = () => {
-    return UI_STAGE_LABELS[getCurrentUiStageIndex()] || "";
   };
 
   const isFinalized = workflowState === WORKFLOW_STATES.FINALIZE;

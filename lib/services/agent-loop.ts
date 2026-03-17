@@ -11,7 +11,7 @@ import type {
   StopReason,
   ToolAction,
 } from "@/lib/models/travel-plan";
-import { AgentTurnRequestSchema, LoopResultSchema, ToolActionSchema } from "@/lib/models/travel-plan";
+import { AgentTurnRequestSchema } from "@/lib/models/travel-plan";
 import {
   sessionStore,
   WORKFLOW_STATES,
@@ -64,7 +64,6 @@ const HOSPITALITY_REVIEW_TOOLS: ToolAction["tool"][] = [
   "skip_flight",
 ];
 
-const finalizeIntentRegex = /\b(final|finalize|done|perfect|looks good|good to go|ship it|complete)\b/i;
 const proceedPromptRegex =
   /\b(anything else to add|anything else|before we proceed|before we continue|ready to plan|ready to proceed|proceed to planning|proceed to plan|want to add|add or adjust|add or modify|review what we have)\b/i;
 const negativeCompletionIntentRegex =
@@ -231,15 +230,6 @@ function routeSupervisor(workflowState: WorkflowState): SupervisorDecision | nul
   }
 
   return null;
-}
-
-function lowConfidenceQuestion(message: string): LoopResult {
-  return {
-    assistantMessage: message,
-    confidence: 0.4,
-    actions: [],
-    stopReason: "low_confidence_noop",
-  };
 }
 
 function getCurrencyFromSession(session: Session): string {
@@ -823,8 +813,6 @@ async function runLoop({
   decision: SupervisorDecision;
 }): Promise<TurnResponse> {
   const turnId = randomUUID();
-  const context = buildLoopContext(session);
-
 
   const llmClient = getLLMClient();
   const allowedTools = PLANNING_AND_REVIEW_TOOLS.filter(

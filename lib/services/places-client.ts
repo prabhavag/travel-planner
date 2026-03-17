@@ -502,7 +502,7 @@ class PlacesClient {
     return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=${maxWidth}&photo_reference=${photoReference}&key=${this.apiKey}`;
   }
 
-  async getPlacePhotoUrlsFromId(placeId: string | null, maxWidth: number = 400): Promise<string[]> {
+  async getPlacePhotoUrlsFromId(_placeId: string | null, _maxWidth: number = 400): Promise<string[]> {
     return [];
     /*
     if (!placeId) return [];

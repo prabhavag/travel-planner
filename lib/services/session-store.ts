@@ -82,7 +82,6 @@ class SessionStore {
   private sessions = new Map<string, Session>();
   private SESSION_TTL = 30 * 60 * 1000; // 30 minutes
   private CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
-  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.startCleanupInterval();
@@ -300,7 +299,7 @@ class SessionStore {
   private startCleanupInterval(): void {
     // Only start cleanup in server environment
     if (typeof setInterval !== "undefined") {
-      this.cleanupTimer = setInterval(() => {
+      setInterval(() => {
         const now = Date.now();
         for (const [sessionId, session] of this.sessions.entries()) {
           if (now - session.lastAccessed > this.SESSION_TTL) {

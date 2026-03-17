@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sessionStore } from "@/lib/services/session-store";
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
