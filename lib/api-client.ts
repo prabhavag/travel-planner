@@ -211,6 +211,8 @@ export interface ResearchOption {
   photoUrls?: string[];
   difficultyLevel?: "easy" | "moderate" | "hard";
   bestTimeOfDay?: "morning" | "afternoon" | "evening" | "any";
+  isFixedStartTime?: boolean;
+  fixedStartTime?: string | null;
   timeReason?: string | null;
   timeSourceLinks?: ResearchSource[];
   locationMode?: "point" | "route" | "area";
@@ -504,6 +506,8 @@ export interface SuggestedActivity {
   currency?: string;
   difficultyLevel: "easy" | "moderate" | "hard";
   bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
+  isFixedStartTime?: boolean;
+  fixedStartTime?: string | null;
   timeReason?: string | null;
   timeSourceLinks?: ResearchSource[];
   neighborhood?: string | null;

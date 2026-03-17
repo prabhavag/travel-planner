@@ -251,6 +251,8 @@ export const ResearchOptionSchema = z.object({
   photoUrls: z.array(z.string()).max(3).default([]),
   difficultyLevel: z.enum(["easy", "moderate", "hard"]).optional(),
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]).optional(),
+  isFixedStartTime: z.boolean().optional(),
+  fixedStartTime: z.string().nullable().optional(),
   timeReason: z.string().optional().nullable(),
   timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
   locationMode: z.enum(["point", "route", "area"]).optional(),
@@ -286,6 +288,8 @@ export const SuggestedActivitySchema = z.object({
   currency: z.string().default("USD"), // Currency code (e.g., "USD", "EUR", "JPY")
   difficultyLevel: z.enum(["easy", "moderate", "hard"]).default("moderate"),
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]),
+  isFixedStartTime: z.boolean().optional().default(false),
+  fixedStartTime: z.string().nullable().optional(),
   timeReason: z.string().nullable().optional(),
   timeSourceLinks: z.array(ResearchSourceSchema).max(3).optional(),
   neighborhood: z.string().nullable().optional(),

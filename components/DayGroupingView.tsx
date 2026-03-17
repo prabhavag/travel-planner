@@ -53,6 +53,8 @@ export function DayGroupingView({
 
   const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
     `${dayNumber}:${fromId}->${toId}`;
+  const buildStayStartLegId = (dayNumber: number, toId: string) => `${dayNumber}:stay-start->${toId}`;
+  const buildStayEndLegId = (dayNumber: number, fromId: string) => `${dayNumber}:${fromId}->stay-end`;
 
   const sortActivitiesForTimeline = useCallback((activities: SuggestedActivity[]) => {
     const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
@@ -61,7 +63,25 @@ export function DayGroupingView({
       evening: 2,
       any: 3,
     };
-    return [...activities].sort((a, b) => score[a.bestTimeOfDay] - score[b.bestTimeOfDay]);
+    const fixedRank = (activity: SuggestedActivity): number => (activity.isFixedStartTime ? 0 : 1);
+    const fixedMinutes = (activity: SuggestedActivity): number | null => parseFixedStartTimeMinutes(activity.fixedStartTime);
+
+    return [...activities].sort((a, b) => {
+      const fixedRankDelta = fixedRank(a) - fixedRank(b);
+      if (fixedRankDelta !== 0) return fixedRankDelta;
+
+      if (a.isFixedStartTime && b.isFixedStartTime) {
+        const aMinutes = fixedMinutes(a);
+        const bMinutes = fixedMinutes(b);
+        if (aMinutes != null && bMinutes != null && aMinutes !== bMinutes) {
+          return aMinutes - bMinutes;
+        }
+        if (aMinutes != null && bMinutes == null) return -1;
+        if (aMinutes == null && bMinutes != null) return 1;
+      }
+
+      return score[a.bestTimeOfDay] - score[b.bestTimeOfDay];
+    });
   }, []);
 
   const getCommutePoint = useCallback((activity: SuggestedActivity) => {
@@ -87,23 +107,59 @@ export function DayGroupingView({
       mode: CommuteMode;
       travelMode: "DRIVE" | "WALK" | "TRANSIT";
     }> = [];
-    groupedDays.forEach((day) => {
+    groupedDays.forEach((day, dayIndex) => {
       const sorted = sortActivitiesForTimeline(day.activities);
+      const first = sorted[0];
+      const last = sorted[sorted.length - 1];
+      const startStayCoordinates = groupedDays[dayIndex - 1]?.nightStay?.coordinates ?? day.nightStay?.coordinates;
+      const endStayCoordinates = day.nightStay?.coordinates;
+
+      if (first && startStayCoordinates) {
+        const firstPoint = getCommutePoint(first);
+        if (firstPoint) {
+          const mode = pickCommuteMode(startStayCoordinates, firstPoint, isRailFriendlyDestination);
+          legs.push({
+            id: buildStayStartLegId(day.dayNumber, first.id),
+            origin: startStayCoordinates,
+            destination: firstPoint,
+            mode,
+            travelMode: toTravelMode(mode),
+          });
+        }
+      }
+
       sorted.forEach((activity, index) => {
         const next = sorted[index + 1];
-        if (!next?.coordinates || !activity.coordinates) return;
-        const mode = pickCommuteMode(activity.coordinates, next.coordinates, isRailFriendlyDestination);
+        if (!next) return;
+        const fromPoint = getCommutePoint(activity);
+        const toPoint = getCommutePoint(next);
+        if (!fromPoint || !toPoint) return;
+        const mode = pickCommuteMode(fromPoint, toPoint, isRailFriendlyDestination);
         legs.push({
           id: buildLegId(day.dayNumber, activity.id, next.id),
-          origin: activity.coordinates,
-          destination: next.coordinates,
+          origin: fromPoint,
+          destination: toPoint,
           mode,
           travelMode: toTravelMode(mode),
         });
       });
+
+      if (last && endStayCoordinates) {
+        const lastPoint = getCommutePoint(last);
+        if (lastPoint) {
+          const mode = pickCommuteMode(lastPoint, endStayCoordinates, isRailFriendlyDestination);
+          legs.push({
+            id: buildStayEndLegId(day.dayNumber, last.id),
+            origin: lastPoint,
+            destination: endStayCoordinates,
+            mode,
+            travelMode: toTravelMode(mode),
+          });
+        }
+      }
     });
     return legs;
-  }, [groupedDays, sortActivitiesForTimeline, isRailFriendlyDestination]);
+  }, [groupedDays, sortActivitiesForTimeline, isRailFriendlyDestination, getCommutePoint]);
 
   const commuteLegById = useMemo(() => {
     const next: Record<string, { mode: CommuteMode; origin: { lat: number; lng: number }; destination: { lat: number; lng: number } }> =
@@ -354,8 +410,12 @@ export function DayGroupingView({
   ): number {
     const distanceKm = haversineKm(from, to);
     if (distanceKm == null) return 25;
-    const minutes = Math.round((distanceKm / 22) * 60);
-    return Math.max(10, Math.min(50, minutes));
+    // Fallback only: use conservative speeds and no low hard cap, especially for winding mountain roads.
+    const isLongDrive = distanceKm >= 20;
+    const speedKph = isLongDrive ? 28 : 32;
+    const terrainFactor = isLongDrive ? 1.2 : 1;
+    const minutes = Math.round(((distanceKm / speedKph) * 60) * terrainFactor);
+    return Math.max(10, minutes);
   }
 
   function pickCommuteMode(
@@ -404,6 +464,31 @@ export function DayGroupingView({
 
   const roundToQuarter = (value: number): number => Math.round(value / 15) * 15;
 
+  function parseFixedStartTimeMinutes(value?: string | null): number | null {
+    if (!value) return null;
+    const text = value.trim().toLowerCase();
+    if (!text) return null;
+    if (text === "sunrise") return 6 * 60;
+    if (text === "sunset") return 18 * 60;
+
+    const meridiemMatch = text.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+    if (meridiemMatch) {
+      let hour = Number(meridiemMatch[1]) % 12;
+      const minute = Number(meridiemMatch[2] || "0");
+      if (meridiemMatch[3].toLowerCase() === "pm") hour += 12;
+      if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) return hour * 60 + minute;
+    }
+
+    const twentyFourMatch = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+    if (twentyFourMatch) {
+      const hour = Number(twentyFourMatch[1]);
+      const minute = Number(twentyFourMatch[2]);
+      return hour * 60 + minute;
+    }
+
+    return null;
+  }
+
   const DayTimelineRows = ({
     day,
     startStayLabel,
@@ -433,7 +518,8 @@ export function DayGroupingView({
     const lastActivity = sortedActivities[sortedActivities.length - 1];
     const stayStartCommuteMinutes =
       startStayLabel && firstActivity && startStayCoordinates
-        ? estimateCommuteMinutes(startStayCoordinates, getCommutePoint(firstActivity))
+        ? (commuteByLeg[buildStayStartLegId(day.dayNumber, firstActivity.id)]?.minutes ??
+          estimateCommuteMinutes(startStayCoordinates, getCommutePoint(firstActivity)))
         : 0;
     const stayStartCommuteMode: CommuteMode =
       startStayLabel && firstActivity && startStayCoordinates
@@ -443,7 +529,8 @@ export function DayGroupingView({
           : "DRIVE";
     const stayEndCommuteMinutes =
       endStayLabel && lastActivity && endStayCoordinates
-        ? estimateCommuteMinutes(getCommutePoint(lastActivity), endStayCoordinates)
+        ? (commuteByLeg[buildStayEndLegId(day.dayNumber, lastActivity.id)]?.minutes ??
+          estimateCommuteMinutes(getCommutePoint(lastActivity), endStayCoordinates))
         : 0;
     const stayEndCommuteMode: CommuteMode =
       endStayLabel && lastActivity && endStayCoordinates
@@ -494,7 +581,19 @@ export function DayGroupingView({
         };
 
     const timelineItems: TimelineItem[] = [];
-    let cursorMinutes = 9 * 60 + 30;
+    const earliestFixedStartMinutes = sortedActivities
+      .filter((activity) => activity.isFixedStartTime)
+      .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
+      .filter((minutes): minutes is number => minutes != null)
+      .sort((a, b) => a - b)[0];
+    const preDayBufferMinutes = 15;
+    const bufferedStayStartCommuteMinutes =
+      stayStartCommuteMinutes > 0 ? roundToQuarter(stayStartCommuteMinutes + preDayBufferMinutes) : 0;
+    const defaultDayStartMinutes = 9 * 60 + 30;
+    let cursorMinutes =
+      earliestFixedStartMinutes != null
+        ? Math.max(0, roundToQuarter(earliestFixedStartMinutes - bufferedStayStartCommuteMinutes - preDayBufferMinutes))
+        : defaultDayStartMinutes;
     if (startStayLabel) {
       timelineItems.push({
         type: "stay",
@@ -525,7 +624,12 @@ export function DayGroupingView({
       const requestedHours = parseEstimatedHours(activity.estimatedDuration);
       const allocatedHours = Math.max(0.75, requestedHours * scaleFactor);
       const activityMinutes = Math.max(45, roundToQuarter(allocatedHours * 60 + 15));
-      const activityStart = roundToQuarter(cursorMinutes);
+      const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
+      const fixedAlignedStartMinutes =
+        activity.isFixedStartTime && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
+      const activityStart = fixedAlignedStartMinutes != null
+        ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes)
+        : roundToQuarter(cursorMinutes);
       const activityEnd = activityStart + activityMinutes;
       const lunchMinutes = roundToQuarter(60 + 15);
 
@@ -598,8 +702,8 @@ export function DayGroupingView({
       const next = sortedActivities[index + 1];
       if (next) {
         const legId = buildLegId(day.dayNumber, activity.id, next.id);
-        const fallbackMode = pickCommuteMode(activity.coordinates, next.coordinates, isRailFriendlyDestination);
-        const fallbackMinutes = estimateCommuteMinutes(activity.coordinates, next.coordinates);
+        const fallbackMode = pickCommuteMode(getCommutePoint(activity), getCommutePoint(next), isRailFriendlyDestination);
+        const fallbackMinutes = estimateCommuteMinutes(getCommutePoint(activity), getCommutePoint(next));
         const commuteMode = commuteByLeg[legId]?.mode ?? fallbackMode;
         const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
         const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + 15);

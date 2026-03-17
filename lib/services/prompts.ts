@@ -105,6 +105,8 @@ RESPONSE FORMAT (JSON):
         "estimatedDuration": "Estimated time commitment like '1-2 hours' or '6-10 hours' (optional when evidence exists)",
         "difficultyLevel": "easy|moderate|hard (optional when evidence exists)",
         "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
+        "isFixedStartTime": "true|false (optional, set true for sunrise/sunset or ticketed start-time events)",
+        "fixedStartTime": "Specific anchor such as 'sunrise', 'sunset', '6:20 AM', or '18:30' when isFixedStartTime is true",
         "timeReason": "Short reason for bestTimeOfDay (optional)",
         "sourceLinks": [
           {
@@ -182,6 +184,8 @@ RESPONSE FORMAT (JSON):
         "estimatedDuration": "Estimated time commitment like '1-2 hours' or '6-10 hours' (optional when evidence exists)",
         "difficultyLevel": "easy|moderate|hard (optional when evidence exists)",
         "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
+        "isFixedStartTime": "true|false (optional, set true for sunrise/sunset or ticketed start-time events)",
+        "fixedStartTime": "Specific anchor such as 'sunrise', 'sunset', '6:20 AM', or '18:30' when isFixedStartTime is true",
         "timeReason": "Short reason for bestTimeOfDay (optional)",
         "sourceLinks": [
           {
@@ -280,6 +284,8 @@ Output must be strict JSON with this shape:
       "estimatedDuration": "Estimated time commitment like '1-2 hours' or '6-10 hours' (optional when evidence exists)",
       "difficultyLevel": "easy|moderate|hard (optional when evidence exists)",
       "bestTimeOfDay": "morning|afternoon|evening|any (optional when evidence exists)",
+      "isFixedStartTime": "true|false (optional, set true for sunrise/sunset or ticketed start-time events)",
+      "fixedStartTime": "Specific anchor such as 'sunrise', 'sunset', '6:20 AM', or '18:30' when isFixedStartTime is true",
       "timeReason": "Short reason for bestTimeOfDay (optional)",
       "sourceLinks": [
         {

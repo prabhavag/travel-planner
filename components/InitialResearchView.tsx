@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useRef, useLayoutEffect, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useRef, useLayoutEffect, type ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
@@ -46,6 +46,8 @@ export function InitialResearchView({
 }: InitialResearchViewProps) {
   const [showAssumptions, setShowAssumptions] = useState(false);
   const [activeInterest, setActiveInterest] = useState<string>("All");
+  const [collapseSelectedCards, setCollapseSelectedCards] = useState(true);
+  const [collapsedSelectedById, setCollapsedSelectedById] = useState<Record<string, boolean>>({});
 
   const scrollYRef = useRef<number | null>(null);
   useLayoutEffect(() => {
@@ -164,6 +166,16 @@ export function InitialResearchView({
     [visibleOptions, selectedSet]
   );
 
+  useEffect(() => {
+    setCollapsedSelectedById((prev) => {
+      const next: Record<string, boolean> = {};
+      selectedOptionIds.forEach((id) => {
+        next[id] = prev[id] ?? collapseSelectedCards;
+      });
+      return next;
+    });
+  }, [selectedOptionIds, collapseSelectedCards]);
+
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between bg-white py-2 px-4">
@@ -277,6 +289,28 @@ export function InitialResearchView({
           <div className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700">
             {selectedOptionIds.length} selected
           </div>
+          {selectedOptionIds.length > 0 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setCollapseSelectedCards((prev) => {
+                  const nextCollapsed = !prev;
+                  setCollapsedSelectedById((current) => {
+                    const next = { ...current };
+                    selectedOptionIds.forEach((id) => {
+                      next[id] = nextCollapsed;
+                    });
+                    return next;
+                  });
+                  return nextCollapsed;
+                })
+              }
+              disabled={isLoading}
+            >
+              {collapseSelectedCards ? "Expand selected" : "Collapse selected"}
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"
@@ -321,7 +355,13 @@ export function InitialResearchView({
                       key={option.id}
                       option={option}
                       isSelected={true}
-                      collapsed={true}
+                      collapsed={collapsedSelectedById[option.id] ?? collapseSelectedCards}
+                      onToggleCollapse={() =>
+                        setCollapsedSelectedById((prev) => ({
+                          ...prev,
+                          [option.id]: !(prev[option.id] ?? collapseSelectedCards),
+                        }))
+                      }
                       onToggleSelect={(id) => onSelectionChange(id, false)}
                       onDeepResearch={onDeepResearchOption}
                       onRemove={onRemoveOption}

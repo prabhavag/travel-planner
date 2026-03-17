@@ -63,6 +63,8 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
               estimatedDuration: { type: ["string", "null"] },
               difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
               bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+              isFixedStartTime: { type: "boolean" },
+              fixedStartTime: { type: ["string", "null"] },
               timeReason: { type: ["string", "null"] },
               timeSourceLinks: {
                 type: "array",
@@ -173,6 +175,8 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
           estimatedDuration: { type: ["string", "null"] },
           difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
           bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+          isFixedStartTime: { type: "boolean" },
+          fixedStartTime: { type: ["string", "null"] },
           timeReason: { type: ["string", "null"] },
           timeSourceLinks: {
             type: "array",
@@ -257,6 +261,8 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
         estimatedDuration: { type: ["string", "null"] },
         difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
         bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+        isFixedStartTime: { type: "boolean" },
+        fixedStartTime: { type: ["string", "null"] },
         timeReason: { type: ["string", "null"] },
         timeSourceLinks: {
           type: "array",
@@ -737,8 +743,17 @@ class LLMClient {
   }
 
   private _normalizeSuggestedActivity(activity: SuggestedActivity): SuggestedActivity {
+    const normalizedBestTimeOfDay = this._normalizeBestTimeOfDay(activity.bestTimeOfDay);
+    const normalizedFixedStartTime = this._normalizeFixedStartTime(activity.fixedStartTime);
+    const isFixedStartTime = Boolean(activity.isFixedStartTime || normalizedFixedStartTime);
+
     return {
       ...activity,
+      bestTimeOfDay: normalizedBestTimeOfDay,
+      isFixedStartTime,
+      fixedStartTime: isFixedStartTime
+        ? normalizedFixedStartTime || this._fallbackFixedStartFromBestTime(normalizedBestTimeOfDay)
+        : null,
       interestTags: this._normalizeInterestTags((activity as SuggestedActivity & { interestTags?: unknown }).interestTags),
     };
   }
@@ -1331,6 +1346,43 @@ class LLMClient {
     return normalized.length > 0 ? normalized : null;
   }
 
+  private _normalizeFixedStartTime(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private _fallbackFixedStartFromBestTime(bestTimeOfDay: "morning" | "afternoon" | "evening" | "any"): string {
+    if (bestTimeOfDay === "morning") return "09:00";
+    if (bestTimeOfDay === "afternoon") return "13:00";
+    if (bestTimeOfDay === "evening") return "18:00";
+    return "09:00";
+  }
+
+  private _inferFixedStartTimeHint({
+    title,
+    bestForDates,
+    reviewSummary,
+    timeReason,
+    sourceLinks,
+  }: {
+    title: string;
+    bestForDates: string;
+    reviewSummary: string;
+    timeReason: string;
+    sourceLinks: Array<{ title: string; url: string; snippet?: string | null }>;
+  }): string | null {
+    const text = `${title} ${bestForDates} ${reviewSummary} ${timeReason} ${sourceLinks
+      .map((source) => `${source.title} ${source.snippet || ""}`)
+      .join(" ")}`.toLowerCase();
+
+    if (text.includes("sunrise")) return "sunrise";
+    if (text.includes("sunset")) return "sunset";
+
+    const timeMatch = text.match(/\b(?:[01]?\d(?::[0-5]\d)?\s?(?:am|pm)|[01]\d:[0-5]\d|2[0-3]:[0-5]\d)\b/i);
+    return timeMatch ? timeMatch[0].toUpperCase() : null;
+  }
+
   private _inferEstimatedDuration({
     title,
     category,
@@ -1782,6 +1834,8 @@ class LLMClient {
               estimatedDuration: option.estimatedDuration || inferredEstimatedDuration,
               difficultyLevel: option.difficultyLevel || inferredDifficulty,
               bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
+              isFixedStartTime: option.isFixedStartTime || false,
+              fixedStartTime: option.fixedStartTime || null,
               timeReason: option.timeReason || inferredTime.timeReason,
               timeSourceLinks: option.timeSourceLinks || inferredTime.timeSourceLinks,
               locationMode: inferredLocationMode,
@@ -1801,6 +1855,8 @@ class LLMClient {
             estimatedDuration: option.estimatedDuration || inferredEstimatedDuration,
             difficultyLevel: option.difficultyLevel || inferredDifficulty,
             bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
+            isFixedStartTime: option.isFixedStartTime || false,
+            fixedStartTime: option.fixedStartTime || null,
             timeReason: option.timeReason || inferredTime.timeReason,
             timeSourceLinks: option.timeSourceLinks || inferredTime.timeSourceLinks,
             locationMode: inferredLocationMode,
@@ -1918,6 +1974,19 @@ class LLMClient {
             })
             .filter((value): value is { title: string; url: string; snippet: string | null } => Boolean(value))
             .slice(0, 3);
+          const inferredFixedStartTime = this._inferFixedStartTimeHint({
+            title: typeof opt.title === "string" ? opt.title : "",
+            bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
+            reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
+            timeReason: typeof opt.timeReason === "string" ? opt.timeReason : "",
+            sourceLinks,
+          });
+          const fixedStartTimeFromModel = this._normalizeFixedStartTime(opt.fixedStartTime);
+          const rawIsFixedStartTime = opt.isFixedStartTime === true;
+          const isFixedStartTime = rawIsFixedStartTime || Boolean(fixedStartTimeFromModel) || Boolean(inferredFixedStartTime);
+          const fixedStartTime = isFixedStartTime
+            ? fixedStartTimeFromModel || inferredFixedStartTime || this._fallbackFixedStartFromBestTime(bestTimeOfDay)
+            : null;
 
           return {
             id: typeof opt.id === "string" && opt.id.trim() ? opt.id.trim() : `opt${index + 1}`,
@@ -1935,6 +2004,8 @@ class LLMClient {
             photoUrls,
             difficultyLevel: hasExplicitDifficultyLevel ? difficultyLevel : inferredDifficulty,
             bestTimeOfDay: hasExplicitBestTimeOfDay ? bestTimeOfDay : inferredTime.bestTimeOfDay,
+            isFixedStartTime,
+            fixedStartTime,
             timeReason:
               typeof opt.timeReason === "string" && opt.timeReason.trim()
                 ? opt.timeReason.trim()

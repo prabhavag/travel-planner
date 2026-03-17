@@ -6,6 +6,28 @@ import { buildGroupedDays, groupActivitiesByDay } from "@/lib/services/day-group
 import { assignNightStays } from "@/lib/services/night-stays";
 import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
 
+function parseFixedStartLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function inferFixedStartFromText(option: ResearchOption): string | null {
+  const text = `${option.title} ${option.whyItMatches} ${option.bestForDates} ${option.reviewSummary} ${option.timeReason || ""}`.toLowerCase();
+  if (text.includes("sunrise")) return "sunrise";
+  if (text.includes("sunset")) return "sunset";
+
+  const timeMatch = text.match(/\b(?:[01]?\d(?::[0-5]\d)?\s?(?:am|pm)|[01]\d:[0-5]\d|2[0-3]:[0-5]\d)\b/i);
+  return timeMatch ? timeMatch[0].toUpperCase() : null;
+}
+
+function fallbackFixedStartFromBestTime(bestTimeOfDay: ResearchOption["bestTimeOfDay"]): string {
+  if (bestTimeOfDay === "morning") return "09:00";
+  if (bestTimeOfDay === "afternoon") return "13:00";
+  if (bestTimeOfDay === "evening") return "18:00";
+  return "09:00";
+}
+
 function mapResearchOptionToSuggestedActivity(option: ResearchOption): SuggestedActivity {
   const fallbackDuration =
     option.category === "food"
@@ -13,6 +35,13 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
       : option.category === "hiking" || option.category === "snorkeling" || option.category === "adventure"
         ? "2-4 hours"
         : "1-3 hours";
+
+  const explicitFixedStartTime = parseFixedStartLabel(option.fixedStartTime);
+  const inferredFixedStartTime = inferFixedStartFromText(option);
+  const isFixedStartTime = Boolean(option.isFixedStartTime || explicitFixedStartTime || inferredFixedStartTime);
+  const fixedStartTime = isFixedStartTime
+    ? explicitFixedStartTime || inferredFixedStartTime || fallbackFixedStartFromBestTime(option.bestTimeOfDay)
+    : null;
 
   return {
     id: option.id,
@@ -25,6 +54,8 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
     currency: "USD",
     difficultyLevel: option.difficultyLevel || "moderate",
     bestTimeOfDay: option.bestTimeOfDay || "any",
+    isFixedStartTime,
+    fixedStartTime,
     timeReason: option.timeReason || null,
     timeSourceLinks: option.timeSourceLinks || [],
     neighborhood: null,
