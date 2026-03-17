@@ -2760,6 +2760,49 @@ class LLMClient {
     return 2;
   }
 
+  private _parseFixedStartTimeMinutesForAiCheck(value?: string | null): number | null {
+    if (!value) return null;
+    const text = value.trim().toLowerCase();
+    if (!text) return null;
+    if (text === "sunrise") return 6 * 60;
+    if (text === "sunset") return 18 * 60;
+
+    const meridiemMatch = text.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+    if (meridiemMatch) {
+      let hour = Number(meridiemMatch[1]) % 12;
+      const minute = Number(meridiemMatch[2] || "0");
+      if (meridiemMatch[3].toLowerCase() === "pm") hour += 12;
+      if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) return hour * 60 + minute;
+    }
+
+    const twentyFourMatch = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+    if (twentyFourMatch) {
+      const hour = Number(twentyFourMatch[1]);
+      const minute = Number(twentyFourMatch[2]);
+      return hour * 60 + minute;
+    }
+
+    return null;
+  }
+
+  private _activityLoadFactorForAiCheck(activity: SuggestedActivity): number {
+    if (!activity.isFixedStartTime) return 1;
+    const fixedStartMinutes = this._parseFixedStartTimeMinutesForAiCheck(activity.fixedStartTime);
+    if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
+    if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") return 0.7;
+    if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") return 0.7;
+    return 1;
+  }
+
+  private _slotAnchorMinutesForAiCheck(activity: SuggestedActivity): number {
+    const fixedStart = this._parseFixedStartTimeMinutesForAiCheck(activity.fixedStartTime);
+    if (fixedStart != null) return fixedStart;
+    if (activity.bestTimeOfDay === "morning") return 10 * 60;
+    if (activity.bestTimeOfDay === "afternoon") return 14 * 60;
+    if (activity.bestTimeOfDay === "evening") return 19 * 60;
+    return 13 * 60;
+  }
+
   private _roundToSingleDecimal(value: number): number {
     return Math.round(value * 10) / 10;
   }
@@ -2806,6 +2849,9 @@ class LLMClient {
   }
 
   private _buildAiCheckTimingSummary(groupedDays: GroupedDay[]) {
+    const REGULAR_DAY_START_MINUTES = 9 * 60 + 30;
+    const REGULAR_DAY_END_MINUTES = REGULAR_DAY_START_MINUTES + 8 * 60;
+    const OFF_HOURS_ACTIVITY_DISCOUNT = 0.3;
     const slotOrder: Record<"morning" | "afternoon" | "evening" | "any", number> = {
       morning: 0,
       afternoon: 1,
@@ -2827,12 +2873,22 @@ class LLMClient {
           const estimatedHours = this._roundToSingleDecimal(
             this._parseEstimatedHoursForAiCheck(activity.estimatedDuration)
           );
+          const anchorMinutes = this._slotAnchorMinutesForAiCheck(activity);
+          const inRegularWindow =
+            anchorMinutes >= REGULAR_DAY_START_MINUTES && anchorMinutes <= REGULAR_DAY_END_MINUTES;
+          const effectiveHours = this._roundToSingleDecimal(
+            estimatedHours *
+              this._activityLoadFactorForAiCheck(activity) *
+              (inRegularWindow ? 1 : OFF_HOURS_ACTIVITY_DISCOUNT)
+          );
           return {
             id: activity.id,
             name: activity.name,
             bestTimeOfDay: activity.bestTimeOfDay || "any",
             estimatedDurationText: activity.estimatedDuration || null,
             estimatedDurationHours: estimatedHours,
+            effectiveDurationHours: effectiveHours,
+            inRegularWindow,
           };
         });
 
@@ -2867,16 +2923,24 @@ class LLMClient {
         const totalActivityHours = this._roundToSingleDecimal(
           activities.reduce((sum, activity) => sum + activity.estimatedDurationHours, 0),
         );
+        const totalEffectiveActivityHours = this._roundToSingleDecimal(
+          activities.reduce((sum, activity) => sum + activity.effectiveDurationHours, 0),
+        );
         const totalCommuteMinutes = commuteLegs.reduce((sum, leg) => sum + leg.estimatedMinutes, 0);
         const totalPlannedHours = this._roundToSingleDecimal(totalActivityHours + totalCommuteMinutes / 60);
+        const totalEffectivePlannedHours = this._roundToSingleDecimal(
+          totalEffectiveActivityHours + totalCommuteMinutes / 60
+        );
 
         return {
           dayNumber: day.dayNumber,
           date: day.date,
           theme: day.theme,
           totalActivityHours,
+          totalEffectiveActivityHours,
           totalCommuteMinutes,
           totalPlannedHours,
+          totalEffectivePlannedHours,
           activityCount: activities.length,
           activities,
           commuteLegs,
@@ -2928,7 +2992,7 @@ class LLMClient {
           {
             role: "system",
             content:
-              "You are a principal travel-planning reviewer. Respond in plain text only. Be concise and high-signal. Focus only on the most important findings for decision-making right now. Do not recap each day or narrate the itinerary chronologically unless a critical issue depends on specific day sequencing. Prefer 3-5 short bullets total. Each bullet should be one key issue, risk, or recommendation. Avoid filler, repetition, and obvious statements. Treat provided timing/commute estimates as approximate but actionable for identifying overloaded days, long transfers, and sequencing risks. If there are no meaningful issues, say exactly: Everything looks good.",
+              "You are a principal travel-planning reviewer. Respond in plain text only. Be concise and high-signal. Focus only on the most important findings for decision-making right now. Do not recap each day or narrate the itinerary chronologically unless a critical issue depends on specific day sequencing. Prefer 3-5 short bullets total. Each bullet should be one key issue, risk, or recommendation. Avoid filler, repetition, and obvious statements. Treat provided timing/commute estimates as approximate but actionable for identifying overloaded days, long transfers, and sequencing risks. For overload judgments, prioritize totalEffectivePlannedHours over raw totalPlannedHours and treat off-hours one-off activities as discounted load. If a day clearly still has free capacity before evening, do not call it overloaded. If there are no meaningful issues, say exactly: Everything looks good.",
           },
           {
             role: "user",

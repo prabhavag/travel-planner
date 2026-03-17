@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef, useLayoutEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef, useLayoutEffect, type ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
@@ -48,6 +48,9 @@ export function InitialResearchView({
   const [activeInterest, setActiveInterest] = useState<string>("All");
   const [collapseSelectedCards, setCollapseSelectedCards] = useState(true);
   const [collapsedSelectedById, setCollapsedSelectedById] = useState<Record<string, boolean>>({});
+  const selectedGridRef = useRef<HTMLDivElement | null>(null);
+  const selectedCardRectsRef = useRef<Map<string, DOMRect>>(new Map());
+  const shouldAnimateSelectedGridRef = useRef(false);
 
   const scrollYRef = useRef<number | null>(null);
   useLayoutEffect(() => {
@@ -56,6 +59,20 @@ export function InitialResearchView({
       scrollYRef.current = null;
     }
   });
+
+  const captureSelectedCardPositions = useCallback(() => {
+    const grid = selectedGridRef.current;
+    if (!grid) return;
+    const nextRects = new Map<string, DOMRect>();
+    const cards = grid.querySelectorAll<HTMLElement>("[data-selected-option-id]");
+    cards.forEach((card) => {
+      const optionId = card.dataset.selectedOptionId;
+      if (!optionId) return;
+      nextRects.set(optionId, card.getBoundingClientRect());
+    });
+    selectedCardRectsRef.current = nextRects;
+    shouldAnimateSelectedGridRef.current = nextRects.size > 0;
+  }, []);
 
   if (!researchBrief) {
     return (
@@ -157,10 +174,26 @@ export function InitialResearchView({
     });
   }, [activeInterest, researchBrief.popularOptions, allPreferences]);
 
-  const selectedVisibleOptions = useMemo(
-    () => visibleOptions.filter((option) => selectedSet.has(option.id)),
-    [visibleOptions, selectedSet]
-  );
+  const selectedVisibleOptions = useMemo(() => {
+    const visibleById = new Map(visibleOptions.map((option) => [option.id, option]));
+    const orderedSelected = selectedOptionIds
+      .map((id) => visibleById.get(id))
+      .filter((option): option is ResearchOption => Boolean(option));
+
+    const collapsedQueue: ResearchOption[] = [];
+    const expandedQueue: ResearchOption[] = [];
+
+    orderedSelected.forEach((option) => {
+      const isCollapsed = collapsedSelectedById[option.id] ?? collapseSelectedCards;
+      if (isCollapsed) {
+        collapsedQueue.push(option);
+      } else {
+        expandedQueue.push(option);
+      }
+    });
+
+    return [...collapsedQueue, ...expandedQueue];
+  }, [visibleOptions, selectedOptionIds, collapsedSelectedById, collapseSelectedCards]);
   const unselectedVisibleOptions = useMemo(
     () => visibleOptions.filter((option) => !selectedSet.has(option.id)),
     [visibleOptions, selectedSet]
@@ -175,6 +208,49 @@ export function InitialResearchView({
       return next;
     });
   }, [selectedOptionIds, collapseSelectedCards]);
+
+  useLayoutEffect(() => {
+    if (!shouldAnimateSelectedGridRef.current) return;
+    shouldAnimateSelectedGridRef.current = false;
+    const grid = selectedGridRef.current;
+    if (!grid) return;
+    const prevRects = selectedCardRectsRef.current;
+    if (!prevRects.size) return;
+
+    const cards = Array.from(grid.querySelectorAll<HTMLElement>("[data-selected-option-id]"));
+    const movedCards: HTMLElement[] = [];
+
+    cards.forEach((card) => {
+      const optionId = card.dataset.selectedOptionId;
+      if (!optionId) return;
+      const previousRect = prevRects.get(optionId);
+      if (!previousRect) return;
+      const nextRect = card.getBoundingClientRect();
+      const deltaX = previousRect.left - nextRect.left;
+      const deltaY = previousRect.top - nextRect.top;
+      if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) return;
+
+      movedCards.push(card);
+      card.style.transition = "none";
+      card.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+      card.style.willChange = "transform";
+    });
+
+    if (!movedCards.length) return;
+
+    requestAnimationFrame(() => {
+      movedCards.forEach((card) => {
+        card.style.transition = "transform 320ms cubic-bezier(0.22, 1, 0.36, 1) 120ms";
+        card.style.transform = "translate(0, 0)";
+        const clearStyles = () => {
+          card.style.transition = "";
+          card.style.transform = "";
+          card.style.willChange = "";
+        };
+        card.addEventListener("transitionend", clearStyles, { once: true });
+      });
+    });
+  }, [collapsedSelectedById, collapseSelectedCards, selectedVisibleOptions]);
 
   return (
     <div className="space-y-4 p-4">
@@ -293,19 +369,18 @@ export function InitialResearchView({
             <Button
               variant="outline"
               size="sm"
-              onClick={() =>
-                setCollapseSelectedCards((prev) => {
-                  const nextCollapsed = !prev;
-                  setCollapsedSelectedById((current) => {
-                    const next = { ...current };
-                    selectedOptionIds.forEach((id) => {
-                      next[id] = nextCollapsed;
-                    });
-                    return next;
+              onClick={() => {
+                captureSelectedCardPositions();
+                const nextCollapsed = !collapseSelectedCards;
+                setCollapseSelectedCards(nextCollapsed);
+                setCollapsedSelectedById((current) => {
+                  const next = { ...current };
+                  selectedOptionIds.forEach((id) => {
+                    next[id] = nextCollapsed;
                   });
-                  return nextCollapsed;
-                })
-              }
+                  return next;
+                });
+              }}
               disabled={isLoading}
             >
               {collapseSelectedCards ? "Expand selected" : "Collapse selected"}
@@ -349,26 +424,29 @@ export function InitialResearchView({
             {selectedVisibleOptions.length > 0 ? (
               <div className="space-y-2">
                 <p className="text-xs font-medium text-gray-500">Selected ({selectedVisibleOptions.length})</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div ref={selectedGridRef} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {selectedVisibleOptions.map((option) => (
-                    <ResearchOptionCard
-                      key={option.id}
-                      option={option}
-                      isSelected={true}
-                      collapsed={collapsedSelectedById[option.id] ?? collapseSelectedCards}
-                      onToggleCollapse={() =>
-                        setCollapsedSelectedById((prev) => ({
-                          ...prev,
-                          [option.id]: !(prev[option.id] ?? collapseSelectedCards),
-                        }))
-                      }
-                      onToggleSelect={(id) => onSelectionChange(id, false)}
-                      onDeepResearch={onDeepResearchOption}
-                      onRemove={onRemoveOption}
-                      deepResearchLoading={isLoading && deepResearchOptionId === option.id}
-                      deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
-                      lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}
-                    />
+                    <div key={option.id} data-selected-option-id={option.id}>
+                      <ResearchOptionCard
+                        option={option}
+                        isSelected={true}
+                        collapsed={collapsedSelectedById[option.id] ?? collapseSelectedCards}
+                        onToggleCollapse={() => {
+                          captureSelectedCardPositions();
+                          const nextCollapsed = !(collapsedSelectedById[option.id] ?? collapseSelectedCards);
+                          setCollapsedSelectedById((prev) => ({
+                            ...prev,
+                            [option.id]: nextCollapsed,
+                          }));
+                        }}
+                        onToggleSelect={(id) => onSelectionChange(id, false)}
+                        onDeepResearch={onDeepResearchOption}
+                        onRemove={onRemoveOption}
+                        deepResearchLoading={isLoading && deepResearchOptionId === option.id}
+                        deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
+                        lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}
+                      />
+                    </div>
                   ))}
                 </div>
               </div>

@@ -481,6 +481,9 @@ export function DayGroupingView({
   };
 
   const roundToQuarter = (value: number): number => Math.round(value / 15) * 15;
+  const REGULAR_DAY_START_MINUTES = 9 * 60 + 30; // 9:30 AM
+  const REGULAR_DAY_END_MINUTES = REGULAR_DAY_START_MINUTES + 8 * 60; // 5:30 PM
+  const OFF_HOURS_ACTIVITY_DISCOUNT = 0.3;
 
   function parseFixedStartTimeMinutes(value?: string | null): number | null {
     if (!value) return null;
@@ -588,7 +591,17 @@ export function DayGroupingView({
         ? remainingForActivities / totalRequestedHours
         : 1;
     let scheduledActivityMinutes = 0;
+    let effectiveActivityMinutesForOverload = 0;
     let scheduledCommuteMinutes = 0;
+    const trackActivityMinutes = (startMinutes: number, endMinutes: number) => {
+      const rawMinutes = Math.max(0, endMinutes - startMinutes);
+      const inWindowStart = Math.max(startMinutes, REGULAR_DAY_START_MINUTES);
+      const inWindowEnd = Math.min(endMinutes, REGULAR_DAY_END_MINUTES);
+      const inWindowMinutes = Math.max(0, inWindowEnd - inWindowStart);
+      const offWindowMinutes = Math.max(0, rawMinutes - inWindowMinutes);
+      scheduledActivityMinutes += rawMinutes;
+      effectiveActivityMinutesForOverload += inWindowMinutes + offWindowMinutes * OFF_HOURS_ACTIVITY_DISCOUNT;
+    };
 
     if (sortedActivities.length === 0) {
       return (
@@ -683,7 +696,8 @@ export function DayGroupingView({
         const beforeLunchEnd = Math.max(activityStart + 30, lunchStart);
         const afterLunchStart = lunchEnd;
         const afterLunchEnd = afterLunchStart + Math.max(30, activityEnd - beforeLunchEnd);
-        scheduledActivityMinutes += Math.max(0, beforeLunchEnd - activityStart) + Math.max(0, afterLunchEnd - afterLunchStart);
+        trackActivityMinutes(activityStart, beforeLunchEnd);
+        trackActivityMinutes(afterLunchStart, afterLunchEnd);
 
         timelineItems.push({
           type: "activity",
@@ -726,7 +740,7 @@ export function DayGroupingView({
 
         const nextActivityStart = roundToQuarter(cursorMinutes);
         const nextActivityEnd = nextActivityStart + activityMinutes;
-        scheduledActivityMinutes += Math.max(0, nextActivityEnd - nextActivityStart);
+        trackActivityMinutes(nextActivityStart, nextActivityEnd);
         timelineItems.push({
           type: "activity",
           id: `activity-${activity.id}`,
@@ -775,26 +789,34 @@ export function DayGroupingView({
         detail: "About 1 hr",
         timeRange: toRangeLabel(lunchStart, lunchEnd),
       });
+      cursorMinutes = lunchEnd;
+      lunchInserted = true;
     }
 
     let freeSlotMinutesBeforeEvening = 0;
-    if (freeActivityHours > 0) {
-      const freeStart = roundToQuarter(cursorMinutes);
-      const cappedByEveningMinutes = Math.max(0, eveningCutoffMinutes - freeStart);
-      const freeMinutes = Math.min(roundToQuarter(freeActivityHours * 60), roundToQuarter(cappedByEveningMinutes));
-      freeSlotMinutesBeforeEvening = freeMinutes;
-      if (freeMinutes > 0) {
-        const freeStart = roundToQuarter(cursorMinutes);
-        const freeEnd = freeStart + freeMinutes;
-        timelineItems.push({
-          type: "free",
-          id: `free-slot-${day.dayNumber}`,
-          title: "Free slot",
-          detail: freeSlotSuggestion,
-          timeRange: toRangeLabel(freeStart, freeEnd),
-        });
-        cursorMinutes = freeEnd;
-      }
+    let freeSlotNoticeText = freeSlotSuggestion;
+    const freeStart = roundToQuarter(cursorMinutes);
+    const cappedByEveningMinutes = Math.max(0, eveningCutoffMinutes - freeStart);
+    const budgetFreeMinutes = Math.min(roundToQuarter(freeActivityHours * 60), roundToQuarter(cappedByEveningMinutes));
+    const timelineGapFreeMinutes = roundToQuarter(cappedByEveningMinutes);
+    const freeMinutes = budgetFreeMinutes > 0 ? budgetFreeMinutes : timelineGapFreeMinutes;
+    const hasVisibleFreeSlot = freeMinutes >= 45;
+    freeSlotMinutesBeforeEvening = hasVisibleFreeSlot ? freeMinutes : 0;
+    if (hasVisibleFreeSlot) {
+      const freeEnd = freeStart + freeMinutes;
+      const detail =
+        freeStart >= lunchMinStart
+          ? "Afternoon slot is open. Add a nearby activity, cafe, or scenic stop."
+          : freeSlotSuggestion;
+      freeSlotNoticeText = detail;
+      timelineItems.push({
+        type: "free",
+        id: `free-slot-${day.dayNumber}`,
+        title: "Free slot",
+        detail,
+        timeRange: toRangeLabel(freeStart, freeEnd),
+      });
+      cursorMinutes = freeEnd;
     }
     const showFreeSlotNotice = freeSlotMinutesBeforeEvening >= 45;
 
@@ -822,7 +844,9 @@ export function DayGroupingView({
     }
 
     const totalPlannedHours = (scheduledActivityMinutes + scheduledCommuteMinutes) / 60;
-    const isOverloaded = totalPlannedHours > 8;
+    const effectivePlannedHoursForOverload =
+      (effectiveActivityMinutesForOverload + scheduledCommuteMinutes) / 60;
+    const isOverloaded = !showFreeSlotNotice && effectivePlannedHoursForOverload > availableVisitHours;
 
     return (
       <>
@@ -830,7 +854,7 @@ export function DayGroupingView({
           <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-2 text-[11px] text-emerald-900">
             <div className="flex items-center gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>{freeSlotSuggestion}</span>
+              <span>{freeSlotNoticeText}</span>
             </div>
           </div>
         ) : null}
@@ -838,7 +862,10 @@ export function DayGroupingView({
           <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2 text-[11px] text-amber-900">
             <div className="flex items-center gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>Overloaded day: ~{formatHourLabel(totalPlannedHours)} of activity + commute. Consider moving an activity.</span>
+              <span>
+                Overloaded day: ~{formatHourLabel(effectivePlannedHoursForOverload)} effective hrs (raw ~{formatHourLabel(totalPlannedHours)}).
+                Consider moving an activity.
+              </span>
             </div>
           </div>
         ) : null}
