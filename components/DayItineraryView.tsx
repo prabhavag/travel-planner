@@ -610,6 +610,34 @@ export function DayItineraryView({
     return hour * 60 + minute;
   };
 
+  const toClockLabel = (minutes: number): string => {
+    const clamped = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);
+    const h = Math.floor(clamped / 60);
+    const m = clamped % 60;
+    const suffix = h >= 12 ? "PM" : "AM";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
+  };
+
+  const normalizeDateKey = useCallback((value?: string | null): string | null => {
+    if (!value) return null;
+    const isoMatch = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoMatch) return isoMatch[1];
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString().slice(0, 10);
+  }, []);
+
+  const tripEndDateKey = useMemo(() => normalizeDateKey(tripInfo?.endDate), [normalizeDateKey, tripInfo?.endDate]);
+
+  const isDepartureDay = useCallback((day: GroupedDay, dayIndex: number): boolean => {
+    if (tripEndDateKey) {
+      const dayDateKey = normalizeDateKey(day.date);
+      if (dayDateKey) return dayDateKey === tripEndDateKey;
+    }
+    return dayIndex === groupedDays.length - 1;
+  }, [groupedDays.length, normalizeDateKey, tripEndDateKey]);
+
   const getDayStartContext = useCallback(
     (dayIndex: number, fallbackStayLabel?: string | null) => {
       if (dayIndex !== 0) {
@@ -670,7 +698,7 @@ export function DayItineraryView({
   }) => {
     const startContext = getDayStartContext(dayIndex, startStayLabel);
     const availableVisitHours = startContext.availableVisitHours;
-    const isLastDay = dayIndex === groupedDays.length - 1;
+    const isFinalDepartureDay = isDepartureDay(day, dayIndex);
     const lunchHours = 1;
     const sortedActivities = sortActivitiesForTimeline(day.activities);
     const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
@@ -730,8 +758,14 @@ export function DayItineraryView({
         : 1;
     const departureClock = tripInfo?.departureTimePreference || "6:00 PM";
     const departureMinutes = parseClockMinutes(departureClock) ?? 18 * 60;
-    const prepBufferMinutes = tripInfo?.transportMode === "car" ? 180 : 150;
-    const eveningCutoffMinutes = isLastDay ? Math.max(10 * 60, departureMinutes - prepBufferMinutes) : 18 * 60;
+    const airportArrivalLeadMinutes = 120;
+    const commuteTransitionBufferMinutes = 20;
+    const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - airportArrivalLeadMinutes);
+    const bufferedStayEndCommuteMinutes =
+      stayEndCommuteMinutes > 0 ? Math.round((stayEndCommuteMinutes + commuteTransitionBufferMinutes) / 15) * 15 : 0;
+    const eveningCutoffMinutes = isFinalDepartureDay
+      ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedStayEndCommuteMinutes)
+      : 18 * 60;
     const defaultDayStartMinutes = startContext.dayStartMinutes;
     const dayStartMinutes = earliestFixedStartMinutes != null ? Math.max(0, earliestFixedStartMinutes - stayStartCommuteMinutes - 15) : defaultDayStartMinutes;
     const estimatedDayEndMinutes = dayStartMinutes + Math.round((totalRequestedHours + lunchHours + totalCommuteHoursEstimate) * 60);
@@ -832,11 +866,11 @@ export function DayItineraryView({
         });
       }
       timelineRows.push({
-        label: isLastDay ? "Departure prep" : "End at night stay",
-        detail: isLastDay
+        label: isFinalDepartureDay ? "Departure prep" : "End at night stay",
+        detail: isFinalDepartureDay
           ? `Checkout${
               tripInfo?.transportMode === "car" ? ", return rental car," : ","
-            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure.`
+            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure. Target airport arrival by ${toClockLabel(airportArrivalDeadlineMinutes)}.`
           : endStayLabel,
         type: "stay",
       });

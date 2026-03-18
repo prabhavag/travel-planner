@@ -25,7 +25,7 @@ interface DayGroupingViewProps {
   destination?: string | null;
   tripInfo?: Pick<
     TripInfo,
-    "arrivalAirport" | "departureAirport" | "arrivalTimePreference" | "departureTimePreference" | "transportMode"
+    "arrivalAirport" | "departureAirport" | "arrivalTimePreference" | "departureTimePreference" | "transportMode" | "endDate"
   >;
   onMoveActivity: (activityId: string, fromDay: number, toDay: number) => void;
   onConfirm: () => void;
@@ -82,6 +82,25 @@ export function DayGroupingView({
     return hour * 60 + minute;
   }, []);
 
+  const normalizeDateKey = useCallback((value?: string | null): string | null => {
+    if (!value) return null;
+    const isoMatch = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoMatch) return isoMatch[1];
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString().slice(0, 10);
+  }, []);
+
+  const tripEndDateKey = useMemo(() => normalizeDateKey(tripInfo?.endDate), [normalizeDateKey, tripInfo?.endDate]);
+
+  const isDepartureDay = useCallback((day: GroupedDay, dayIndex: number): boolean => {
+    if (tripEndDateKey) {
+      const dayDateKey = normalizeDateKey(day.date);
+      if (dayDateKey) return dayDateKey === tripEndDateKey;
+    }
+    return dayIndex === groupedDays.length - 1;
+  }, [groupedDays.length, normalizeDateKey, tripEndDateKey]);
+
   const sunsetMinutes = useMemo(() => {
     // Default to 6:00 PM; later this can be set from destination/date-aware sunset data.
     const configuredSunset = (tripInfo as TripInfo & { sunsetTime?: string | null } | undefined)?.sunsetTime;
@@ -100,6 +119,35 @@ export function DayGroupingView({
       return "daylight_only";
     }
     return "flexible";
+  }, []);
+
+  const getActivityTimingPolicy = useCallback((activity: SuggestedActivity): { minVisitMinutes: number; settleBufferMinutes: number } => {
+    const tags = (activity.interestTags || []).join(" ");
+    const category = activity.researchOption?.category || "";
+    const text = `${activity.name} ${activity.type} ${tags} ${category}`.toLowerCase();
+
+    let minVisitMinutes = 45;
+    if (category === "snorkeling") minVisitMinutes = Math.max(minVisitMinutes, 60);
+    if (category === "hiking") minVisitMinutes = Math.max(minVisitMinutes, 90);
+    if (category === "food" || category === "culture" || category === "relaxation") minVisitMinutes = Math.max(minVisitMinutes, 60);
+    if (category === "adventure") minVisitMinutes = Math.max(minVisitMinutes, 75);
+
+    if (/(snorkel|snorkeling|scuba|dive|surf|kayak|paddle|canoe|boat tour|sailing|whale watch|water activity)/i.test(text)) {
+      minVisitMinutes = Math.max(minVisitMinutes, 60);
+    }
+    if (/(hike|hiking|trail|trek|outdoor|summit|national park|waterfall hike)/i.test(text)) {
+      minVisitMinutes = Math.max(minVisitMinutes, 90);
+    }
+    if (/(museum|gallery|historic|history|temple|cathedral|cultural|market|walking tour)/i.test(text)) {
+      minVisitMinutes = Math.max(minVisitMinutes, 60);
+    }
+    if (/(restaurant|food|brunch|lunch|dinner|tasting|cafe|coffee)/i.test(text)) {
+      minVisitMinutes = Math.max(minVisitMinutes, 60);
+    }
+
+    const settleBufferMinutes =
+      /(snorkel|snorkeling|scuba|dive|surf|kayak|paddle|canoe|hike|hiking|trail)/i.test(text) ? 15 : 10;
+    return { minVisitMinutes, settleBufferMinutes };
   }, []);
 
   const timingPriorityRank = useCallback((activity: SuggestedActivity): number => {
@@ -711,7 +759,7 @@ export function DayGroupingView({
   }) => {
     const startContext = getDayStartContext(dayIndex, startStayLabel);
     const availableVisitHours = startContext.availableVisitHours;
-    const isLastDay = dayIndex === groupedDays.length - 1;
+    const isFinalDepartureDay = isDepartureDay(day, dayIndex);
     const lunchHours = 1;
     const sortedActivities = sortActivitiesForTimeline(day.activities);
     const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
@@ -814,10 +862,16 @@ export function DayGroupingView({
         };
 
     const timelineItems: TimelineItem[] = [];
+    const commuteTransitionBufferMinutes = 20;
+    const airportArrivalLeadMinutes = 120;
     const departureClock = tripInfo?.departureTimePreference || "6:00 PM";
     const departureMinutes = parseClockMinutes(departureClock) ?? 18 * 60;
-    const prepBufferMinutes = tripInfo?.transportMode === "car" ? 180 : 150;
-    const eveningCutoffMinutes = isLastDay ? Math.max(10 * 60, departureMinutes - prepBufferMinutes) : 18 * 60;
+    const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - airportArrivalLeadMinutes);
+    const bufferedStayEndCommuteMinutes =
+      stayEndCommuteMinutes > 0 ? roundToQuarter(stayEndCommuteMinutes + commuteTransitionBufferMinutes) : 0;
+    const eveningCutoffMinutes = isFinalDepartureDay
+      ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedStayEndCommuteMinutes)
+      : 18 * 60;
     const lunchMinStart = 12 * 60;
     const lunchTargetStart = 12 * 60 + 30;
     const lunchBlockMinutes = roundToQuarter(60 + 15);
@@ -851,7 +905,7 @@ export function DayGroupingView({
           });
           cursorMinutes = lunchEnd;
         }
-        const bufferedCommuteMinutes = roundToQuarter(stayStartCommuteMinutes + 15);
+        const bufferedCommuteMinutes = roundToQuarter(stayStartCommuteMinutes + commuteTransitionBufferMinutes);
         const commuteStart = roundToQuarter(cursorMinutes);
         const commuteEnd = commuteStart + bufferedCommuteMinutes;
         scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
@@ -875,7 +929,9 @@ export function DayGroupingView({
       const requestedHours = recommendedHours * activityLoadFactor(activity);
       const minimumScheduledHours = Math.max(0.75, recommendedHours * 0.5);
       const allocatedHours = Math.max(minimumScheduledHours, requestedHours * scaleFactor);
-      const activityMinutes = Math.max(45, roundToQuarter(allocatedHours * 60 + 15));
+      const timingPolicy = getActivityTimingPolicy(activity);
+      const minimumActivityMinutes = roundToQuarter(timingPolicy.minVisitMinutes);
+      const activityMinutes = Math.max(minimumActivityMinutes, roundToQuarter(allocatedHours * 60 + timingPolicy.settleBufferMinutes));
       const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
       const fixedAlignedStartMinutes =
         activity.isFixedStartTime && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
@@ -918,6 +974,22 @@ export function DayGroupingView({
           title: `Reschedule ${activity.name}`,
           detail: `Needs daylight. No daylight remains after ${toClockLabel(daylightCapMinutes as number)}.`,
           timeRange: "Needs earlier daylight slot",
+        });
+        return;
+      }
+
+      const scheduledWindowMinutes = Math.max(0, activityEnd - activityStart);
+      if (scheduledWindowMinutes < minimumActivityMinutes) {
+        const daylightNote =
+          daylightCapMinutes != null
+            ? `Latest daylight cutoff is ${toClockLabel(daylightCapMinutes)}.`
+            : "Current slot is too short.";
+        timelineItems.push({
+          type: "continue",
+          id: `reschedule-short-slot-${activity.id}`,
+          title: `Reschedule ${activity.name}`,
+          detail: `Needs at least ${minimumActivityMinutes} min, but only ${scheduledWindowMinutes} min fits. ${daylightNote}`,
+          timeRange: `Needs a ${minimumActivityMinutes}+ min slot`,
         });
         return;
       }
@@ -1009,12 +1081,9 @@ export function DayGroupingView({
         const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
         const commuteMode = commuteByLeg[legId]?.mode ?? fallbackMode;
         const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
-        const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + 15);
+        const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + commuteTransitionBufferMinutes);
         const nextDaylightCapMinutes = daylightEndCapMinutes(next, eveningCutoffMinutes);
         const projectedArrivalAfterCommute = roundToQuarter(cursorMinutes) + bufferedCommuteMinutes;
-        if (nextDaylightCapMinutes != null && projectedArrivalAfterCommute >= nextDaylightCapMinutes) {
-          return;
-        }
         const commuteStart = roundToQuarter(cursorMinutes);
         const commuteEnd = commuteStart + bufferedCommuteMinutes;
         scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
@@ -1022,7 +1091,10 @@ export function DayGroupingView({
           type: "commute",
           id: `commute-${activity.id}-${next.id}`,
           title: "Commute",
-          detail: `${commuteModeLabel(commuteMode)} · Approx ${commuteMinutes} min`,
+          detail:
+            nextDaylightCapMinutes != null && projectedArrivalAfterCommute >= nextDaylightCapMinutes
+              ? `${commuteModeLabel(commuteMode)} · Approx ${commuteMinutes} min · Arrives near/after daylight cutoff`
+              : `${commuteModeLabel(commuteMode)} · Approx ${commuteMinutes} min`,
           timeRange: toRangeLabel(commuteStart, commuteEnd),
         });
         cursorMinutes = commuteEnd;
@@ -1074,7 +1146,7 @@ export function DayGroupingView({
 
     if (endStayLabel) {
       if (stayEndCommuteMinutes > 0) {
-        const bufferedCommuteMinutes = roundToQuarter(stayEndCommuteMinutes + 15);
+        const bufferedCommuteMinutes = roundToQuarter(stayEndCommuteMinutes + commuteTransitionBufferMinutes);
         const commuteStart = roundToQuarter(cursorMinutes);
         const commuteEnd = commuteStart + bufferedCommuteMinutes;
         scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
@@ -1086,15 +1158,25 @@ export function DayGroupingView({
           timeRange: toRangeLabel(commuteStart, commuteEnd),
         });
         cursorMinutes = commuteEnd;
+        if (isFinalDepartureDay && commuteEnd > airportArrivalDeadlineMinutes) {
+          const latenessMinutes = commuteEnd - airportArrivalDeadlineMinutes;
+          timelineItems.push({
+            type: "continue",
+            id: `reschedule-airport-buffer-${day.dayNumber}`,
+            title: "Reschedule before departure",
+            detail: `Airport arrival target is ${toClockLabel(airportArrivalDeadlineMinutes)} (2 hr before ${departureClock}). Current plan arrives ${latenessMinutes} min late.`,
+            timeRange: "Move/remove earlier activity",
+          });
+        }
       }
       timelineItems.push({
         type: "stay",
         id: `stay-end-${day.dayNumber}`,
-        title: isLastDay ? "Departure prep" : "End at night stay",
-        detail: isLastDay
+        title: isFinalDepartureDay ? "Departure prep" : "End at night stay",
+        detail: isFinalDepartureDay
           ? `Checkout${
               tripInfo?.transportMode === "car" ? ", return rental car," : ","
-            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure.`
+            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure. Target airport arrival by ${toClockLabel(airportArrivalDeadlineMinutes)}.`
           : endStayLabel,
       });
     }
