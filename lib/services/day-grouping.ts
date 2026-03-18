@@ -52,7 +52,11 @@ const COST_WEIGHTS = {
   balance: 0.7,
   fullDayNearbyOverflowRelief: 9,
   fullDayFarPenalty: 3,
+  nearbySplit: 6,
 };
+
+const NEARBY_CLUSTER_MAX_COMMUTE_MINUTES = 40;
+const NEARBY_CLUSTER_SQUEEZE_HOURS = 1.25;
 
 type PreparedActivity = {
   activity: SuggestedActivity;
@@ -1003,8 +1007,40 @@ function computeTotalCost(
   const avgCommute = totalCommute / Math.max(1, dayStats.length);
   const maxCommute = Math.max(...dayStats.map((s) => s.commuteProxy));
   const commuteImbalancePenalty = Math.max(0, maxCommute - avgCommute) * COST_WEIGHTS.commuteImbalance;
+  const activityDayIndex = new Map<string, number>();
+  days.forEach((day, dayIndex) => {
+    day.activityIds.forEach((id) => activityDayIndex.set(id, dayIndex));
+  });
+  const prepared = Array.from(preparedMap.values());
+  let nearbySplitPenalty = 0;
+  for (let i = 0; i < prepared.length; i += 1) {
+    for (let j = i + 1; j < prepared.length; j += 1) {
+      const left = prepared[i].activity;
+      const right = prepared[j].activity;
+      const leftDay = activityDayIndex.get(left.id);
+      const rightDay = activityDayIndex.get(right.id);
+      if (leftDay == null || rightDay == null || leftDay === rightDay) continue;
 
-  return baseCost + commuteImbalancePenalty;
+      const commuteMinutes = activityCommuteMinutes(left, right, commuteMinutesByPair);
+      if (commuteMinutes > NEARBY_CLUSTER_MAX_COMMUTE_MINUTES) continue;
+
+      const leftLoad = prepared[i].loadDurationHours;
+      const rightLoad = prepared[j].loadDurationHours;
+      const leftProfile = dayCapacities[leftDay];
+      const rightProfile = dayCapacities[rightDay];
+      const leftTotalIfMerged = (dayStats[leftDay]?.totalHours ?? 0) + rightLoad;
+      const rightTotalIfMerged = (dayStats[rightDay]?.totalHours ?? 0) + leftLoad;
+      const squeezableOnEitherDay =
+        (leftProfile && leftTotalIfMerged <= leftProfile.maxHours + NEARBY_CLUSTER_SQUEEZE_HOURS) ||
+        (rightProfile && rightTotalIfMerged <= rightProfile.maxHours + NEARBY_CLUSTER_SQUEEZE_HOURS);
+      if (!squeezableOnEitherDay) continue;
+
+      const proximity = (NEARBY_CLUSTER_MAX_COMMUTE_MINUTES - commuteMinutes) / NEARBY_CLUSTER_MAX_COMMUTE_MINUTES;
+      nearbySplitPenalty += proximity * (leftLoad + rightLoad) * 0.5;
+    }
+  }
+
+  return baseCost + commuteImbalancePenalty + nearbySplitPenalty * COST_WEIGHTS.nearbySplit;
 }
 
 function seededActivitySelection(
