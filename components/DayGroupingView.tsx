@@ -61,14 +61,14 @@ export function DayGroupingView({
   const buildStayStartLegId = (dayNumber: number, toId: string) => `${dayNumber}:stay-start->${toId}`;
   const buildStayEndLegId = (dayNumber: number, fromId: string) => `${dayNumber}:${fromId}->stay-end`;
 
-  const getStartStayCoordinates = useCallback((_day: GroupedDay, dayIndex: number): { lat: number; lng: number } | null => {
+  const getStartStayCoordinates = useCallback((day: GroupedDay, dayIndex: number): { lat: number; lng: number } | null => {
     if (dayIndex > 0) {
       return groupedDays[dayIndex - 1]?.nightStay?.coordinates ?? null;
     }
 
-    // Day 1 should not infer start coordinates from night-stay or unrelated route activities.
-    // If we don't have explicit arrival coordinates, avoid showing a likely-wrong commute.
-    return null;
+    // Day 1 fallback: use the selected night-stay location so the initial commute
+    // is visible instead of being omitted entirely.
+    return day.nightStay?.coordinates ?? null;
   }, [groupedDays]);
 
   const parseClockMinutes = useCallback((value?: string | null): number | null => {
@@ -150,11 +150,18 @@ export function DayGroupingView({
     });
   }, [timingPriorityRank]);
 
-  const getCommutePoint = useCallback((activity: SuggestedActivity) => {
+  const getActivityStartPoint = useCallback((activity: SuggestedActivity) => {
     if (activity.locationMode === "route") {
-      return activity.startCoordinates || activity.endCoordinates || activity.coordinates || null;
+      return activity.startCoordinates || activity.coordinates || activity.endCoordinates || null;
     }
     return activity.coordinates || activity.startCoordinates || activity.endCoordinates || null;
+  }, []);
+
+  const getActivityEndPoint = useCallback((activity: SuggestedActivity) => {
+    if (activity.locationMode === "route") {
+      return activity.endCoordinates || activity.coordinates || activity.startCoordinates || null;
+    }
+    return activity.coordinates || activity.endCoordinates || activity.startCoordinates || null;
   }, []);
 
   const isRailFriendlyDestination = useMemo(() => {
@@ -181,7 +188,7 @@ export function DayGroupingView({
       const endStayCoordinates = day.nightStay?.coordinates;
 
       if (first && startStayCoordinates) {
-        const firstPoint = getCommutePoint(first);
+        const firstPoint = getActivityStartPoint(first);
         if (firstPoint) {
           const mode = pickCommuteMode(startStayCoordinates, firstPoint, isRailFriendlyDestination);
           legs.push({
@@ -197,8 +204,8 @@ export function DayGroupingView({
       sorted.forEach((activity, index) => {
         const next = sorted[index + 1];
         if (!next) return;
-        const fromPoint = getCommutePoint(activity);
-        const toPoint = getCommutePoint(next);
+        const fromPoint = getActivityEndPoint(activity);
+        const toPoint = getActivityStartPoint(next);
         if (!fromPoint || !toPoint) return;
         const mode = pickCommuteMode(fromPoint, toPoint, isRailFriendlyDestination);
         legs.push({
@@ -211,7 +218,7 @@ export function DayGroupingView({
       });
 
       if (last && endStayCoordinates) {
-        const lastPoint = getCommutePoint(last);
+        const lastPoint = getActivityEndPoint(last);
         if (lastPoint) {
           const mode = pickCommuteMode(lastPoint, endStayCoordinates, isRailFriendlyDestination);
           legs.push({
@@ -225,7 +232,7 @@ export function DayGroupingView({
       }
     });
     return legs;
-  }, [groupedDays, sortActivitiesForTimeline, isRailFriendlyDestination, getCommutePoint, getStartStayCoordinates]);
+  }, [groupedDays, sortActivitiesForTimeline, isRailFriendlyDestination, getActivityEndPoint, getActivityStartPoint, getStartStayCoordinates]);
 
   const commuteLegById = useMemo(() => {
     const next: Record<string, { mode: CommuteMode; origin: { lat: number; lng: number }; destination: { lat: number; lng: number } }> =
@@ -493,6 +500,71 @@ export function DayGroupingView({
     return Math.max(10, minutes);
   }
 
+  function estimateDriveMinutesNoFloor(
+    from: { lat: number; lng: number } | null | undefined,
+    to: { lat: number; lng: number } | null | undefined,
+  ): number {
+    const distanceKm = haversineKm(from, to);
+    if (distanceKm == null) return 0;
+    const roadDistanceKm =
+      distanceKm < 10
+        ? distanceKm * 1.35
+        : distanceKm < 30
+          ? distanceKm * 1.6
+          : distanceKm * 1.75;
+    const speedKph =
+      distanceKm < 10
+        ? 28
+        : distanceKm < 30
+          ? 20
+          : 40;
+    return Math.max(0, Math.round((roadDistanceKm / speedKph) * 60));
+  }
+
+  function estimateRouteIntrinsicMinutes(activity: SuggestedActivity): number | null {
+    if (activity.locationMode !== "route") return null;
+
+    const routePoints = activity.routePoints || [];
+    const startPoint = activity.startCoordinates || routePoints[0] || activity.coordinates || null;
+    const endPoint =
+      activity.endCoordinates || (routePoints.length > 1 ? routePoints[routePoints.length - 1] : null) || activity.coordinates || null;
+
+    if (!startPoint || !endPoint) return null;
+
+    const candidates: Array<{ lat: number; lng: number }> = [];
+    const addCandidate = (point?: { lat: number; lng: number } | null) => {
+      if (!point) return;
+      const nearExisting = candidates.some((existing) => {
+        const deltaKm = haversineKm(existing, point);
+        return deltaKm != null && deltaKm < 0.8;
+      });
+      if (!nearExisting) candidates.push(point);
+    };
+
+    (activity.routeWaypoints || []).forEach((waypoint) => addCandidate(waypoint.coordinates));
+    routePoints.slice(1, Math.max(1, routePoints.length - 1)).forEach((point) => addCandidate(point));
+
+    let farthestPoint = endPoint;
+    let farthestDriveFromStart = estimateDriveMinutesNoFloor(startPoint, endPoint);
+    candidates.forEach((candidate) => {
+      const driveFromStart = estimateDriveMinutesNoFloor(startPoint, candidate);
+      if (driveFromStart > farthestDriveFromStart) {
+        farthestDriveFromStart = driveFromStart;
+        farthestPoint = candidate;
+      }
+    });
+
+    const toFarthestMinutes = estimateDriveMinutesNoFloor(startPoint, farthestPoint);
+    const farthestToExitMinutes = estimateDriveMinutesNoFloor(farthestPoint, endPoint);
+    const baseRouteMinutes = toFarthestMinutes + farthestToExitMinutes;
+    if (baseRouteMinutes <= 0) return null;
+
+    const waypointBufferMinutes = Math.min(90, Math.max(20, (activity.routeWaypoints?.length ?? 0) * 15));
+    const scenicBufferMinutes = baseRouteMinutes >= 240 ? 60 : baseRouteMinutes >= 150 ? 45 : 30;
+    const intrinsicMinutes = baseRouteMinutes + waypointBufferMinutes + scenicBufferMinutes;
+    return Math.min(12 * 60, intrinsicMinutes);
+  }
+
   function pickCommuteMode(
     from: { lat: number; lng: number } | null | undefined,
     to: { lat: number; lng: number } | null | undefined,
@@ -647,7 +719,7 @@ export function DayGroupingView({
       if (!next) return sum;
       const legId = buildLegId(day.dayNumber, activity.id, next.id);
       const fallbackMinutes =
-        estimateCommuteMinutes(getCommutePoint(activity), getCommutePoint(next));
+        estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
       const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
       return sum + commuteMinutes;
     }, 0);
@@ -656,31 +728,32 @@ export function DayGroupingView({
     const stayStartCommuteMinutes =
       startContext.startLabel && firstActivity && startStayCoordinates
         ? (commuteByLeg[buildStayStartLegId(day.dayNumber, firstActivity.id)]?.minutes ??
-          estimateCommuteMinutes(startStayCoordinates, getCommutePoint(firstActivity)))
+          estimateCommuteMinutes(startStayCoordinates, getActivityStartPoint(firstActivity)))
         : 0;
     const stayStartCommuteMode: CommuteMode =
       startContext.startLabel && firstActivity && startStayCoordinates
-        ? pickCommuteMode(startStayCoordinates, getCommutePoint(firstActivity), isRailFriendlyDestination)
+        ? pickCommuteMode(startStayCoordinates, getActivityStartPoint(firstActivity), isRailFriendlyDestination)
         : isRailFriendlyDestination
           ? "TRAIN"
           : "DRIVE";
     const stayEndCommuteMinutes =
       endStayLabel && lastActivity && endStayCoordinates
         ? (commuteByLeg[buildStayEndLegId(day.dayNumber, lastActivity.id)]?.minutes ??
-          estimateCommuteMinutes(getCommutePoint(lastActivity), endStayCoordinates))
+          estimateCommuteMinutes(getActivityEndPoint(lastActivity), endStayCoordinates))
         : 0;
     const stayEndCommuteMode: CommuteMode =
       endStayLabel && lastActivity && endStayCoordinates
-        ? pickCommuteMode(getCommutePoint(lastActivity), endStayCoordinates, isRailFriendlyDestination)
+        ? pickCommuteMode(getActivityEndPoint(lastActivity), endStayCoordinates, isRailFriendlyDestination)
         : isRailFriendlyDestination
           ? "TRAIN"
           : "DRIVE";
     const totalCommuteHoursEstimate = (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
-    const totalRequestedHours = day.activities.reduce(
-      (sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration) * activityLoadFactor(activity),
-      0
-    );
+    const totalRequestedHours = day.activities.reduce((sum, activity) => {
+      const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
+      const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
+      return sum + Math.max(estimatedHours, routeFloorHours) * activityLoadFactor(activity);
+    }, 0);
     const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
     const earliestFixedStartMinutes = sortedActivities
       .filter((activity) => activity.isFixedStartTime)
@@ -796,8 +869,12 @@ export function DayGroupingView({
     let hasScheduledPrimaryActivity = false;
 
     sortedActivities.forEach((activity, index) => {
-      const requestedHours = parseEstimatedHours(activity.estimatedDuration) * activityLoadFactor(activity);
-      const allocatedHours = Math.max(0.75, requestedHours * scaleFactor);
+      const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
+      const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
+      const recommendedHours = Math.max(estimatedHours, routeFloorHours);
+      const requestedHours = recommendedHours * activityLoadFactor(activity);
+      const minimumScheduledHours = Math.max(0.75, recommendedHours * 0.5);
+      const allocatedHours = Math.max(minimumScheduledHours, requestedHours * scaleFactor);
       const activityMinutes = Math.max(45, roundToQuarter(allocatedHours * 60 + 15));
       const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
       const fixedAlignedStartMinutes =
@@ -831,6 +908,19 @@ export function DayGroupingView({
           : null;
       const combinedWarning = [lateStartWarning, daylightWarning, daylightConflictWarning, nightOnlyWarning].filter(Boolean).join(" ");
       const lunchMinutes = roundToQuarter(60 + 15);
+      const hasDaylightWindow = daylightCapMinutes != null;
+
+      // Hard guard: do not schedule daylight-only activities after sunset.
+      if (hasDaylightWindow && roundToQuarter(cursorMinutes) >= (daylightCapMinutes as number)) {
+        timelineItems.push({
+          type: "continue",
+          id: `reschedule-daylight-${activity.id}`,
+          title: `Reschedule ${activity.name}`,
+          detail: `Needs daylight. No daylight remains after ${toClockLabel(daylightCapMinutes as number)}.`,
+          timeRange: "Needs earlier daylight slot",
+        });
+        return;
+      }
 
       // If a long activity crosses lunch, split it into before-lunch and continue-after-lunch.
       const crossesLunchWindow = !lunchInserted && activityStart < lunchTargetStart && activityEnd > lunchTargetStart;
@@ -871,7 +961,9 @@ export function DayGroupingView({
       } else {
         // If it's already afternoon and lunch isn't inserted yet, place lunch before this activity
         // only after at least one activity has started (avoid commute -> lunch -> first activity).
-        if (!lunchInserted && hasScheduledPrimaryActivity && activityStart >= lunchMinStart) {
+        const preLunchGapMinutes = Math.max(0, activityStart - roundToQuarter(cursorMinutes));
+        const canInsertLunchBeforeFirstActivity = !hasScheduledPrimaryActivity && preLunchGapMinutes >= lunchMinutes;
+        if (!lunchInserted && activityStart >= lunchMinStart && (hasScheduledPrimaryActivity || canInsertLunchBeforeFirstActivity)) {
           const lunchStart = roundToQuarter(Math.max(cursorMinutes, lunchTargetStart, lunchMinStart));
           const lunchEnd = lunchStart + lunchMinutes;
           timelineItems.push({
@@ -913,11 +1005,16 @@ export function DayGroupingView({
       const next = sortedActivities[index + 1];
       if (next) {
         const legId = buildLegId(day.dayNumber, activity.id, next.id);
-        const fallbackMode = pickCommuteMode(getCommutePoint(activity), getCommutePoint(next), isRailFriendlyDestination);
-        const fallbackMinutes = estimateCommuteMinutes(getCommutePoint(activity), getCommutePoint(next));
+        const fallbackMode = pickCommuteMode(getActivityEndPoint(activity), getActivityStartPoint(next), isRailFriendlyDestination);
+        const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
         const commuteMode = commuteByLeg[legId]?.mode ?? fallbackMode;
         const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
         const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + 15);
+        const nextDaylightCapMinutes = daylightEndCapMinutes(next, eveningCutoffMinutes);
+        const projectedArrivalAfterCommute = roundToQuarter(cursorMinutes) + bufferedCommuteMinutes;
+        if (nextDaylightCapMinutes != null && projectedArrivalAfterCommute >= nextDaylightCapMinutes) {
+          return;
+        }
         const commuteStart = roundToQuarter(cursorMinutes);
         const commuteEnd = commuteStart + bufferedCommuteMinutes;
         scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
