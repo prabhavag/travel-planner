@@ -238,10 +238,37 @@ export function generateDayTheme(activities: SuggestedActivity[]): string {
     return "City Highlights";
 }
 
+export function buildGroupedDays({
+    dayGroups,
+    activities,
+}: {
+    dayGroups: DayGroup[];
+    activities: SuggestedActivity[];
+}): GroupedDay[] {
+    const activityMap = new Map(activities.map((activity) => [activity.id, activity]));
+
+    return dayGroups.map((group) => ({
+        dayNumber: group.dayNumber,
+        date: group.date,
+        theme: group.theme,
+        activities: group.activityIds
+            .map((id) => activityMap.get(id))
+            .filter((activity): activity is SuggestedActivity => activity !== undefined),
+        restaurants: [],
+        nightStay: group.nightStay ?? null,
+    }));
+}
+
 export async function groupActivitiesByDay(
-    activities: SuggestedActivity[],
-    tripInfo: TripInfo
+    params: { activities: SuggestedActivity[]; tripInfo: TripInfo } | SuggestedActivity[],
+    tripInfoArg?: TripInfo
 ): Promise<DayGroup[]> {
+    const activities = Array.isArray(params) ? params : params.activities;
+    const tripInfo = Array.isArray(params) ? tripInfoArg : params.tripInfo;
+    if (!tripInfo) {
+        throw new Error("tripInfo is required for groupActivitiesByDay");
+    }
+
     const dayCount = computeDayCount(tripInfo, activities.length);
     const dates = buildTripDates(tripInfo, dayCount);
     const dayCapacities = buildDayCapacityProfiles(tripInfo, dayCount);

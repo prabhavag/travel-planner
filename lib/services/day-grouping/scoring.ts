@@ -10,6 +10,7 @@ import {
     MAX_DAY_HOURS,
     NEARBY_CLUSTER_MAX_COMMUTE_MINUTES,
     NEARBY_CLUSTER_SQUEEZE_HOURS,
+    SOFT_DAY_START_MINUTES,
     WorkingDay,
 } from "./types";
 import {
@@ -18,7 +19,6 @@ import {
     slotDistance,
     recommendedWindowLatestStartMinutes,
     parseFixedStartTimeMinutes,
-    SOFT_DAY_START_MINUTES,
     cloneDefaultSlotCapacity,
     getPermutations,
 } from "./utils";

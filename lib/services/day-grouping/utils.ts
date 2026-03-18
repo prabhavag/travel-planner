@@ -13,8 +13,6 @@ import {
     PreparedActivity,
 } from "./types";
 
-export const SOFT_DAY_START_MINUTES = 9 * 60 + 30;
-
 export function parseDate(value: string | null): Date | null {
     if (!value) return null;
     const date = new Date(value);
