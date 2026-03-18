@@ -63,6 +63,7 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
               estimatedDuration: { type: ["string", "null"] },
               difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
               bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+              daylightPreference: { type: "string", enum: ["daylight_only", "night_only", "flexible"] },
               isFixedStartTime: { type: "boolean" },
               fixedStartTime: { type: ["string", "null"] },
               recommendedStartWindow: {
@@ -185,6 +186,7 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
           estimatedDuration: { type: ["string", "null"] },
           difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
           bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+          daylightPreference: { type: "string", enum: ["daylight_only", "night_only", "flexible"] },
           isFixedStartTime: { type: "boolean" },
           fixedStartTime: { type: ["string", "null"] },
           recommendedStartWindow: {
@@ -281,6 +283,7 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
         estimatedDuration: { type: ["string", "null"] },
         difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
         bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
+        daylightPreference: { type: "string", enum: ["daylight_only", "night_only", "flexible"] },
         isFixedStartTime: { type: "boolean" },
         fixedStartTime: { type: ["string", "null"] },
         recommendedStartWindow: {
@@ -774,6 +777,9 @@ class LLMClient {
 
   private _normalizeSuggestedActivity(activity: SuggestedActivity): SuggestedActivity {
     const normalizedBestTimeOfDay = this._normalizeBestTimeOfDay(activity.bestTimeOfDay);
+    const daylightPreference = this._normalizeDaylightPreference(
+      (activity as SuggestedActivity & { daylightPreference?: unknown }).daylightPreference
+    );
     const normalizedFixedStartTime = this._normalizeFixedStartTime(activity.fixedStartTime);
     const isFixedStartTime = Boolean(activity.isFixedStartTime || normalizedFixedStartTime);
     const recommendedStartWindow = this._normalizeRecommendedStartWindow(activity.recommendedStartWindow);
@@ -781,6 +787,7 @@ class LLMClient {
     return {
       ...activity,
       bestTimeOfDay: normalizedBestTimeOfDay,
+      daylightPreference,
       isFixedStartTime,
       fixedStartTime: isFixedStartTime
         ? normalizedFixedStartTime || this._fallbackFixedStartFromBestTime(normalizedBestTimeOfDay)
@@ -1368,6 +1375,12 @@ class LLMClient {
       : "any";
   }
 
+  private _normalizeDaylightPreference(value: unknown): "daylight_only" | "night_only" | "flexible" {
+    return value === "daylight_only" || value === "night_only" || value === "flexible"
+      ? value
+      : "flexible";
+  }
+
   private _normalizeDifficultyLevel(value: unknown): "easy" | "moderate" | "hard" {
     return value === "easy" || value === "moderate" || value === "hard" ? value : "moderate";
   }
@@ -1453,6 +1466,35 @@ class LLMClient {
     }
 
     return null;
+  }
+
+  private _inferDaylightPreference({
+    title,
+    category,
+    whyItMatches,
+    bestForDates,
+    reviewSummary,
+    timeReason,
+    bestTimeOfDay,
+  }: {
+    title: string;
+    category: string;
+    whyItMatches: string;
+    bestForDates: string;
+    reviewSummary: string;
+    timeReason: string;
+    bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
+  }): "daylight_only" | "night_only" | "flexible" {
+    const text = `${title} ${category} ${whyItMatches} ${bestForDates} ${reviewSummary} ${timeReason}`.toLowerCase();
+    if (/(night snorkel|night snorkeling|night dive|moonlight|stargaz|astronomy|night tour|after dark|biolumines|sunset cruise)/i.test(text)) {
+      return "night_only";
+    }
+    if (/(snorkel|snorkeling|scuba|dive|surf|kayak|paddle|canoe|boat tour|hike|trail|outdoor|national park|waterfall|beach)/i.test(text)) {
+      return "daylight_only";
+    }
+    if (bestTimeOfDay === "morning" || bestTimeOfDay === "afternoon") return "daylight_only";
+    if (bestTimeOfDay === "evening" && /(night|after dark|stargaz|astronomy|moon)/i.test(text)) return "night_only";
+    return "flexible";
   }
 
   private _inferEstimatedDuration({
@@ -2043,6 +2085,16 @@ class LLMClient {
             rawBestTimeOfDay === "evening" ||
             rawBestTimeOfDay === "any";
           const bestTimeOfDay = this._normalizeBestTimeOfDay(rawBestTimeOfDay);
+          const inferredDaylightPreference = this._inferDaylightPreference({
+            title: typeof opt.title === "string" ? opt.title : "",
+            category: typeof opt.category === "string" ? opt.category : "other",
+            whyItMatches: typeof opt.whyItMatches === "string" ? opt.whyItMatches : "",
+            bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
+            reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
+            timeReason: typeof opt.timeReason === "string" ? opt.timeReason : "",
+            bestTimeOfDay,
+          });
+          const daylightPreference = this._normalizeDaylightPreference(opt.daylightPreference ?? inferredDaylightPreference);
           const timeSourceLinksRaw = Array.isArray(opt.timeSourceLinks) ? opt.timeSourceLinks : [];
           const timeSourceLinks = timeSourceLinksRaw
             .map((source) => {
@@ -2095,6 +2147,7 @@ class LLMClient {
             photoUrls,
             difficultyLevel: hasExplicitDifficultyLevel ? difficultyLevel : inferredDifficulty,
             bestTimeOfDay: hasExplicitBestTimeOfDay ? bestTimeOfDay : inferredTime.bestTimeOfDay,
+            daylightPreference,
             isFixedStartTime,
             fixedStartTime,
             recommendedStartWindow: recommendedStartWindowFromModel || inferredRecommendedStartWindow,
@@ -2660,6 +2713,11 @@ class LLMClient {
         activityLevel: "moderate",
         travelers: 1,
         budget: null,
+        transportMode: "flight",
+        arrivalAirport: null,
+        departureAirport: null,
+        arrivalTimePreference: "12:00 PM",
+        departureTimePreference: "6:00 PM",
         ...tripInfo,
         ...response.tripInfo,
       };

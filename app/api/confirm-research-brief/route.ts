@@ -40,6 +40,19 @@ function inferRecommendedStartWindowFromText(option: ResearchOption): { start: s
   return null;
 }
 
+function inferDaylightPreferenceFromText(option: ResearchOption): "daylight_only" | "night_only" | "flexible" {
+  if (option.daylightPreference) return option.daylightPreference;
+  const text = `${option.title} ${option.category} ${option.whyItMatches} ${option.bestForDates} ${option.reviewSummary} ${option.timeReason || ""}`.toLowerCase();
+  if (/(night snorkel|night snorkeling|night dive|moonlight|stargaz|astronomy|night tour|after dark|biolumines|sunset cruise)/i.test(text)) {
+    return "night_only";
+  }
+  if (/(snorkel|snorkeling|scuba|dive|surf|kayak|paddle|canoe|boat tour|hike|trail|outdoor|national park|waterfall|beach)/i.test(text)) {
+    return "daylight_only";
+  }
+  if (option.bestTimeOfDay === "morning" || option.bestTimeOfDay === "afternoon") return "daylight_only";
+  return "flexible";
+}
+
 function mapResearchOptionToSuggestedActivity(option: ResearchOption): SuggestedActivity {
   const fallbackDuration =
     option.category === "food"
@@ -67,6 +80,7 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
     currency: "USD",
     difficultyLevel: option.difficultyLevel || "moderate",
     bestTimeOfDay: option.bestTimeOfDay || "any",
+    daylightPreference: inferDaylightPreferenceFromText(option),
     isFixedStartTime,
     fixedStartTime,
     recommendedStartWindow,

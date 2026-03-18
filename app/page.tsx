@@ -28,6 +28,7 @@ import {
   deepResearchOption,
   deepResearchSelectedOptions,
   enrichResearchPhotos,
+  suggestAirport,
   type SessionResponse,
   type AiCheckResult,
   type TripInfo,
@@ -264,6 +265,11 @@ const EMPTY_TRIP_INFO: TripInfo = {
   activityLevel: "moderate",
   travelers: 1,
   budget: null,
+  transportMode: "flight",
+  arrivalAirport: null,
+  departureAirport: null,
+  arrivalTimePreference: "12:00 PM",
+  departureTimePreference: "6:00 PM",
 };
 
 type TimelineCluster = {
@@ -931,6 +937,39 @@ export default function PlannerPage() {
   }, [tripInfo.preferences]);
 
   useEffect(() => {
+    if (
+      !sessionId ||
+      !tripInfo.destination ||
+      tripInfo.transportMode !== "flight" ||
+      !!tripInfo.arrivalAirport
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const populateDefaultAirport = async () => {
+      try {
+        const suggestion = await suggestAirport(sessionId);
+        if (!suggestion.success || !suggestion.airportName || cancelled) return;
+        const response = await updateTripInfo(sessionId, {
+          arrivalAirport: suggestion.airportName,
+          departureAirport: tripInfo.departureAirport || suggestion.airportName,
+        });
+        if (response.success && response.tripInfo && !cancelled) {
+          setTripInfo(response.tripInfo);
+        }
+      } catch (error) {
+        console.warn("Failed to auto-suggest airport:", error);
+      }
+    };
+
+    void populateDefaultAirport();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, tripInfo.destination, tripInfo.transportMode, tripInfo.arrivalAirport, tripInfo.departureAirport]);
+
+  useEffect(() => {
     if (selectedAccommodationOptionId && !accommodationOptions.some((option) => option.id === selectedAccommodationOptionId)) {
       setSelectedAccommodationOptionId(null);
       if (wantsAccommodation) setWantsAccommodation(null);
@@ -1373,6 +1412,18 @@ export default function PlannerPage() {
       alert("Failed to update duration. Please try again.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleUpdateTravelLogistics = async (updates: Partial<TripInfo>) => {
+    if (!sessionId) return;
+    try {
+      const response = await updateTripInfo(sessionId, updates);
+      if (response.success && response.tripInfo) {
+        setTripInfo(response.tripInfo);
+      }
+    } catch (error) {
+      console.error("Update travel logistics error:", error);
     }
   };
 
@@ -2341,6 +2392,7 @@ export default function PlannerPage() {
                     onSelectionChange={handleResearchSelectionChange}
                     onRemoveOption={handleRemoveResearchOption}
                     onResolveDurationConflict={handleResolveDurationConflict}
+                    onUpdateTravelLogistics={handleUpdateTravelLogistics}
                     hasUnresolvedAssumptionConflicts={hasUnresolvedAssumptionConflicts}
                     onRegenerate={() => handleGenerateResearchBrief("deep", "augment")}
                     onDeepResearchAll={handleDeepResearchSelected}
@@ -2362,6 +2414,7 @@ export default function PlannerPage() {
                       groupedDays={groupedDays}
                       userPreferences={tripInfo?.preferences || []}
                       destination={tripInfo?.destination || null}
+                      tripInfo={tripInfo || undefined}
                       onMoveActivity={handleMoveActivity}
                       onConfirm={handleConfirmDayGrouping}
                       onDayChange={setActiveDay}

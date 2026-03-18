@@ -185,6 +185,11 @@ export interface TripInfo {
   activityLevel: string;
   travelers: number;
   budget: string | null;
+  transportMode: "flight" | "train" | "car" | "bus" | "ferry" | "other";
+  arrivalAirport: string | null;
+  departureAirport: string | null;
+  arrivalTimePreference: string | null;
+  departureTimePreference: string | null;
 }
 
 export interface ResearchSource {
@@ -217,6 +222,7 @@ export interface ResearchOption {
   photoUrls?: string[];
   difficultyLevel?: "easy" | "moderate" | "hard";
   bestTimeOfDay?: "morning" | "afternoon" | "evening" | "any";
+  daylightPreference?: "daylight_only" | "night_only" | "flexible";
   isFixedStartTime?: boolean;
   fixedStartTime?: string | null;
   recommendedStartWindow?: RecommendedStartWindow | null;
@@ -513,6 +519,7 @@ export interface SuggestedActivity {
   currency?: string;
   difficultyLevel: "easy" | "moderate" | "hard";
   bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
+  daylightPreference?: "daylight_only" | "night_only" | "flexible";
   isFixedStartTime?: boolean;
   fixedStartTime?: string | null;
   recommendedStartWindow?: RecommendedStartWindow | null;
@@ -693,5 +700,16 @@ export async function removeCard(
   return fetchJson(`${BASE_URL}/remove-card`, {
     method: "POST",
     body: JSON.stringify({ sessionId, cardType, cardId }),
+  });
+}
+
+export async function suggestAirport(sessionId: string): Promise<{
+  success: boolean;
+  airportName: string | null;
+  message?: string;
+}> {
+  return fetchJson(`${BASE_URL}/suggest-airport`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
   });
 }

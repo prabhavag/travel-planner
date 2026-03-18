@@ -4,8 +4,48 @@ import { useCallback, useEffect, useMemo, useState, useRef, useLayoutEffect, typ
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ResearchOption, TripInfo, TripResearchBrief } from "@/lib/api-client";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
+
+const HOURLY_TIME_OPTIONS = [
+  "12:00 AM",
+  "1:00 AM",
+  "2:00 AM",
+  "3:00 AM",
+  "4:00 AM",
+  "5:00 AM",
+  "6:00 AM",
+  "7:00 AM",
+  "8:00 AM",
+  "9:00 AM",
+  "10:00 AM",
+  "11:00 AM",
+  "12:00 PM",
+  "1:00 PM",
+  "2:00 PM",
+  "3:00 PM",
+  "4:00 PM",
+  "5:00 PM",
+  "6:00 PM",
+  "7:00 PM",
+  "8:00 PM",
+  "9:00 PM",
+  "10:00 PM",
+  "11:00 PM",
+] as const;
+
+function parseHourMinuteAmPmToMinutes(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/i);
+  if (!match) return null;
+  let hour = Number(match[1]) % 12;
+  const minute = Number(match[2] || "0");
+  if (match[3].toUpperCase() === "PM") hour += 12;
+  if (minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
 
 interface InitialResearchViewProps {
   tripInfo: TripInfo | null;
@@ -21,6 +61,7 @@ interface InitialResearchViewProps {
   deepResearchOptionId?: string | null;
   lastDeepResearchAtByOptionId?: Record<string, string>;
   onProceed: () => void;
+  onUpdateTravelLogistics: (updates: Partial<TripInfo>) => Promise<void>;
   canProceed?: boolean;
   isLoading?: boolean;
   headerActions?: ReactNode;
@@ -40,6 +81,7 @@ export function InitialResearchView({
   deepResearchOptionId = null,
   lastDeepResearchAtByOptionId = {},
   onProceed,
+  onUpdateTravelLogistics,
   canProceed = true,
   isLoading = false,
   headerActions = null,
@@ -48,6 +90,8 @@ export function InitialResearchView({
   const [activeInterest, setActiveInterest] = useState<string>("All");
   const [collapseSelectedCards, setCollapseSelectedCards] = useState(true);
   const [collapsedSelectedById, setCollapsedSelectedById] = useState<Record<string, boolean>>({});
+  const [arrivalAirportInput, setArrivalAirportInput] = useState(tripInfo?.arrivalAirport || "");
+  const [departureAirportInput, setDepartureAirportInput] = useState(tripInfo?.departureAirport || "");
   const selectedGridRef = useRef<HTMLDivElement | null>(null);
   const selectedCardRectsRef = useRef<Map<string, DOMRect>>(new Map());
   const shouldAnimateSelectedGridRef = useRef(false);
@@ -59,6 +103,14 @@ export function InitialResearchView({
       scrollYRef.current = null;
     }
   });
+
+  useEffect(() => {
+    setArrivalAirportInput(tripInfo?.arrivalAirport || "");
+  }, [tripInfo?.arrivalAirport]);
+
+  useEffect(() => {
+    setDepartureAirportInput(tripInfo?.departureAirport || "");
+  }, [tripInfo?.departureAirport]);
 
   const captureSelectedCardPositions = useCallback(() => {
     const grid = selectedGridRef.current;
@@ -116,6 +168,50 @@ export function InitialResearchView({
       .filter(Boolean);
     return parts.slice(0, 2).join(" ");
   }, [researchBrief.summary]);
+
+  const logisticsAssumptions = useMemo(() => {
+    const items: string[] = [];
+    const transportMode = tripInfo?.transportMode || "flight";
+    const arrivalTime = tripInfo?.arrivalTimePreference || "12:00 PM";
+    const departureTime = tripInfo?.departureTimePreference || "6:00 PM";
+    const arrivalMinutes = parseHourMinuteAmPmToMinutes(arrivalTime) ?? 12 * 60;
+
+    if (transportMode === "flight") {
+      const airportName = tripInfo?.arrivalAirport || tripInfo?.departureAirport || "the most common destination airport";
+      items.push(`Assuming air travel via ${airportName}; you can edit this airport.`);
+    } else {
+      items.push(`Assuming intercity travel by ${transportMode}.`);
+    }
+
+    items.push(`Assumed arrival time: ${arrivalTime}.`);
+    items.push(`Assumed departure time: ${departureTime}.`);
+
+    if (arrivalMinutes < 12 * 60) {
+      items.push(`Arrival at ${arrivalTime}: day 1 starts from the airport area.`);
+    } else {
+      items.push(`Arrival at ${arrivalTime}: check into hotel first, then add activities if time remains.`);
+    }
+
+    items.push(
+      `Departure at ${departureTime}: reserve time for checkout and, if applicable, rental-car return before heading out.`
+    );
+    return items;
+  }, [tripInfo?.arrivalAirport, tripInfo?.departureAirport, tripInfo?.transportMode, tripInfo?.arrivalTimePreference, tripInfo?.departureTimePreference]);
+
+  const displayAssumptions = useMemo(() => {
+    const combined = [...logisticsAssumptions, ...researchBrief.assumptions];
+    return Array.from(new Set(combined.map((item) => item.trim()).filter(Boolean)));
+  }, [logisticsAssumptions, researchBrief.assumptions]);
+
+  const selectedArrivalTime = useMemo(() => {
+    const value = tripInfo?.arrivalTimePreference || "12:00 PM";
+    return HOURLY_TIME_OPTIONS.includes(value as (typeof HOURLY_TIME_OPTIONS)[number]) ? value : "12:00 PM";
+  }, [tripInfo?.arrivalTimePreference]);
+
+  const selectedDepartureTime = useMemo(() => {
+    const value = tripInfo?.departureTimePreference || "6:00 PM";
+    return HOURLY_TIME_OPTIONS.includes(value as (typeof HOURLY_TIME_OPTIONS)[number]) ? value : "6:00 PM";
+  }, [tripInfo?.departureTimePreference]);
 
   const normalize = (value: string) =>
     value
@@ -305,7 +401,108 @@ export function InitialResearchView({
             <span className="text-gray-500">Dietary constraints:</span>{" "}
             {dietaryHints.length > 0 ? dietaryHints.join(", ") : "None specified"}
           </p>
-          {researchBrief.assumptions.length > 0 ? (
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Travel Logistics</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Transport mode</p>
+                <Select
+                  value={tripInfo?.transportMode || "flight"}
+                  onValueChange={(value) => onUpdateTravelLogistics({ transportMode: value as TripInfo["transportMode"] })}
+                  disabled={isLoading}
+                >
+                  <SelectTrigger className="h-9">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="flight">Flight</SelectItem>
+                    <SelectItem value="train">Train</SelectItem>
+                    <SelectItem value="car">Car</SelectItem>
+                    <SelectItem value="bus">Bus</SelectItem>
+                    <SelectItem value="ferry">Ferry</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Arrival timing</p>
+                <Select
+                  value={selectedArrivalTime}
+                  onValueChange={(value) =>
+                    onUpdateTravelLogistics({ arrivalTimePreference: value })
+                  }
+                  disabled={isLoading}
+                >
+                  <SelectTrigger className="h-9">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {HOURLY_TIME_OPTIONS.map((option) => (
+                      <SelectItem key={`arrival-${option}`} value={option}>
+                        {option}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Departure timing</p>
+                <Select
+                  value={selectedDepartureTime}
+                  onValueChange={(value) =>
+                    onUpdateTravelLogistics({ departureTimePreference: value })
+                  }
+                  disabled={isLoading}
+                >
+                  <SelectTrigger className="h-9">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {HOURLY_TIME_OPTIONS.map((option) => (
+                      <SelectItem key={`departure-${option}`} value={option}>
+                        {option}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {(tripInfo?.transportMode || "flight") === "flight" ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Arrival airport</p>
+                  <Input
+                    value={arrivalAirportInput}
+                    placeholder="Most common airport (editable)"
+                    className="h-9"
+                    onChange={(event) => setArrivalAirportInput(event.target.value)}
+                    onBlur={() =>
+                      onUpdateTravelLogistics({
+                        arrivalAirport: arrivalAirportInput.trim() || null,
+                      })
+                    }
+                    disabled={isLoading}
+                  />
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Departure airport</p>
+                  <Input
+                    value={departureAirportInput}
+                    placeholder="Defaults to same airport"
+                    className="h-9"
+                    onChange={(event) => setDepartureAirportInput(event.target.value)}
+                    onBlur={() =>
+                      onUpdateTravelLogistics({
+                        departureAirport: departureAirportInput.trim() || null,
+                      })
+                    }
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {displayAssumptions.length > 0 ? (
             <div className="pt-2">
               <button
                 type="button"
@@ -317,7 +514,7 @@ export function InitialResearchView({
               </button>
               {showAssumptions ? (
                 <ul className="mt-2 space-y-1">
-                  {researchBrief.assumptions.map((item, idx) => (
+                  {displayAssumptions.map((item, idx) => (
                     <li key={`${item}-${idx}`} className="text-sm text-gray-600 flex gap-1.5">
                       <span className="text-gray-400 shrink-0">•</span>
                       <span>{item}</span>

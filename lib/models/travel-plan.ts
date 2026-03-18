@@ -28,6 +28,11 @@ export const TripInfoSchema = z.object({
   activityLevel: z.string().default("moderate"),
   travelers: z.number().default(1),
   budget: z.string().nullable(),
+  transportMode: z.enum(["flight", "train", "car", "bus", "ferry", "other"]).default("flight"),
+  arrivalAirport: z.string().nullable().default(null),
+  departureAirport: z.string().nullable().default(null),
+  arrivalTimePreference: z.string().nullable().default("12:00 PM"),
+  departureTimePreference: z.string().nullable().default("6:00 PM"),
 });
 
 export type TripInfo = z.infer<typeof TripInfoSchema>;
@@ -242,6 +247,8 @@ export const RecommendedStartWindowSchema = z.object({
 });
 
 export type RecommendedStartWindow = z.infer<typeof RecommendedStartWindowSchema>;
+export const DaylightPreferenceSchema = z.enum(["daylight_only", "night_only", "flexible"]);
+export type DaylightPreference = z.infer<typeof DaylightPreferenceSchema>;
 
 // "selected" is the current frontend model; legacy values remain for compatibility.
 export const ResearchOptionPreferenceSchema = z.enum(["selected", "keep", "maybe", "reject"]);
@@ -259,6 +266,7 @@ export const ResearchOptionSchema = z.object({
   photoUrls: z.array(z.string()).max(3).default([]),
   difficultyLevel: z.enum(["easy", "moderate", "hard"]).optional(),
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]).optional(),
+  daylightPreference: DaylightPreferenceSchema.optional(),
   isFixedStartTime: z.boolean().optional(),
   fixedStartTime: z.string().nullable().optional(),
   recommendedStartWindow: RecommendedStartWindowSchema.optional().nullable(),
@@ -297,6 +305,7 @@ export const SuggestedActivitySchema = z.object({
   currency: z.string().default("USD"), // Currency code (e.g., "USD", "EUR", "JPY")
   difficultyLevel: z.enum(["easy", "moderate", "hard"]).default("moderate"),
   bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]),
+  daylightPreference: DaylightPreferenceSchema.optional().default("flexible"),
   isFixedStartTime: z.boolean().optional().default(false),
   fixedStartTime: z.string().nullable().optional(),
   recommendedStartWindow: RecommendedStartWindowSchema.optional().nullable(),

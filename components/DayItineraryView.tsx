@@ -32,6 +32,11 @@ interface DayItineraryViewProps {
     startDate: string | null;
     endDate: string | null;
     durationDays: number | null;
+    arrivalAirport?: string | null;
+    departureAirport?: string | null;
+    arrivalTimePreference?: string | null;
+    departureTimePreference?: string | null;
+    transportMode?: "flight" | "train" | "car" | "bus" | "ferry" | "other";
   };
 }
 
@@ -587,6 +592,54 @@ export function DayItineraryView({
     return "Drive";
   }
 
+  const parseClockMinutes = (value?: string | null): number | null => {
+    if (!value) return null;
+    const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/i);
+    if (!match) return null;
+    let hour = Number(match[1]) % 12;
+    const minute = Number(match[2] || "0");
+    if (match[3].toUpperCase() === "PM") hour += 12;
+    if (minute < 0 || minute > 59) return null;
+    return hour * 60 + minute;
+  };
+
+  const getDayStartContext = useCallback(
+    (dayIndex: number, fallbackStayLabel?: string | null) => {
+      if (dayIndex !== 0) {
+        return {
+          startTitle: "Start from stay",
+          startLabel: fallbackStayLabel || null,
+          dayStartMinutes: 9 * 60 + 30,
+          availableVisitHours: 8,
+        };
+      }
+
+      const arrivalTiming = tripInfo?.arrivalTimePreference || "12:00 PM";
+      const arrivalAirport = tripInfo?.arrivalAirport || "arrival airport";
+      const arrivalMinutes = parseClockMinutes(arrivalTiming) ?? 12 * 60;
+      const isMorningArrival = arrivalMinutes < 12 * 60;
+      const startAfterArrival = Math.max(8 * 60 + 30, Math.min(19 * 60, arrivalMinutes + 120));
+      const availableVisitHours = Math.max(2.5, Math.min(8, (20 * 60 - startAfterArrival) / 60));
+
+      if (isMorningArrival) {
+        return {
+          startTitle: `Arrive at airport (${arrivalTiming})`,
+          startLabel: `${arrivalAirport} · assumed arrival ${arrivalTiming}`,
+          dayStartMinutes: Math.max(9 * 60, startAfterArrival),
+          availableVisitHours: Math.max(4, availableVisitHours),
+        };
+      }
+
+      return {
+        startTitle: `Arrival + hotel check-in (${arrivalTiming})`,
+        startLabel: `${arrivalAirport} · assumed arrival ${arrivalTiming}`,
+        dayStartMinutes: startAfterArrival,
+        availableVisitHours,
+      };
+    },
+    [tripInfo?.arrivalAirport, tripInfo?.arrivalTimePreference]
+  );
+
   const formatHourLabel = (hours: number): string => {
     const rounded = Math.round(hours * 10) / 10;
     if (Math.abs(rounded - 1) < 0.01) return "1 hr";
@@ -595,18 +648,22 @@ export function DayItineraryView({
 
   const DayTimeline = ({
     day,
+    dayIndex,
     startStayLabel,
     endStayLabel,
     startStayCoordinates,
     endStayCoordinates,
   }: {
     day: GroupedDay;
+    dayIndex: number;
     startStayLabel?: string | null;
     endStayLabel?: string | null;
     startStayCoordinates?: { lat: number; lng: number } | null;
     endStayCoordinates?: { lat: number; lng: number } | null;
   }) => {
-    const availableVisitHours = 8;
+    const startContext = getDayStartContext(dayIndex, startStayLabel);
+    const availableVisitHours = startContext.availableVisitHours;
+    const isLastDay = dayIndex === groupedDays.length - 1;
     const lunchHours = 1;
     const sortedActivities = sortActivitiesForTimeline(day.activities);
     const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
@@ -620,12 +677,12 @@ export function DayItineraryView({
     const firstActivity = sortedActivities[0];
     const lastActivity = sortedActivities[sortedActivities.length - 1];
     const stayStartCommuteMinutes =
-      startStayLabel && firstActivity && startStayCoordinates
+      startContext.startLabel && firstActivity && startStayCoordinates
         ? (commuteByLeg[buildStayStartLegId(day.dayNumber, firstActivity.id)]?.minutes ??
           estimateCommuteMinutes(startStayCoordinates, getCommutePoint(firstActivity)))
         : 0;
     const stayStartCommuteMode: CommuteMode =
-      startStayLabel && firstActivity && startStayCoordinates
+      startContext.startLabel && firstActivity && startStayCoordinates
         ? pickCommuteMode(startStayCoordinates, getCommutePoint(firstActivity), isRailFriendlyDestination)
         : isRailFriendlyDestination
           ? "TRAIN"
@@ -664,8 +721,11 @@ export function DayItineraryView({
       totalRequestedHours > 0 && totalRequestedHours > remainingForActivities && remainingForActivities > 0
         ? remainingForActivities / totalRequestedHours
         : 1;
-    const eveningCutoffMinutes = 18 * 60;
-    const defaultDayStartMinutes = 9 * 60 + 30;
+    const departureClock = tripInfo?.departureTimePreference || "6:00 PM";
+    const departureMinutes = parseClockMinutes(departureClock) ?? 18 * 60;
+    const prepBufferMinutes = tripInfo?.transportMode === "car" ? 180 : 150;
+    const eveningCutoffMinutes = isLastDay ? Math.max(10 * 60, departureMinutes - prepBufferMinutes) : 18 * 60;
+    const defaultDayStartMinutes = startContext.dayStartMinutes;
     const dayStartMinutes = earliestFixedStartMinutes != null ? Math.max(0, earliestFixedStartMinutes - stayStartCommuteMinutes - 15) : defaultDayStartMinutes;
     const estimatedDayEndMinutes = dayStartMinutes + Math.round((totalRequestedHours + lunchHours + totalCommuteHoursEstimate) * 60);
     const freeHoursBeforeEvening = Math.max(0, (eveningCutoffMinutes - estimatedDayEndMinutes) / 60);
@@ -678,10 +738,10 @@ export function DayItineraryView({
       type: "activity" | "commute" | "lunch" | "stay" | "free";
     }> = [];
 
-    if (startStayLabel) {
+    if (startContext.startLabel) {
       timelineRows.push({
-        label: "Start from stay",
-        detail: startStayLabel,
+        label: startContext.startTitle,
+        detail: startContext.startLabel,
         type: "stay",
       });
       if (stayStartCommuteMinutes > 0) {
@@ -763,8 +823,12 @@ export function DayItineraryView({
         });
       }
       timelineRows.push({
-        label: "End at night stay",
-        detail: endStayLabel,
+        label: isLastDay ? "Departure prep" : "End at night stay",
+        detail: isLastDay
+          ? `Checkout${
+              tripInfo?.transportMode === "car" ? ", return rental car," : ","
+            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure.`
+          : endStayLabel,
         type: "stay",
       });
     }
@@ -941,6 +1005,7 @@ export function DayItineraryView({
                     <div className="px-4 pb-6">
                       <DayTimeline
                         day={day}
+                        dayIndex={index}
                         startStayLabel={groupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
                         endStayLabel={day.nightStay?.label}
                         startStayCoordinates={groupedDays[index - 1]?.nightStay?.coordinates ?? day.nightStay?.coordinates}
