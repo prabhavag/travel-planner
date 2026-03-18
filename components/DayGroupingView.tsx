@@ -46,30 +46,30 @@ export function DayGroupingView({
   headerActions = null,
 }: DayGroupingViewProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  type DayTabKey = number | "unscheduled";
+  type CommuteMode = "TRAIN" | "TRANSIT" | "WALK" | "DRIVE";
   const [movingActivity, setMovingActivity] = useState<{
     id: string;
     fromDay: number;
   } | null>(null);
   const [collapsedActivityCards, setCollapsedActivityCards] = useState<Record<string, boolean>>({});
-  const [activeDayNumber, setActiveDayNumber] = useState<number | null>(groupedDays[0]?.dayNumber ?? null);
+  const [activeDayNumber, setActiveDayNumber] = useState<DayTabKey | null>(groupedDays[0]?.dayNumber ?? null);
   const [commuteByLeg, setCommuteByLeg] = useState<Record<string, { minutes: number; mode: CommuteMode }>>({});
-
-  type CommuteMode = "TRAIN" | "TRANSIT" | "WALK" | "DRIVE";
 
   const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
     `${dayNumber}:${fromId}->${toId}`;
   const buildStayStartLegId = (dayNumber: number, toId: string) => `${dayNumber}:stay-start->${toId}`;
   const buildStayEndLegId = (dayNumber: number, fromId: string) => `${dayNumber}:${fromId}->stay-end`;
 
-  const getStartStayCoordinates = useCallback((day: GroupedDay, dayIndex: number): { lat: number; lng: number } | null => {
+  const getStartStayCoordinates = useCallback((days: GroupedDay[], day: GroupedDay, dayIndex: number): { lat: number; lng: number } | null => {
     if (dayIndex > 0) {
-      return groupedDays[dayIndex - 1]?.nightStay?.coordinates ?? null;
+      return days[dayIndex - 1]?.nightStay?.coordinates ?? null;
     }
 
     // Day 1 fallback: use the selected night-stay location so the initial commute
     // is visible instead of being omitted entirely.
     return day.nightStay?.coordinates ?? null;
-  }, [groupedDays]);
+  }, []);
 
   const parseClockMinutes = useCallback((value?: string | null): number | null => {
     if (!value) return null;
@@ -167,6 +167,167 @@ export function DayGroupingView({
     return inferDaylightPreference(activity) === "night_only" ? sunsetMinutes : null;
   }, [inferDaylightPreference, sunsetMinutes]);
 
+  const displayPlan = useMemo(() => {
+    const roundToQuarterLocal = (value: number): number => Math.round(value / 15) * 15;
+    const estimateHours = (duration?: string | null): number => {
+      if (!duration) return 2;
+      const text = duration.toLowerCase().trim();
+      if (!text) return 2;
+      const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
+      if (rangeMatch) {
+        const min = Number(rangeMatch[1]);
+        const max = Number(rangeMatch[2]);
+        if (Number.isFinite(min) && Number.isFinite(max) && max >= min) return (min + max) / 2;
+      }
+      const singleHourMatch = text.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)/);
+      if (singleHourMatch) {
+        const value = Number(singleHourMatch[1]);
+        if (Number.isFinite(value)) return value;
+      }
+      if (/half\s*day/.test(text)) return 4;
+      if (/full\s*day|all\s*day/.test(text)) return 7;
+      if (/30\s*min/.test(text)) return 0.5;
+      if (/45\s*min/.test(text)) return 0.75;
+      return 2;
+    };
+
+    const sourceDayByActivityId: Record<string, number> = {};
+    groupedDays.forEach((day) => {
+      day.activities.forEach((activity) => {
+        sourceDayByActivityId[activity.id] = day.dayNumber;
+      });
+    });
+
+    const dayBudgets = groupedDays.map((day, dayIndex) => {
+      const arrivalMinutes = parseClockMinutes(tripInfo?.arrivalTimePreference) ?? 12 * 60;
+      const isMorningArrival = arrivalMinutes < 12 * 60;
+      const dayStartMinutes =
+        dayIndex === 0
+          ? Math.max(8 * 60 + 30, Math.min(19 * 60, arrivalMinutes + 120, isMorningArrival ? 11 * 60 : 19 * 60))
+          : 9 * 60 + 30;
+      const departureMinutes = parseClockMinutes(tripInfo?.departureTimePreference) ?? 18 * 60;
+      const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - 120);
+      const isFinalDay =
+        (tripEndDateKey && normalizeDateKey(day.date) === tripEndDateKey) || dayIndex === groupedDays.length - 1;
+      const dayEndMinutes = isFinalDay ? Math.max(dayStartMinutes + 120, airportArrivalDeadlineMinutes - 90) : 18 * 60;
+      const totalMinutes = Math.max(120, dayEndMinutes - dayStartMinutes - 75);
+      const daylightMinutes = Math.max(0, Math.min(dayEndMinutes, sunsetMinutes) - dayStartMinutes);
+      const nightMinutes = Math.max(0, dayEndMinutes - Math.max(dayStartMinutes, sunsetMinutes));
+
+      return {
+        dayNumber: day.dayNumber,
+        dayIndex,
+        dayStartMinutes,
+        dayEndMinutes,
+        remainingTotalMinutes: totalMinutes,
+        remainingDaylightMinutes: daylightMinutes,
+        remainingNightMinutes: nightMinutes,
+      };
+    });
+
+    const activities = groupedDays.flatMap((day, dayIndex) =>
+      day.activities.map((activity) => {
+        const timingPolicy = getActivityTimingPolicy(activity);
+        const estimatedHours = estimateHours(activity.estimatedDuration);
+        const requiredMinutes = Math.max(
+          roundToQuarterLocal(timingPolicy.minVisitMinutes),
+          roundToQuarterLocal(estimatedHours * 60 + timingPolicy.settleBufferMinutes)
+        );
+        const preference = inferDaylightPreference(activity);
+        const fixedMinutes = parseClockMinutes(activity.fixedStartTime);
+        return {
+          activity,
+          originalDayNumber: day.dayNumber,
+          originalDayIndex: dayIndex,
+          requiredMinutes,
+          preference,
+          fixedMinutes,
+        };
+      })
+    );
+
+    activities.sort((a, b) => {
+      const fixedRankA = a.activity.isFixedStartTime ? 0 : 1;
+      const fixedRankB = b.activity.isFixedStartTime ? 0 : 1;
+      if (fixedRankA !== fixedRankB) return fixedRankA - fixedRankB;
+      const prefRank = (pref: "daylight_only" | "night_only" | "flexible") =>
+        pref === "daylight_only" ? 0 : pref === "night_only" ? 1 : 2;
+      const prefDelta = prefRank(a.preference) - prefRank(b.preference);
+      if (prefDelta !== 0) return prefDelta;
+      return b.requiredMinutes - a.requiredMinutes;
+    });
+
+    const assignedByDayNumber: Record<number, SuggestedActivity[]> = {};
+    dayBudgets.forEach((budget) => {
+      assignedByDayNumber[budget.dayNumber] = [];
+    });
+    const unscheduledActivities: SuggestedActivity[] = [];
+
+    const canFit = (
+      budget: (typeof dayBudgets)[number],
+      candidate: (typeof activities)[number]
+    ): boolean => {
+      if (candidate.requiredMinutes > budget.remainingTotalMinutes) return false;
+      if (candidate.preference === "daylight_only" && candidate.requiredMinutes > budget.remainingDaylightMinutes) return false;
+      if (candidate.preference === "night_only" && candidate.requiredMinutes > budget.remainingNightMinutes) return false;
+      if (candidate.activity.isFixedStartTime && candidate.fixedMinutes != null) {
+        if (candidate.fixedMinutes < budget.dayStartMinutes || candidate.fixedMinutes > budget.dayEndMinutes - 45) return false;
+      }
+      return true;
+    };
+
+    activities.forEach((candidate) => {
+      const orderedBudgets = [...dayBudgets].sort((a, b) => {
+        const aSame = a.dayNumber === candidate.originalDayNumber ? 0 : 1;
+        const bSame = b.dayNumber === candidate.originalDayNumber ? 0 : 1;
+        if (aSame !== bSame) return aSame - bSame;
+        const aDistance = Math.abs(a.dayIndex - candidate.originalDayIndex);
+        const bDistance = Math.abs(b.dayIndex - candidate.originalDayIndex);
+        if (aDistance !== bDistance) return aDistance - bDistance;
+        return b.remainingTotalMinutes - a.remainingTotalMinutes;
+      });
+
+      const targetBudget = orderedBudgets.find((budget) => canFit(budget, candidate));
+      if (!targetBudget) {
+        unscheduledActivities.push(candidate.activity);
+        return;
+      }
+
+      assignedByDayNumber[targetBudget.dayNumber].push(candidate.activity);
+      targetBudget.remainingTotalMinutes -= candidate.requiredMinutes;
+      if (candidate.preference === "daylight_only") {
+        targetBudget.remainingDaylightMinutes -= candidate.requiredMinutes;
+      } else if (candidate.preference === "night_only") {
+        targetBudget.remainingNightMinutes -= candidate.requiredMinutes;
+      }
+    });
+
+    const displayGroupedDays = groupedDays.map((day) => ({
+      ...day,
+      activities: assignedByDayNumber[day.dayNumber] ?? [],
+    }));
+
+    return {
+      groupedDays: displayGroupedDays,
+      unscheduledActivities,
+      sourceDayByActivityId,
+    };
+  }, [
+    getActivityTimingPolicy,
+    groupedDays,
+    inferDaylightPreference,
+    normalizeDateKey,
+    parseClockMinutes,
+    sunsetMinutes,
+    tripEndDateKey,
+    tripInfo?.arrivalTimePreference,
+    tripInfo?.departureTimePreference,
+  ]);
+
+  const displayGroupedDays = displayPlan.groupedDays;
+  const unscheduledActivities = displayPlan.unscheduledActivities;
+  const sourceDayByActivityId = displayPlan.sourceDayByActivityId;
+
   const sortActivitiesForTimeline = useCallback((activities: SuggestedActivity[]) => {
     const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
       morning: 0,
@@ -228,11 +389,11 @@ export function DayGroupingView({
       mode: CommuteMode;
       travelMode: "DRIVE" | "WALK" | "TRANSIT";
     }> = [];
-    groupedDays.forEach((day, dayIndex) => {
+    displayGroupedDays.forEach((day, dayIndex) => {
       const sorted = sortActivitiesForTimeline(day.activities);
       const first = sorted[0];
       const last = sorted[sorted.length - 1];
-      const startStayCoordinates = getStartStayCoordinates(day, dayIndex);
+      const startStayCoordinates = getStartStayCoordinates(displayGroupedDays, day, dayIndex);
       const endStayCoordinates = day.nightStay?.coordinates;
 
       if (first && startStayCoordinates) {
@@ -280,7 +441,7 @@ export function DayGroupingView({
       }
     });
     return legs;
-  }, [groupedDays, sortActivitiesForTimeline, isRailFriendlyDestination, getActivityEndPoint, getActivityStartPoint, getStartStayCoordinates]);
+  }, [displayGroupedDays, sortActivitiesForTimeline, isRailFriendlyDestination, getActivityEndPoint, getActivityStartPoint, getStartStayCoordinates]);
 
   const commuteLegById = useMemo(() => {
     const next: Record<string, { mode: CommuteMode; origin: { lat: number; lng: number }; destination: { lat: number; lng: number } }> =
@@ -330,13 +491,17 @@ export function DayGroupingView({
     if (scrollContainerRef.current && onDayChange) {
       const container = scrollContainerRef.current;
       const index = Math.round(container.scrollLeft / container.clientWidth);
-      const activeDay = groupedDays[index]?.dayNumber;
-      if (activeDay) {
+      if (index === displayGroupedDays.length && unscheduledActivities.length > 0) {
+        setActiveDayNumber("unscheduled");
+        return;
+      }
+      const activeDay = displayGroupedDays[index]?.dayNumber;
+      if (activeDay != null) {
         setActiveDayNumber(activeDay);
         onDayChange(activeDay);
       }
     }
-  }, [groupedDays, onDayChange]);
+  }, [displayGroupedDays, onDayChange, unscheduledActivities.length]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -347,28 +512,38 @@ export function DayGroupingView({
   }, [handleScroll]);
 
   useEffect(() => {
-    if (groupedDays.length === 0) {
-      setActiveDayNumber(null);
+    if (displayGroupedDays.length === 0) {
+      setActiveDayNumber(unscheduledActivities.length > 0 ? "unscheduled" : null);
       return;
     }
-    if (!activeDayNumber || !groupedDays.some((day) => day.dayNumber === activeDayNumber)) {
-      setActiveDayNumber(groupedDays[0].dayNumber);
+    if (
+      activeDayNumber == null ||
+      (activeDayNumber !== "unscheduled" &&
+        !displayGroupedDays.some((day) => day.dayNumber === activeDayNumber))
+    ) {
+      setActiveDayNumber(displayGroupedDays[0].dayNumber);
     }
-  }, [groupedDays, activeDayNumber]);
+  }, [displayGroupedDays, activeDayNumber, unscheduledActivities.length]);
 
   useEffect(() => {
     const nextCollapsed: Record<string, boolean> = {};
-    for (const day of groupedDays) {
+    for (const day of displayGroupedDays) {
       for (const activity of day.activities) {
         nextCollapsed[activity.id] = true;
       }
     }
+    for (const activity of unscheduledActivities) {
+      nextCollapsed[activity.id] = true;
+    }
     setCollapsedActivityCards(nextCollapsed);
-  }, [groupedDays]);
+  }, [displayGroupedDays, unscheduledActivities]);
 
-  const scrollToDay = (dayNumber: number) => {
+  const scrollToDay = (dayNumber: DayTabKey) => {
     if (scrollContainerRef.current) {
-      const index = groupedDays.findIndex((day) => day.dayNumber === dayNumber);
+      const index =
+        dayNumber === "unscheduled"
+          ? displayGroupedDays.length
+          : displayGroupedDays.findIndex((day) => day.dayNumber === dayNumber);
       if (index === -1) return;
       const scrollAmount = scrollContainerRef.current.clientWidth * index;
       scrollContainerRef.current.scrollTo({
@@ -376,7 +551,7 @@ export function DayGroupingView({
         behavior: "smooth",
       });
       setActiveDayNumber(dayNumber);
-      onDayChange?.(dayNumber);
+      if (dayNumber !== "unscheduled") onDayChange?.(dayNumber);
     }
   };
 
@@ -405,12 +580,14 @@ export function DayGroupingView({
   const ActivityItem = ({
     activity,
     dayNumber,
+    sourceDayNumber,
     index,
     timeSlotLabel,
     affordLabel,
   }: {
     activity: SuggestedActivity;
     dayNumber: number;
+    sourceDayNumber?: number;
     index: number;
     timeSlotLabel?: string;
     affordLabel?: string;
@@ -427,7 +604,7 @@ export function DayGroupingView({
                 <SelectValue placeholder="Move to day..." />
               </SelectTrigger>
               <SelectContent>
-                {groupedDays.map((day) => (
+                {displayGroupedDays.map((day) => (
                   <SelectItem key={day.dayNumber} value={day.dayNumber.toString()}>
                     Day {day.dayNumber}
                   </SelectItem>
@@ -442,7 +619,7 @@ export function DayGroupingView({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => handleMoveStart(activity.id, dayNumber)}
+            onClick={() => handleMoveStart(activity.id, sourceDayNumber ?? dayNumber)}
             className="w-full h-8 text-[10px] font-medium text-gray-500 hover:text-primary hover:border-primary transition-colors"
           >
             Change Day
@@ -757,6 +934,7 @@ export function DayGroupingView({
     startStayCoordinates?: { lat: number; lng: number } | null;
     endStayCoordinates?: { lat: number; lng: number } | null;
   }) => {
+    const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = 90;
     const startContext = getDayStartContext(dayIndex, startStayLabel);
     const availableVisitHours = startContext.availableVisitHours;
     const isFinalDepartureDay = isDepartureDay(day, dayIndex);
@@ -795,7 +973,9 @@ export function DayGroupingView({
         : isRailFriendlyDestination
           ? "TRAIN"
           : "DRIVE";
-    const totalCommuteHoursEstimate = (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
+    const endOfDayCommuteMinutes = isFinalDepartureDay ? DEPARTURE_TRANSFER_MINUTES_ESTIMATE : stayEndCommuteMinutes;
+    const endOfDayCommuteMode: CommuteMode = isFinalDepartureDay ? "DRIVE" : stayEndCommuteMode;
+    const totalCommuteHoursEstimate = (totalCommuteMinutesEstimate + stayStartCommuteMinutes + endOfDayCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
     const totalRequestedHours = day.activities.reduce((sum, activity) => {
       const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
@@ -867,10 +1047,10 @@ export function DayGroupingView({
     const departureClock = tripInfo?.departureTimePreference || "6:00 PM";
     const departureMinutes = parseClockMinutes(departureClock) ?? 18 * 60;
     const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - airportArrivalLeadMinutes);
-    const bufferedStayEndCommuteMinutes =
-      stayEndCommuteMinutes > 0 ? roundToQuarter(stayEndCommuteMinutes + commuteTransitionBufferMinutes) : 0;
+    const bufferedEndOfDayCommuteMinutes =
+      endOfDayCommuteMinutes > 0 ? roundToQuarter(endOfDayCommuteMinutes + commuteTransitionBufferMinutes) : 0;
     const eveningCutoffMinutes = isFinalDepartureDay
-      ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedStayEndCommuteMinutes)
+      ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedEndOfDayCommuteMinutes)
       : 18 * 60;
     const lunchMinStart = 12 * 60;
     const lunchTargetStart = 12 * 60 + 30;
@@ -964,44 +1144,18 @@ export function DayGroupingView({
           : null;
       const combinedWarning = [lateStartWarning, daylightWarning, daylightConflictWarning, nightOnlyWarning].filter(Boolean).join(" ");
       const lunchMinutes = roundToQuarter(60 + 15);
-      const hasDaylightWindow = daylightCapMinutes != null;
-
-      // Hard guard: do not schedule daylight-only activities after sunset.
-      if (hasDaylightWindow && roundToQuarter(cursorMinutes) >= (daylightCapMinutes as number)) {
-        timelineItems.push({
-          type: "continue",
-          id: `reschedule-daylight-${activity.id}`,
-          title: `Reschedule ${activity.name}`,
-          detail: `Needs daylight. No daylight remains after ${toClockLabel(daylightCapMinutes as number)}.`,
-          timeRange: "Needs earlier daylight slot",
-        });
-        return;
-      }
-
       const scheduledWindowMinutes = Math.max(0, activityEnd - activityStart);
-      if (scheduledWindowMinutes < minimumActivityMinutes) {
-        const daylightNote =
-          daylightCapMinutes != null
-            ? `Latest daylight cutoff is ${toClockLabel(daylightCapMinutes)}.`
-            : "Current slot is too short.";
-        timelineItems.push({
-          type: "continue",
-          id: `reschedule-short-slot-${activity.id}`,
-          title: `Reschedule ${activity.name}`,
-          detail: `Needs at least ${minimumActivityMinutes} min, but only ${scheduledWindowMinutes} min fits. ${daylightNote}`,
-          timeRange: `Needs a ${minimumActivityMinutes}+ min slot`,
-        });
-        return;
-      }
+      const effectiveActivityEnd =
+        scheduledWindowMinutes < minimumActivityMinutes ? activityStart + minimumActivityMinutes : activityEnd;
 
       // If a long activity crosses lunch, split it into before-lunch and continue-after-lunch.
-      const crossesLunchWindow = !lunchInserted && activityStart < lunchTargetStart && activityEnd > lunchTargetStart;
+      const crossesLunchWindow = !lunchInserted && activityStart < lunchTargetStart && effectiveActivityEnd > lunchTargetStart;
       if (crossesLunchWindow) {
         const lunchStart = roundToQuarter(Math.max(lunchTargetStart, lunchMinStart));
         const lunchEnd = lunchStart + lunchMinutes;
         const beforeLunchEnd = Math.max(activityStart + 30, lunchStart);
         const afterLunchStart = lunchEnd;
-        const afterLunchEnd = afterLunchStart + Math.max(30, activityEnd - beforeLunchEnd);
+        const afterLunchEnd = afterLunchStart + Math.max(30, effectiveActivityEnd - beforeLunchEnd);
         trackActivityMinutes(activityStart, beforeLunchEnd);
         trackActivityMinutes(afterLunchStart, afterLunchEnd);
 
@@ -1054,10 +1208,11 @@ export function DayGroupingView({
             : Math.max(roundToQuarter(cursorMinutes), nightStartFloorMinutes ?? 0);
         const uncappedNextActivityEnd = nextActivityStart + activityMinutes;
         const canApplyDaylightCapForNext = daylightCapMinutes != null && daylightCapMinutes > nextActivityStart;
-        const nextActivityEnd =
+        const nextActivityEndCapped =
           canApplyDaylightCapForNext && daylightCapMinutes != null
             ? Math.min(uncappedNextActivityEnd, daylightCapMinutes)
             : uncappedNextActivityEnd;
+        const nextActivityEnd = Math.max(nextActivityEndCapped, nextActivityStart + minimumActivityMinutes);
         trackActivityMinutes(nextActivityStart, nextActivityEnd);
         timelineItems.push({
           type: "activity",
@@ -1144,17 +1299,19 @@ export function DayGroupingView({
     }
     const showFreeSlotNotice = freeSlotMinutesBeforeEvening >= 45;
 
-    if (endStayLabel) {
-      if (stayEndCommuteMinutes > 0) {
-        const bufferedCommuteMinutes = roundToQuarter(stayEndCommuteMinutes + commuteTransitionBufferMinutes);
+    if (isFinalDepartureDay || endStayLabel) {
+      if (endOfDayCommuteMinutes > 0) {
+        const bufferedCommuteMinutes = roundToQuarter(endOfDayCommuteMinutes + commuteTransitionBufferMinutes);
         const commuteStart = roundToQuarter(cursorMinutes);
         const commuteEnd = commuteStart + bufferedCommuteMinutes;
         scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
         timelineItems.push({
           type: "commute",
           id: `commute-stay-end-${day.dayNumber}`,
-          title: "Commute",
-          detail: `${commuteModeLabel(stayEndCommuteMode)} · Approx ${stayEndCommuteMinutes} min`,
+          title: isFinalDepartureDay ? "Airport transfer" : "Commute",
+          detail: isFinalDepartureDay
+            ? `${commuteModeLabel(endOfDayCommuteMode)} · Approx ${endOfDayCommuteMinutes} min (estimated)`
+            : `${commuteModeLabel(endOfDayCommuteMode)} · Approx ${endOfDayCommuteMinutes} min`,
           timeRange: toRangeLabel(commuteStart, commuteEnd),
         });
         cursorMinutes = commuteEnd;
@@ -1163,9 +1320,9 @@ export function DayGroupingView({
           timelineItems.push({
             type: "continue",
             id: `reschedule-airport-buffer-${day.dayNumber}`,
-            title: "Reschedule before departure",
+            title: "Departure timing warning",
             detail: `Airport arrival target is ${toClockLabel(airportArrivalDeadlineMinutes)} (2 hr before ${departureClock}). Current plan arrives ${latenessMinutes} min late.`,
-            timeRange: "Move/remove earlier activity",
+            timeRange: "Schedule check needed",
           });
         }
       }
@@ -1176,8 +1333,8 @@ export function DayGroupingView({
         detail: isFinalDepartureDay
           ? `Checkout${
               tripInfo?.transportMode === "car" ? ", return rental car," : ","
-            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure. Target airport arrival by ${toClockLabel(airportArrivalDeadlineMinutes)}.`
-          : endStayLabel,
+            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure. Target airport arrival by ${toClockLabel(airportArrivalDeadlineMinutes)}. Airport transfer shown above is an estimate.`
+          : (endStayLabel || "End at night stay"),
       });
     }
 
@@ -1234,6 +1391,7 @@ export function DayGroupingView({
                     <ActivityItem
                       activity={item.activity}
                       dayNumber={day.dayNumber}
+                      sourceDayNumber={sourceDayByActivityId[item.activity.id]}
                       index={sortedActivities.findIndex((a) => a.id === item.activity.id)}
                       timeSlotLabel={item.timeRange}
                       affordLabel={item.affordLabel}
@@ -1335,7 +1493,7 @@ export function DayGroupingView({
             <span className="text-[10px] text-gray-400">Timeline is approximate. Daily budget: 8 hrs</span>
           </div>
           <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
-            {groupedDays.map((day) => {
+            {displayGroupedDays.map((day) => {
               const dayColor = getDayColor(day.dayNumber);
               const isActive = activeDayNumber === day.dayNumber;
               return (
@@ -1357,6 +1515,23 @@ export function DayGroupingView({
                 </Button>
               );
             })}
+            {unscheduledActivities.length > 0 ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => scrollToDay("unscheduled")}
+                className="h-8 px-3 whitespace-nowrap border font-semibold transition-colors"
+                style={{
+                  backgroundColor: activeDayNumber === "unscheduled" ? "#334155" : "#f1f5f9",
+                  borderColor: activeDayNumber === "unscheduled" ? "#334155" : "#cbd5e1",
+                  color: activeDayNumber === "unscheduled" ? "#FFFFFF" : "#334155",
+                  boxShadow: activeDayNumber === "unscheduled" ? "0 0 0 2px #33415533" : "none",
+                }}
+              >
+                Unscheduled ({unscheduledActivities.length})
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -1366,7 +1541,9 @@ export function DayGroupingView({
           className="flex-1 flex overflow-x-auto snap-x snap-mandatory scrollbar-none"
           style={{ scrollBehavior: 'smooth' }}
         >
-          {groupedDays.map((day, index) => (
+          {displayGroupedDays.map((day, index) => {
+            const isFinalDepartureDay = isDepartureDay(day, index);
+            return (
             <div key={day.dayNumber} className="w-full flex-shrink-0 snap-center px-2">
               <Card className="h-full border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
                 <CardHeader className="pb-3 shrink-0">
@@ -1381,13 +1558,13 @@ export function DayGroupingView({
                         </span>
                       </div>
                       <CardTitle className="text-xl">{day.theme}</CardTitle>
-                      {day.nightStay?.label && (
+                      {day.nightStay?.label && !isFinalDepartureDay && (
                         <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
                           <Home className="h-3.5 w-3.5" />
                           Night stay: {day.nightStay.label}
                         </div>
                       )}
-                      {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && (
+                      {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && !isFinalDepartureDay && (
                         <div className="mt-2 space-y-1 text-xs text-slate-600">
                           {day.nightStay.candidates.slice(0, 3).map((candidate) => (
                             <div key={candidate.label}>
@@ -1406,18 +1583,52 @@ export function DayGroupingView({
                       <DayTimelineRows
                         day={day}
                         dayIndex={index}
-                        startStayLabel={groupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
-                        endStayLabel={day.nightStay?.label}
-                        startStayCoordinates={getStartStayCoordinates(day, index)}
-                        endStayCoordinates={day.nightStay?.coordinates}
+                        startStayLabel={displayGroupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
+                        endStayLabel={isFinalDepartureDay ? null : day.nightStay?.label}
+                        startStayCoordinates={getStartStayCoordinates(displayGroupedDays, day, index)}
+                        endStayCoordinates={isFinalDepartureDay ? null : day.nightStay?.coordinates}
                       />
                     </div>
                   </ScrollArea>
                 </CardContent>
               </Card>
             </div>
-          ))}
-          {groupedDays.length === 0 && (
+            );
+          })}
+          {unscheduledActivities.length > 0 ? (
+            <div className="w-full flex-shrink-0 snap-center px-2">
+              <Card className="h-full border-t-4 border-slate-500 flex flex-col">
+                <CardHeader className="pb-3 shrink-0">
+                  <div className="space-y-1">
+                    <Badge className="h-6 px-2 bg-slate-100 text-slate-700 border border-slate-200">
+                      Unscheduled Activities
+                    </Badge>
+                    <CardTitle className="text-xl">Needs Manual Placement</CardTitle>
+                    <p className="text-xs text-gray-500">
+                      These could not be auto-fit within day/time constraints. Move them into a day.
+                    </p>
+                  </div>
+                </CardHeader>
+                <CardContent className="flex-1 overflow-hidden p-0">
+                  <ScrollArea className="h-full px-4 pb-6">
+                    <div className="space-y-3">
+                      {unscheduledActivities.map((activity, index) => (
+                        <ActivityItem
+                          key={`unscheduled-${activity.id}`}
+                          activity={activity}
+                          dayNumber={sourceDayByActivityId[activity.id] ?? 1}
+                          sourceDayNumber={sourceDayByActivityId[activity.id]}
+                          index={index}
+                          affordLabel="Auto-placement could not fit this activity."
+                        />
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            </div>
+          ) : null}
+          {displayGroupedDays.length === 0 && unscheduledActivities.length === 0 && (
             <div className="w-full py-12 flex flex-col items-center justify-center text-gray-400 bg-gray-50 rounded-xl border border-dashed mx-2">
               <MapPin className="w-8 h-8 mb-2 opacity-20" />
               <p>No activities planned yet</p>

@@ -696,6 +696,7 @@ export function DayItineraryView({
     startStayCoordinates?: { lat: number; lng: number } | null;
     endStayCoordinates?: { lat: number; lng: number } | null;
   }) => {
+    const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = 90;
     const startContext = getDayStartContext(dayIndex, startStayLabel);
     const availableVisitHours = startContext.availableVisitHours;
     const isFinalDepartureDay = isDepartureDay(day, dayIndex);
@@ -733,8 +734,10 @@ export function DayItineraryView({
         : isRailFriendlyDestination
           ? "TRAIN"
           : "DRIVE";
+    const endOfDayCommuteMinutes = isFinalDepartureDay ? DEPARTURE_TRANSFER_MINUTES_ESTIMATE : stayEndCommuteMinutes;
+    const endOfDayCommuteMode: CommuteMode = isFinalDepartureDay ? "DRIVE" : stayEndCommuteMode;
     const totalCommuteHoursEstimate =
-      (totalCommuteMinutesEstimate + stayStartCommuteMinutes + stayEndCommuteMinutes) / 60;
+      (totalCommuteMinutesEstimate + stayStartCommuteMinutes + endOfDayCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
     const totalRequestedHours = day.activities.reduce(
       (sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration) * activityLoadFactor(activity),
@@ -761,10 +764,10 @@ export function DayItineraryView({
     const airportArrivalLeadMinutes = 120;
     const commuteTransitionBufferMinutes = 20;
     const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - airportArrivalLeadMinutes);
-    const bufferedStayEndCommuteMinutes =
-      stayEndCommuteMinutes > 0 ? Math.round((stayEndCommuteMinutes + commuteTransitionBufferMinutes) / 15) * 15 : 0;
+    const bufferedEndOfDayCommuteMinutes =
+      endOfDayCommuteMinutes > 0 ? Math.round((endOfDayCommuteMinutes + commuteTransitionBufferMinutes) / 15) * 15 : 0;
     const eveningCutoffMinutes = isFinalDepartureDay
-      ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedStayEndCommuteMinutes)
+      ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedEndOfDayCommuteMinutes)
       : 18 * 60;
     const defaultDayStartMinutes = startContext.dayStartMinutes;
     const dayStartMinutes = earliestFixedStartMinutes != null ? Math.max(0, earliestFixedStartMinutes - stayStartCommuteMinutes - 15) : defaultDayStartMinutes;
@@ -857,11 +860,13 @@ export function DayItineraryView({
       });
     }
 
-    if (endStayLabel) {
-      if (stayEndCommuteMinutes > 0) {
+    if (isFinalDepartureDay || endStayLabel) {
+      if (endOfDayCommuteMinutes > 0) {
         timelineRows.push({
-          label: "Commute to night stay",
-          detail: `${commuteModeLabel(stayEndCommuteMode)} · Approx ${stayEndCommuteMinutes} min`,
+          label: isFinalDepartureDay ? "Airport transfer" : "Commute to night stay",
+          detail: isFinalDepartureDay
+            ? `${commuteModeLabel(endOfDayCommuteMode)} · Approx ${endOfDayCommuteMinutes} min (estimated)`
+            : `${commuteModeLabel(endOfDayCommuteMode)} · Approx ${endOfDayCommuteMinutes} min`,
           type: "commute",
         });
       }
@@ -870,8 +875,8 @@ export function DayItineraryView({
         detail: isFinalDepartureDay
           ? `Checkout${
               tripInfo?.transportMode === "car" ? ", return rental car," : ","
-            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure. Target airport arrival by ${toClockLabel(airportArrivalDeadlineMinutes)}.`
-          : endStayLabel,
+            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure. Target airport arrival by ${toClockLabel(airportArrivalDeadlineMinutes)}. Airport transfer shown above is an estimate.`
+          : (endStayLabel || "End at night stay"),
         type: "stay",
       });
     }
@@ -995,7 +1000,9 @@ export function DayItineraryView({
         {groupedDays.length > 0 ? (
           <ScrollArea className="flex-1 min-h-0 px-2">
             <div className="space-y-4 pb-6">
-              {groupedDays.map((day, index) => (
+              {groupedDays.map((day, index) => {
+                const isFinalDepartureDay = isDepartureDay(day, index);
+                return (
                 <Card key={day.dayNumber} className="border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
                   <CardHeader className="pb-3 shrink-0">
                     <div className="flex items-center justify-between gap-3">
@@ -1009,13 +1016,13 @@ export function DayItineraryView({
                           </span>
                         </div>
                         <CardTitle className="text-xl">{day.theme}</CardTitle>
-                        {day.nightStay?.label && (
+                        {day.nightStay?.label && !isFinalDepartureDay && (
                           <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
                             <Home className="h-3.5 w-3.5" />
                             Night stay: {day.nightStay.label}
                           </div>
                         )}
-                        {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && (
+                        {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && !isFinalDepartureDay && (
                           <div className="mt-2 space-y-1 text-xs text-slate-600">
                             {day.nightStay.candidates.slice(0, 3).map((candidate) => (
                               <div key={candidate.label}>
@@ -1050,9 +1057,9 @@ export function DayItineraryView({
                         day={day}
                         dayIndex={index}
                         startStayLabel={groupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
-                        endStayLabel={day.nightStay?.label}
+                        endStayLabel={isFinalDepartureDay ? null : day.nightStay?.label}
                         startStayCoordinates={groupedDays[index - 1]?.nightStay?.coordinates ?? day.nightStay?.coordinates}
-                        endStayCoordinates={day.nightStay?.coordinates}
+                        endStayCoordinates={isFinalDepartureDay ? null : day.nightStay?.coordinates}
                       />
                       <div className="space-y-1">
                         {day.activities.map((activity, index) => (
@@ -1070,7 +1077,8 @@ export function DayItineraryView({
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           </ScrollArea>
         ) : (
