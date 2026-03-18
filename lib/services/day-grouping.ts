@@ -131,7 +131,7 @@ function cloneDefaultSlotCapacity(): Record<Exclude<SuggestedActivity["bestTimeO
   };
 }
 
-function parseClockMinutes(value: string | null | undefined): number | null {
+export function parseClockMinutes(value: string | null | undefined): number | null {
   if (!value) return null;
   const text = value.trim();
   const amPmMatch = text.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/i);
@@ -234,7 +234,7 @@ function normalizeType(type: string): string {
   return TYPE_THEME_MAP[normalized] ?? "Highlights";
 }
 
-function parseDurationHours(estimatedDuration: string | null | undefined): number {
+export function parseDurationHours(estimatedDuration: string | null | undefined): number {
   if (!estimatedDuration) return 2;
   const text = estimatedDuration.toLowerCase();
 
@@ -248,13 +248,25 @@ function parseDurationHours(estimatedDuration: string | null | undefined): numbe
   const hasHours = text.includes("hour") || text.includes("hr");
   const isRange = /-|to/.test(text) && numbers.length >= 2;
 
-  let value = isRange ? (numbers[0] + numbers[1]) / 2 : numbers[0];
+  if (isRange) {
+    let value = (numbers[0] + numbers[1]) / 2;
+    if (hasMinutes && !hasHours) value /= 60;
+    return Math.max(0.5, Math.min(10, value));
+  }
+
+  // Improved: sum hours and minutes if both are present
+  // e.g. "1 hour 30 mins"
+  if (hasHours && hasMinutes && numbers.length >= 2) {
+    return Math.max(0.5, Math.min(10, numbers[0] + numbers[1] / 60));
+  }
+
+  let value = numbers[0];
   if (hasMinutes && !hasHours) value /= 60;
 
   return Math.max(0.5, Math.min(10, value));
 }
 
-function parseFixedStartTimeMinutes(value: string | null | undefined): number | null {
+export function parseFixedStartTimeMinutes(value: string | null | undefined): number | null {
   if (!value) return null;
   const text = value.trim().toLowerCase();
   if (!text) return null;
@@ -812,18 +824,9 @@ function slotForHour(hour: number): Exclude<SuggestedActivity["bestTimeOfDay"], 
 }
 
 function computeDayCommuteProxy(
-  day: WorkingDay,
-  preparedMap: Map<string, PreparedActivity>,
+  activities: SuggestedActivity[],
   commuteMinutesByPair: ActivityCommuteMatrix
 ): number {
-  const activities = buildOptimalDayRoute(
-    day.activityIds
-      .map((id) => preparedMap.get(id)?.activity)
-      .filter((activity): activity is SuggestedActivity => activity !== undefined),
-    preparedMap,
-    commuteMinutesByPair
-  );
-
   let commuteProxy = 0;
   for (let i = 1; i < activities.length; i += 1) {
     commuteProxy += activityCommuteMinutes(activities[i - 1], activities[i], commuteMinutesByPair);
@@ -831,19 +834,32 @@ function computeDayCommuteProxy(
   return commuteProxy;
 }
 
-function computeDayBaseCost(
-  day: WorkingDay,
+export type DayStructuralStats = {
+  structuralCost: number;
+  commuteProxy: number;
+  totalHours: number;
+};
+
+export const structuralStatsCache = new Map<string, DayStructuralStats>();
+
+export function getDayStructuralStats(
+  activityIds: string[],
   preparedMap: Map<string, PreparedActivity>,
-  targetHours: number,
   commuteMinutesByPair: ActivityCommuteMatrix,
   dayCapacity: DayCapacityProfile
-): number {
-  if (day.activityIds.length === 0) {
-    return targetHours * COST_WEIGHTS.balance;
+): DayStructuralStats {
+  const cacheKey = activityIds.slice().sort().join(",");
+  const cached = structuralStatsCache.get(cacheKey);
+  if (cached) return cached;
+
+  if (activityIds.length === 0) {
+    const stats = { structuralCost: 0, commuteProxy: 0, totalHours: 0 };
+    structuralStatsCache.set(cacheKey, stats);
+    return stats;
   }
 
   const activities = buildOptimalDayRoute(
-    day.activityIds
+    activityIds
       .map((id) => preparedMap.get(id)?.activity)
       .filter((activity): activity is SuggestedActivity => activity !== undefined),
     preparedMap,
@@ -851,9 +867,8 @@ function computeDayBaseCost(
   );
 
   const totalHours = activities.reduce((sum, activity) => sum + getLoadDurationHours(preparedMap, activity.id), 0);
-  const overflow = Math.max(0, totalHours - dayCapacity.maxHours);
 
-  const commuteProxy = computeDayCommuteProxy(day, preparedMap, commuteMinutesByPair);
+  const commuteProxy = computeDayCommuteProxy(activities, commuteMinutesByPair);
   const legDistances: number[] = [];
   for (let i = 1; i < activities.length; i += 1) {
     legDistances.push(activityCommuteMinutes(activities[i - 1], activities[i], commuteMinutesByPair));
@@ -903,8 +918,7 @@ function computeDayBaseCost(
     currentHour += duration;
   }
 
-  const balancePenalty = Math.abs(totalHours - targetHours);
-
+  const overflow = Math.max(0, totalHours - dayCapacity.maxHours);
   const fullDayActivities = activities.filter((activity) => preparedMap.get(activity.id)?.isFullDay);
   let overflowPenalty = overflow * COST_WEIGHTS.overflow + overflow * overflow * COST_WEIGHTS.overflowQuadratic;
   let fullDayFitPenalty = 0;
@@ -922,7 +936,6 @@ function computeDayBaseCost(
         minDistance = Math.min(minDistance, activityDistanceProxy(activity, fullDayActivity));
       }
 
-      // Smooth proximity score in [0, 1]: closer activities get more "same full-day cluster" credit.
       const proximityScore = 1 / (1 + minDistance);
       nearbyWeightedHours += duration * proximityScore;
       farWeightedHours += duration * (1 - proximityScore);
@@ -935,7 +948,7 @@ function computeDayBaseCost(
     fullDayFitPenalty = farWeightedHours * COST_WEIGHTS.fullDayFarPenalty;
   }
 
-  return (
+  const structuralCost =
     overflowPenalty +
     commuteProxy * COST_WEIGHTS.commute +
     longLegPenalty * COST_WEIGHTS.longLeg +
@@ -944,9 +957,11 @@ function computeDayBaseCost(
     slotOverflowPenalty * COST_WEIGHTS.slotOverflow +
     slotMismatchPenalty * COST_WEIGHTS.slotMismatch +
     recommendedStartMissPenalty * COST_WEIGHTS.recommendedStartMiss +
-    balancePenalty * COST_WEIGHTS.balance +
-    fullDayFitPenalty
-  );
+    fullDayFitPenalty;
+
+  const stats = { structuralCost, commuteProxy, totalHours };
+  structuralStatsCache.set(cacheKey, stats);
+  return stats;
 }
 
 function computeTotalCost(
@@ -955,29 +970,38 @@ function computeTotalCost(
   commuteMinutesByPair: ActivityCommuteMatrix,
   dayCapacities: DayCapacityProfile[]
 ): number {
-  const allActivityIds = days.flatMap((day) => day.activityIds);
-  const totalHours = allActivityIds.reduce((sum, id) => sum + getLoadDurationHours(preparedMap, id), 0);
-  const totalCapacityWeight = dayCapacities.reduce((sum, profile) => sum + profile.targetWeight, 0);
-
-  const baseCost = days.reduce(
-    (sum, day, dayIndex) => {
-      const profile = dayCapacities[dayIndex] || {
+  const dayStats = days.map((day, i) =>
+    getDayStructuralStats(
+      day.activityIds,
+      preparedMap,
+      commuteMinutesByPair,
+      dayCapacities[i] || {
         maxHours: MAX_DAY_HOURS,
         slotCapacity: cloneDefaultSlotCapacity(),
         targetWeight: 1,
-      };
-      const normalizedWeight =
-        totalCapacityWeight > 0 ? profile.targetWeight / totalCapacityWeight : 1 / Math.max(1, days.length);
-      const targetHours = Math.min(profile.maxHours, totalHours * normalizedWeight);
-      return sum + computeDayBaseCost(day, preparedMap, targetHours, commuteMinutesByPair, profile);
-    },
-    0
+      }
+    )
   );
 
-  const dayCommutes = days.map((day) => computeDayCommuteProxy(day, preparedMap, commuteMinutesByPair));
-  const totalCommute = dayCommutes.reduce((sum, value) => sum + value, 0);
-  const avgCommute = totalCommute / Math.max(1, dayCommutes.length);
-  const maxCommute = dayCommutes.reduce((max, value) => Math.max(max, value), 0);
+  const totalHours = dayStats.reduce((sum, s) => sum + s.totalHours, 0);
+  const totalCapacityWeight = dayCapacities.reduce((sum, profile) => sum + profile.targetWeight, 0);
+
+  const baseCost = dayStats.reduce((sum, s, i) => {
+    const profile = dayCapacities[i] || {
+      maxHours: MAX_DAY_HOURS,
+      slotCapacity: cloneDefaultSlotCapacity(),
+      targetWeight: 1,
+    };
+    const normalizedWeight =
+      totalCapacityWeight > 0 ? profile.targetWeight / totalCapacityWeight : 1 / Math.max(1, days.length);
+    const targetHours = Math.min(profile.maxHours, totalHours * normalizedWeight);
+    const balancePenalty = Math.abs(s.totalHours - targetHours) * COST_WEIGHTS.balance;
+    return sum + s.structuralCost + balancePenalty;
+  }, 0);
+
+  const totalCommute = dayStats.reduce((sum, s) => sum + s.commuteProxy, 0);
+  const avgCommute = totalCommute / Math.max(1, dayStats.length);
+  const maxCommute = Math.max(...dayStats.map((s) => s.commuteProxy));
   const commuteImbalancePenalty = Math.max(0, maxCommute - avgCommute) * COST_WEIGHTS.commuteImbalance;
 
   return baseCost + commuteImbalancePenalty;
@@ -1074,23 +1098,28 @@ function optimizeByMovesAndSwaps(
         for (let j = 0; j < days.length; j += 1) {
           if (j === i) continue;
 
-          const candidate = days.map((day) => ({
-            activityIds: [...day.activityIds],
-          }));
+          // Instead of full map clone, only create a shallow clone of the affected days
+          const originalDayI = days[i].activityIds;
+          const originalDayJ = days[j].activityIds;
 
-          candidate[i].activityIds = candidate[i].activityIds.filter((id) => id !== activityId);
-          candidate[j].activityIds.push(activityId);
+          days[i].activityIds = originalDayI.filter((id) => id !== activityId);
+          days[j].activityIds = [...originalDayJ, activityId];
 
-          const cost = computeTotalCost(candidate, preparedMap, commuteMinutesByPair, dayCapacities);
+          const cost = computeTotalCost(days, preparedMap, commuteMinutesByPair, dayCapacities);
+
           if (cost + 1e-6 < currentBestCost) {
             currentBestCost = cost;
             bestMoveTarget = j;
           }
+
+          // Restore
+          days[i].activityIds = originalDayI;
+          days[j].activityIds = originalDayJ;
         }
 
         if (bestMoveTarget >= 0) {
-          days[i].activityIds = days[i].activityIds.filter((id) => id !== activityId);
           days[bestMoveTarget].activityIds.push(activityId);
+          days[i].activityIds = days[i].activityIds.filter((id) => id !== activityId);
           improved = true;
         }
       }
@@ -1101,22 +1130,21 @@ function optimizeByMovesAndSwaps(
         for (const leftId of [...days[i].activityIds]) {
           for (const rightId of [...days[j].activityIds]) {
             const currentCost = computeTotalCost(days, preparedMap, commuteMinutesByPair, dayCapacities);
-            const candidate = days.map((day) => ({
-              activityIds: [...day.activityIds],
-            }));
 
-            candidate[i].activityIds = candidate[i].activityIds.filter((id) => id !== leftId);
-            candidate[j].activityIds = candidate[j].activityIds.filter((id) => id !== rightId);
-            candidate[i].activityIds.push(rightId);
-            candidate[j].activityIds.push(leftId);
+            const originalDayI = days[i].activityIds;
+            const originalDayJ = days[j].activityIds;
 
-            const swappedCost = computeTotalCost(candidate, preparedMap, commuteMinutesByPair, dayCapacities);
+            days[i].activityIds = originalDayI.map(id => id === leftId ? rightId : id);
+            days[j].activityIds = originalDayJ.map(id => id === rightId ? leftId : id);
+
+            const swappedCost = computeTotalCost(days, preparedMap, commuteMinutesByPair, dayCapacities);
             if (swappedCost + 1e-6 < currentCost) {
-              days[i].activityIds = days[i].activityIds.filter((id) => id !== leftId);
-              days[j].activityIds = days[j].activityIds.filter((id) => id !== rightId);
-              days[i].activityIds.push(rightId);
-              days[j].activityIds.push(leftId);
               improved = true;
+              // Keep the swap
+            } else {
+              // Restore
+              days[i].activityIds = originalDayI;
+              days[j].activityIds = originalDayJ;
             }
           }
         }
@@ -1156,6 +1184,7 @@ export async function groupActivitiesByDay({
   activities: SuggestedActivity[];
 }): Promise<DayGroup[]> {
   distanceCache.clear();
+  structuralStatsCache.clear();
   const commuteMinutesByPair = await computeActivityCommuteMatrix(activities);
   const dayCount = computeDayCount(tripInfo, activities.length);
   const dayCapacities = buildDayCapacityProfiles(tripInfo, dayCount);
