@@ -61,16 +61,13 @@ export function DayGroupingView({
   const buildStayStartLegId = (dayNumber: number, toId: string) => `${dayNumber}:stay-start->${toId}`;
   const buildStayEndLegId = (dayNumber: number, fromId: string) => `${dayNumber}:${fromId}->stay-end`;
 
-  const getStartStayCoordinates = useCallback((day: GroupedDay, dayIndex: number): { lat: number; lng: number } | null => {
+  const getStartStayCoordinates = useCallback((_day: GroupedDay, dayIndex: number): { lat: number; lng: number } | null => {
     if (dayIndex > 0) {
       return groupedDays[dayIndex - 1]?.nightStay?.coordinates ?? null;
     }
 
-    // Day 1 should not inherit night-stay coordinates as start; that creates unrealistic first-leg commutes.
-    const routeLike = day.activities.find((activity) => activity.locationMode === "route");
-    if (routeLike) {
-      return routeLike.startCoordinates || routeLike.coordinates || null;
-    }
+    // Day 1 should not infer start coordinates from night-stay or unrelated route activities.
+    // If we don't have explicit arrival coordinates, avoid showing a likely-wrong commute.
     return null;
   }, [groupedDays]);
 
@@ -811,8 +808,9 @@ export function DayGroupingView({
         : Math.max(roundToQuarter(cursorMinutes), nightStartFloorMinutes ?? 0);
       const uncappedActivityEnd = activityStart + activityMinutes;
       const daylightCapMinutes = daylightEndCapMinutes(activity, eveningCutoffMinutes);
+      const canApplyDaylightCap = daylightCapMinutes != null && daylightCapMinutes > activityStart;
       const activityEnd =
-        daylightCapMinutes != null ? Math.min(uncappedActivityEnd, daylightCapMinutes) : uncappedActivityEnd;
+        canApplyDaylightCap ? Math.min(uncappedActivityEnd, daylightCapMinutes as number) : uncappedActivityEnd;
       const recommendedWindowEndMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end);
       const recommendedWindowLabel = formatRecommendedStartWindowLabel(activity);
       const lateStartWarning =
@@ -820,14 +818,18 @@ export function DayGroupingView({
           ? `Late-start risk: recommended ${recommendedWindowLabel || "earlier"}${activity.recommendedStartWindow?.reason ? ` (${activity.recommendedStartWindow.reason})` : ""}.`
           : null;
       const daylightWarning =
-        daylightCapMinutes != null && uncappedActivityEnd > daylightCapMinutes
+        canApplyDaylightCap && daylightCapMinutes != null && uncappedActivityEnd > daylightCapMinutes
           ? `Ends by ${toClockLabel(daylightCapMinutes)} to stay in daylight.`
+          : null;
+      const daylightConflictWarning =
+        !canApplyDaylightCap && daylightCapMinutes != null
+          ? `Daylight conflict: no daylight remains for this slot.`
           : null;
       const nightOnlyWarning =
         nightStartFloorMinutes != null
           ? `Scheduled after sunset (${toClockLabel(sunsetMinutes)}).`
           : null;
-      const combinedWarning = [lateStartWarning, daylightWarning, nightOnlyWarning].filter(Boolean).join(" ");
+      const combinedWarning = [lateStartWarning, daylightWarning, daylightConflictWarning, nightOnlyWarning].filter(Boolean).join(" ");
       const lunchMinutes = roundToQuarter(60 + 15);
 
       // If a long activity crosses lunch, split it into before-lunch and continue-after-lunch.
@@ -887,8 +889,11 @@ export function DayGroupingView({
             ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
             : Math.max(roundToQuarter(cursorMinutes), nightStartFloorMinutes ?? 0);
         const uncappedNextActivityEnd = nextActivityStart + activityMinutes;
+        const canApplyDaylightCapForNext = daylightCapMinutes != null && daylightCapMinutes > nextActivityStart;
         const nextActivityEnd =
-          daylightCapMinutes != null ? Math.min(uncappedNextActivityEnd, daylightCapMinutes) : uncappedNextActivityEnd;
+          canApplyDaylightCapForNext && daylightCapMinutes != null
+            ? Math.min(uncappedNextActivityEnd, daylightCapMinutes)
+            : uncappedNextActivityEnd;
         trackActivityMinutes(nextActivityStart, nextActivityEnd);
         timelineItems.push({
           type: "activity",
