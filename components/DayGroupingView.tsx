@@ -55,6 +55,7 @@ export function DayGroupingView({
   const [collapsedActivityCards, setCollapsedActivityCards] = useState<Record<string, boolean>>({});
   const [activeDayNumber, setActiveDayNumber] = useState<DayTabKey | null>(groupedDays[0]?.dayNumber ?? null);
   const [commuteByLeg, setCommuteByLeg] = useState<Record<string, { minutes: number; mode: CommuteMode }>>({});
+  const [routingError, setRoutingError] = useState<string | null>(null);
 
   const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
     `${dayNumber}:${fromId}->${toId}`;
@@ -168,161 +169,20 @@ export function DayGroupingView({
   }, [inferDaylightPreference, sunsetMinutes]);
 
   const displayPlan = useMemo(() => {
-    const roundToQuarterLocal = (value: number): number => Math.round(value / 15) * 15;
-    const estimateHours = (duration?: string | null): number => {
-      if (!duration) return 2;
-      const text = duration.toLowerCase().trim();
-      if (!text) return 2;
-      const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
-      if (rangeMatch) {
-        const min = Number(rangeMatch[1]);
-        const max = Number(rangeMatch[2]);
-        if (Number.isFinite(min) && Number.isFinite(max) && max >= min) return (min + max) / 2;
-      }
-      const singleHourMatch = text.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)/);
-      if (singleHourMatch) {
-        const value = Number(singleHourMatch[1]);
-        if (Number.isFinite(value)) return value;
-      }
-      if (/half\s*day/.test(text)) return 4;
-      if (/full\s*day|all\s*day/.test(text)) return 7;
-      if (/30\s*min/.test(text)) return 0.5;
-      if (/45\s*min/.test(text)) return 0.75;
-      return 2;
-    };
-
     const sourceDayByActivityId: Record<string, number> = {};
+
     groupedDays.forEach((day) => {
       day.activities.forEach((activity) => {
         sourceDayByActivityId[activity.id] = day.dayNumber;
       });
     });
 
-    const dayBudgets = groupedDays.map((day, dayIndex) => {
-      const arrivalMinutes = parseClockMinutes(tripInfo?.arrivalTimePreference) ?? 12 * 60;
-      const isMorningArrival = arrivalMinutes < 12 * 60;
-      const dayStartMinutes =
-        dayIndex === 0
-          ? Math.max(8 * 60 + 30, Math.min(19 * 60, arrivalMinutes + 120, isMorningArrival ? 11 * 60 : 19 * 60))
-          : 9 * 60 + 30;
-      const departureMinutes = parseClockMinutes(tripInfo?.departureTimePreference) ?? 18 * 60;
-      const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - 120);
-      const isFinalDay =
-        (tripEndDateKey && normalizeDateKey(day.date) === tripEndDateKey) || dayIndex === groupedDays.length - 1;
-      const dayEndMinutes = isFinalDay ? Math.max(dayStartMinutes + 120, airportArrivalDeadlineMinutes - 90) : 18 * 60;
-      const totalMinutes = Math.max(120, dayEndMinutes - dayStartMinutes - 75);
-      const daylightMinutes = Math.max(0, Math.min(dayEndMinutes, sunsetMinutes) - dayStartMinutes);
-      const nightMinutes = Math.max(0, dayEndMinutes - Math.max(dayStartMinutes, sunsetMinutes));
-
-      return {
-        dayNumber: day.dayNumber,
-        dayIndex,
-        dayStartMinutes,
-        dayEndMinutes,
-        remainingTotalMinutes: totalMinutes,
-        remainingDaylightMinutes: daylightMinutes,
-        remainingNightMinutes: nightMinutes,
-      };
-    });
-
-    const activities = groupedDays.flatMap((day, dayIndex) =>
-      day.activities.map((activity) => {
-        const timingPolicy = getActivityTimingPolicy(activity);
-        const estimatedHours = estimateHours(activity.estimatedDuration);
-        const requiredMinutes = Math.max(
-          roundToQuarterLocal(timingPolicy.minVisitMinutes),
-          roundToQuarterLocal(estimatedHours * 60 + timingPolicy.settleBufferMinutes)
-        );
-        const preference = inferDaylightPreference(activity);
-        const fixedMinutes = parseClockMinutes(activity.fixedStartTime);
-        return {
-          activity,
-          originalDayNumber: day.dayNumber,
-          originalDayIndex: dayIndex,
-          requiredMinutes,
-          preference,
-          fixedMinutes,
-        };
-      })
-    );
-
-    activities.sort((a, b) => {
-      const fixedRankA = a.activity.isFixedStartTime ? 0 : 1;
-      const fixedRankB = b.activity.isFixedStartTime ? 0 : 1;
-      if (fixedRankA !== fixedRankB) return fixedRankA - fixedRankB;
-      const prefRank = (pref: "daylight_only" | "night_only" | "flexible") =>
-        pref === "daylight_only" ? 0 : pref === "night_only" ? 1 : 2;
-      const prefDelta = prefRank(a.preference) - prefRank(b.preference);
-      if (prefDelta !== 0) return prefDelta;
-      return b.requiredMinutes - a.requiredMinutes;
-    });
-
-    const assignedByDayNumber: Record<number, SuggestedActivity[]> = {};
-    dayBudgets.forEach((budget) => {
-      assignedByDayNumber[budget.dayNumber] = [];
-    });
-    const unscheduledActivities: SuggestedActivity[] = [];
-
-    const canFit = (
-      budget: (typeof dayBudgets)[number],
-      candidate: (typeof activities)[number]
-    ): boolean => {
-      if (candidate.requiredMinutes > budget.remainingTotalMinutes) return false;
-      if (candidate.preference === "daylight_only" && candidate.requiredMinutes > budget.remainingDaylightMinutes) return false;
-      if (candidate.preference === "night_only" && candidate.requiredMinutes > budget.remainingNightMinutes) return false;
-      if (candidate.activity.isFixedStartTime && candidate.fixedMinutes != null) {
-        if (candidate.fixedMinutes < budget.dayStartMinutes || candidate.fixedMinutes > budget.dayEndMinutes - 45) return false;
-      }
-      return true;
-    };
-
-    activities.forEach((candidate) => {
-      const orderedBudgets = [...dayBudgets].sort((a, b) => {
-        const aSame = a.dayNumber === candidate.originalDayNumber ? 0 : 1;
-        const bSame = b.dayNumber === candidate.originalDayNumber ? 0 : 1;
-        if (aSame !== bSame) return aSame - bSame;
-        const aDistance = Math.abs(a.dayIndex - candidate.originalDayIndex);
-        const bDistance = Math.abs(b.dayIndex - candidate.originalDayIndex);
-        if (aDistance !== bDistance) return aDistance - bDistance;
-        return b.remainingTotalMinutes - a.remainingTotalMinutes;
-      });
-
-      const targetBudget = orderedBudgets.find((budget) => canFit(budget, candidate));
-      if (!targetBudget) {
-        unscheduledActivities.push(candidate.activity);
-        return;
-      }
-
-      assignedByDayNumber[targetBudget.dayNumber].push(candidate.activity);
-      targetBudget.remainingTotalMinutes -= candidate.requiredMinutes;
-      if (candidate.preference === "daylight_only") {
-        targetBudget.remainingDaylightMinutes -= candidate.requiredMinutes;
-      } else if (candidate.preference === "night_only") {
-        targetBudget.remainingNightMinutes -= candidate.requiredMinutes;
-      }
-    });
-
-    const displayGroupedDays = groupedDays.map((day) => ({
-      ...day,
-      activities: assignedByDayNumber[day.dayNumber] ?? [],
-    }));
-
     return {
-      groupedDays: displayGroupedDays,
-      unscheduledActivities,
+      groupedDays,
+      unscheduledActivities: [] as SuggestedActivity[],
       sourceDayByActivityId,
     };
-  }, [
-    getActivityTimingPolicy,
-    groupedDays,
-    inferDaylightPreference,
-    normalizeDateKey,
-    parseClockMinutes,
-    sunsetMinutes,
-    tripEndDateKey,
-    tripInfo?.arrivalTimePreference,
-    tripInfo?.departureTimePreference,
-  ]);
+  }, [groupedDays]);
 
   const displayGroupedDays = displayPlan.groupedDays;
   const unscheduledActivities = displayPlan.unscheduledActivities;
@@ -459,10 +319,19 @@ export function DayGroupingView({
 
   useEffect(() => {
     if (commuteLegsToFetch.length === 0) return;
+    setRoutingError(null);
     let isActive = true;
     computeRoutes(commuteLegsToFetch)
       .then((result) => {
         if (!isActive || !result?.legs) return;
+        const routeFailures = result.legs.filter((leg) => typeof leg.error === "string" && leg.error.trim().length > 0);
+        if (routeFailures.length > 0) {
+          const sample = routeFailures[0];
+          setRoutingError(
+            `Mapping/routing error while computing commute legs (${routeFailures.length} failed). Example: ${sample.error}`
+          );
+          return;
+        }
         const updates: Record<string, { minutes: number; mode: CommuteMode }> = {};
         result.legs.forEach((leg) => {
           const sourceLeg = commuteLegById[leg.id];
@@ -478,8 +347,9 @@ export function DayGroupingView({
           setCommuteByLeg((prev) => ({ ...prev, ...updates }));
         }
       })
-      .catch(() => {
-        // Ignore route API failures and fall back to local estimates.
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setRoutingError(`Mapping/routing error while computing commute legs: ${message}`);
       });
 
     return () => {
@@ -886,10 +756,13 @@ export function DayGroupingView({
     (dayIndex: number, fallbackStayLabel?: string | null) => {
       if (dayIndex !== 0) {
         return {
+          isArrivalDay: false,
           startTitle: "Start from stay",
           startLabel: fallbackStayLabel || null,
           dayStartMinutes: 9 * 60 + 30,
           availableVisitHours: 8,
+          arrivalAirport: null as string | null,
+          arrivalTiming: null as string | null,
         };
       }
 
@@ -900,20 +773,14 @@ export function DayGroupingView({
       const startAfterArrival = Math.max(8 * 60 + 30, Math.min(19 * 60, arrivalMinutes + 120));
       const availableVisitHours = Math.max(2.5, Math.min(8, (20 * 60 - startAfterArrival) / 60));
 
-      if (isMorningArrival) {
-        return {
-          startTitle: `Arrive at airport (${arrivalTiming})`,
-          startLabel: `${arrivalAirport} · assumed arrival ${arrivalTiming}`,
-          dayStartMinutes: Math.max(9 * 60, startAfterArrival),
-          availableVisitHours: Math.max(4, availableVisitHours),
-        };
-      }
-
       return {
-        startTitle: `Arrival + hotel check-in (${arrivalTiming})`,
+        isArrivalDay: true,
+        startTitle: `Arrive at airport (${arrivalTiming})`,
         startLabel: `${arrivalAirport} · assumed arrival ${arrivalTiming}`,
-        dayStartMinutes: startAfterArrival,
-        availableVisitHours,
+        dayStartMinutes: Math.max(9 * 60, startAfterArrival),
+        availableVisitHours: isMorningArrival ? Math.max(4, availableVisitHours) : availableVisitHours,
+        arrivalAirport,
+        arrivalTiming,
       };
     },
     [tripInfo?.arrivalAirport, tripInfo?.arrivalTimePreference]
@@ -962,6 +829,10 @@ export function DayGroupingView({
         : isRailFriendlyDestination
           ? "TRAIN"
           : "DRIVE";
+    const arrivalTransferMinutes =
+      dayIndex === 0
+        ? Math.max(20, Math.min(90, roundToQuarter((stayStartCommuteMinutes > 0 ? stayStartCommuteMinutes : 15) + 30)))
+        : 0;
     const stayEndCommuteMinutes =
       endStayLabel && lastActivity && endStayCoordinates
         ? (commuteByLeg[buildStayEndLegId(day.dayNumber, lastActivity.id)]?.minutes ??
@@ -1013,8 +884,15 @@ export function DayGroupingView({
 
     if (sortedActivities.length === 0) {
       return (
-        <div className="rounded-md border border-dashed border-sky-200 bg-sky-50/40 p-3 text-xs text-sky-800">
-          No activities yet. Reserve about 1 hr for lunch and keep 2-3 flexible hours.
+        <div className="rounded-md border border-dashed border-sky-200 bg-sky-50/40 p-3 text-xs text-sky-800 space-y-2">
+          {dayIndex === 0 ? (
+            <>
+              <div>Arrive at airport ({startContext.arrivalTiming || tripInfo?.arrivalTimePreference || "12:00 PM"}).</div>
+              <div>Airport transfer: Drive · Approx {arrivalTransferMinutes} min (estimated).</div>
+              <div>Hotel check-in: {day.nightStay?.label || "your stay"}.</div>
+            </>
+          ) : null}
+          <div>No activities yet. Reserve about 1 hr for lunch and keep 2-3 flexible hours.</div>
         </div>
       );
     }
@@ -1059,17 +937,37 @@ export function DayGroupingView({
     const bufferedStayStartCommuteMinutes =
       stayStartCommuteMinutes > 0 ? roundToQuarter(stayStartCommuteMinutes + preDayBufferMinutes) : 0;
     const defaultDayStartMinutes = startContext.dayStartMinutes;
-    let cursorMinutes =
-      earliestFixedStartMinutes != null
-        ? Math.max(0, roundToQuarter(earliestFixedStartMinutes - bufferedStayStartCommuteMinutes - preDayBufferMinutes))
-        : defaultDayStartMinutes;
+    let cursorMinutes = defaultDayStartMinutes;
+    if (dayIndex !== 0 && earliestFixedStartMinutes != null) {
+      cursorMinutes = Math.max(0, roundToQuarter(earliestFixedStartMinutes - bufferedStayStartCommuteMinutes - preDayBufferMinutes));
+    }
+    cursorMinutes = Math.max(cursorMinutes, defaultDayStartMinutes);
     if (startContext.startLabel) {
       timelineItems.push({
         type: "stay",
         id: `stay-start-${day.dayNumber}`,
-        title: startContext.startTitle,
+        title: dayIndex === 0 ? `Arrive at airport (${startContext.arrivalTiming || tripInfo?.arrivalTimePreference || "12:00 PM"})` : startContext.startTitle,
         detail: startContext.startLabel,
       });
+      if (dayIndex === 0) {
+        const airportTransferStart = roundToQuarter(cursorMinutes);
+        const airportTransferEnd = airportTransferStart + roundToQuarter(arrivalTransferMinutes + commuteTransitionBufferMinutes);
+        scheduledCommuteMinutes += Math.max(0, airportTransferEnd - airportTransferStart);
+        timelineItems.push({
+          type: "commute",
+          id: `commute-airport-stay-${day.dayNumber}`,
+          title: "Airport transfer",
+          detail: `Drive · Approx ${arrivalTransferMinutes} min (estimated)`,
+          timeRange: toRangeLabel(airportTransferStart, airportTransferEnd),
+        });
+        cursorMinutes = airportTransferEnd;
+        timelineItems.push({
+          type: "stay",
+          id: `checkin-${day.dayNumber}`,
+          title: "Hotel check-in",
+          detail: day.nightStay?.label || "At your stay",
+        });
+      }
       if (stayStartCommuteMinutes > 0) {
         // If the day already starts around/after lunch, show lunch before the first commute
         // to avoid a confusing commute->lunch sequence with no destination context.
@@ -1115,6 +1013,10 @@ export function DayGroupingView({
       const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
       const fixedAlignedStartMinutes =
         activity.isFixedStartTime && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
+      const arrivalConflictWarning =
+        dayIndex === 0 && fixedStartMinutes != null && fixedStartMinutes < startContext.dayStartMinutes
+          ? `Arrival conflict: fixed start ${toClockLabel(fixedStartMinutes)} is before feasible start ${toClockLabel(startContext.dayStartMinutes)}.`
+          : null;
       const nightStartFloorMinutes = nightOnlyStartFloorMinutes(activity);
       const activityStart = fixedAlignedStartMinutes != null
         ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
@@ -1142,7 +1044,7 @@ export function DayGroupingView({
         nightStartFloorMinutes != null
           ? `Scheduled after sunset (${toClockLabel(sunsetMinutes)}).`
           : null;
-      const combinedWarning = [lateStartWarning, daylightWarning, daylightConflictWarning, nightOnlyWarning].filter(Boolean).join(" ");
+      const combinedWarning = [arrivalConflictWarning, lateStartWarning, daylightWarning, daylightConflictWarning, nightOnlyWarning].filter(Boolean).join(" ");
       const lunchMinutes = roundToQuarter(60 + 15);
       const scheduledWindowMinutes = Math.max(0, activityEnd - activityStart);
       const effectiveActivityEnd =
@@ -1466,6 +1368,17 @@ export function DayGroupingView({
 
   return (
     <div className="space-y-6 h-full flex flex-col">
+      {routingError ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div>
+              <p className="font-semibold">Routing API warning</p>
+              <p>{routingError}</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {/* Header */}
       <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex items-center justify-between shrink-0">
         <div>

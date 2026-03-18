@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Send, MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw, ChevronUp, ChevronDown, Sparkles } from "lucide-react";
+import { Loader2, Send, MessageSquare, Heart, ChevronLeft, ChevronRight, RefreshCw, ChevronUp, ChevronDown, Sparkles, AlertTriangle, X } from "lucide-react";
 import MapComponent from "@/components/MapComponent";
 import { InitialResearchView } from "@/components/InitialResearchView";
 import { DayGroupingView } from "@/components/DayGroupingView";
@@ -112,6 +112,19 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
+
+type ApiWarningMessage = {
+  id: string;
+  message: string;
+  endpoint: string;
+};
+
+type ApiWarningDetail = {
+  url: string;
+  message: string;
+  status?: number;
+  timestamp: string;
+};
 
 type MarkdownBlock =
   | { type: "heading"; text: string }
@@ -588,6 +601,7 @@ export default function PlannerPage() {
   const [lastDeepResearchAtByOptionId, setLastDeepResearchAtByOptionId] = useState<Record<string, string>>({});
   const [photoEnrichmentInProgress, setPhotoEnrichmentInProgress] = useState(false);
   const [mapsReady, setMapsReady] = useState(false);
+  const [apiWarnings, setApiWarnings] = useState<ApiWarningMessage[]>([]);
   const photoEnrichmentSignatureRef = useRef<string>("");
   const lastSeenAiCheckAtRef = useRef<string | null>(null);
 
@@ -596,6 +610,28 @@ export default function PlannerPage() {
   const chatInputRef = useRef<HTMLInputElement>(null);
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
   const aiInsightPopupRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onApiWarning = (event: Event) => {
+      const customEvent = event as CustomEvent<ApiWarningDetail>;
+      const detail = customEvent.detail;
+      if (!detail?.message) return;
+      const endpoint = detail.url.replace(/^\/api\//, "");
+      const id = `${detail.timestamp}:${detail.url}:${detail.message}`;
+      setApiWarnings((prev) => {
+        if (prev.some((warning) => warning.id === id)) return prev;
+        const next = [{ id, message: detail.message, endpoint }, ...prev];
+        return next.slice(0, 5);
+      });
+    };
+
+    window.addEventListener("travel-planner:api-warning", onApiWarning as EventListener);
+    return () => {
+      window.removeEventListener("travel-planner:api-warning", onApiWarning as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     if (isAiCheckCollapsed) return;
@@ -2631,6 +2667,37 @@ export default function PlannerPage() {
             </div>
           </div>
         </div>
+
+        {apiWarnings.length > 0 ? (
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
+            <div className="space-y-2">
+              {apiWarnings.map((warning) => (
+                <div
+                  key={warning.id}
+                  className="flex items-start justify-between gap-3 rounded-md border border-amber-200 bg-white/80 px-3 py-2"
+                >
+                  <div className="flex items-start gap-2 text-sm text-amber-900">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <div>
+                      <p className="font-semibold">API warning ({warning.endpoint || "unknown endpoint"})</p>
+                      <p className="text-amber-800">{warning.message}</p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-6 w-6 text-amber-700 hover:bg-amber-100"
+                    onClick={() => setApiWarnings((prev) => prev.filter((item) => item.id !== warning.id))}
+                    aria-label="Dismiss API warning"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           {/* Left Panel: Itinerary / Workflow Content */}

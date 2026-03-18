@@ -57,6 +57,7 @@ export function DayItineraryView({
   const [collapsedActivityCards, setCollapsedActivityCards] = useState<Record<string, boolean>>({});
   const [collapsedRestaurantCards, setCollapsedRestaurantCards] = useState<Record<string, boolean>>({});
   const [commuteByLeg, setCommuteByLeg] = useState<Record<string, { minutes: number; mode: CommuteMode }>>({});
+  const [routingError, setRoutingError] = useState<string | null>(null);
 
   type CommuteMode = "TRAIN" | "TRANSIT" | "WALK" | "DRIVE";
 
@@ -193,10 +194,19 @@ export function DayItineraryView({
 
   useEffect(() => {
     if (commuteLegsToFetch.length === 0) return;
+    setRoutingError(null);
     let isActive = true;
     computeRoutes(commuteLegsToFetch)
       .then((result) => {
         if (!isActive || !result?.legs) return;
+        const routeFailures = result.legs.filter((leg) => typeof leg.error === "string" && leg.error.trim().length > 0);
+        if (routeFailures.length > 0) {
+          const sample = routeFailures[0];
+          setRoutingError(
+            `Mapping/routing error while computing commute legs (${routeFailures.length} failed). Example: ${sample.error}`
+          );
+          return;
+        }
         const updates: Record<string, { minutes: number; mode: CommuteMode }> = {};
         result.legs.forEach((leg) => {
           const sourceLeg = commuteLegById[leg.id];
@@ -212,8 +222,9 @@ export function DayItineraryView({
           setCommuteByLeg((prev) => ({ ...prev, ...updates }));
         }
       })
-      .catch(() => {
-        // Ignore route API failures and fall back to local estimates.
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setRoutingError(`Mapping/routing error while computing commute legs: ${message}`);
       });
 
     return () => {
@@ -642,10 +653,13 @@ export function DayItineraryView({
     (dayIndex: number, fallbackStayLabel?: string | null) => {
       if (dayIndex !== 0) {
         return {
+          isArrivalDay: false,
           startTitle: "Start from stay",
           startLabel: fallbackStayLabel || null,
           dayStartMinutes: 9 * 60 + 30,
           availableVisitHours: 8,
+          arrivalAirport: null as string | null,
+          arrivalTiming: null as string | null,
         };
       }
 
@@ -656,20 +670,14 @@ export function DayItineraryView({
       const startAfterArrival = Math.max(8 * 60 + 30, Math.min(19 * 60, arrivalMinutes + 120));
       const availableVisitHours = Math.max(2.5, Math.min(8, (20 * 60 - startAfterArrival) / 60));
 
-      if (isMorningArrival) {
-        return {
-          startTitle: `Arrive at airport (${arrivalTiming})`,
-          startLabel: `${arrivalAirport} · assumed arrival ${arrivalTiming}`,
-          dayStartMinutes: Math.max(9 * 60, startAfterArrival),
-          availableVisitHours: Math.max(4, availableVisitHours),
-        };
-      }
-
       return {
-        startTitle: `Arrival + hotel check-in (${arrivalTiming})`,
+        isArrivalDay: true,
+        startTitle: `Arrive at airport (${arrivalTiming})`,
         startLabel: `${arrivalAirport} · assumed arrival ${arrivalTiming}`,
-        dayStartMinutes: startAfterArrival,
-        availableVisitHours,
+        dayStartMinutes: Math.max(9 * 60, startAfterArrival),
+        availableVisitHours: isMorningArrival ? Math.max(4, availableVisitHours) : availableVisitHours,
+        arrivalAirport,
+        arrivalTiming,
       };
     },
     [tripInfo?.arrivalAirport, tripInfo?.arrivalTimePreference]
@@ -723,6 +731,10 @@ export function DayItineraryView({
         : isRailFriendlyDestination
           ? "TRAIN"
           : "DRIVE";
+    const arrivalTransferMinutes =
+      dayIndex === 0
+        ? Math.max(20, Math.min(90, Math.round((stayStartCommuteMinutes > 0 ? stayStartCommuteMinutes : 15) + 30)))
+        : 0;
     const stayEndCommuteMinutes =
       endStayLabel && lastActivity && endStayCoordinates
         ? (commuteByLeg[buildStayEndLegId(day.dayNumber, lastActivity.id)]?.minutes ??
@@ -770,7 +782,12 @@ export function DayItineraryView({
       ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedEndOfDayCommuteMinutes)
       : 18 * 60;
     const defaultDayStartMinutes = startContext.dayStartMinutes;
-    const dayStartMinutes = earliestFixedStartMinutes != null ? Math.max(0, earliestFixedStartMinutes - stayStartCommuteMinutes - 15) : defaultDayStartMinutes;
+    const dayStartMinutes =
+      dayIndex === 0
+        ? defaultDayStartMinutes
+        : earliestFixedStartMinutes != null
+          ? Math.max(0, earliestFixedStartMinutes - stayStartCommuteMinutes - 15)
+          : defaultDayStartMinutes;
     const estimatedDayEndMinutes = dayStartMinutes + Math.round((totalRequestedHours + lunchHours + totalCommuteHoursEstimate) * 60);
     const freeHoursBeforeEvening = Math.max(0, (eveningCutoffMinutes - estimatedDayEndMinutes) / 60);
     const effectiveFreeHours = Math.min(freeActivityHours, freeHoursBeforeEvening);
@@ -784,10 +801,22 @@ export function DayItineraryView({
 
     if (startContext.startLabel) {
       timelineRows.push({
-        label: startContext.startTitle,
+        label: dayIndex === 0 ? `Arrive at airport (${startContext.arrivalTiming || tripInfo?.arrivalTimePreference || "12:00 PM"})` : startContext.startTitle,
         detail: startContext.startLabel,
         type: "stay",
       });
+      if (dayIndex === 0) {
+        timelineRows.push({
+          label: "Airport transfer",
+          detail: `Drive · Approx ${arrivalTransferMinutes} min (estimated)`,
+          type: "commute",
+        });
+        timelineRows.push({
+          label: "Hotel check-in",
+          detail: day.nightStay?.label || "At your stay",
+          type: "stay",
+        });
+      }
       if (stayStartCommuteMinutes > 0) {
         timelineRows.push({
           label: "Commute to first stop",
@@ -807,10 +836,15 @@ export function DayItineraryView({
         !activity.isFixedStartTime && recommendedStartWindowLabel
           ? ` Recommended start: ${recommendedStartWindowLabel}${activity.recommendedStartWindow?.reason ? ` (${activity.recommendedStartWindow.reason})` : ""}.`
           : "";
+      const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
+      const arrivalConflictSuffix =
+        dayIndex === 0 && fixedStartMinutes != null && fixedStartMinutes < startContext.dayStartMinutes
+          ? ` Arrival conflict: fixed start ${activity.fixedStartTime} is before feasible start on arrival day.`
+          : "";
 
       timelineRows.push({
         label: activity.name,
-        detail: `${activity.isFixedStartTime && activity.fixedStartTime ? `Starts at ${activity.fixedStartTime}. ` : ""}Visit up to ${formatHourLabel(allocatedHours)} (${activity.estimatedDuration || "estimated"}).${recommendedStartSuffix}`,
+        detail: `${activity.isFixedStartTime && activity.fixedStartTime ? `Starts at ${activity.fixedStartTime}. ` : ""}Visit up to ${formatHourLabel(allocatedHours)} (${activity.estimatedDuration || "estimated"}).${recommendedStartSuffix}${arrivalConflictSuffix}`,
         type: "activity",
       });
 
@@ -937,6 +971,17 @@ export function DayItineraryView({
 
   return (
     <div className="space-y-6 h-full flex flex-col">
+      {routingError ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div>
+              <p className="font-semibold">Routing API warning</p>
+              <p>{routingError}</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {tripInfo && tripInfo.destination && (
         <div className="bg-primary/5 rounded-2xl p-6 border border-primary/20 shrink-0">
           <h2 className="text-2xl font-bold text-gray-900">{tripInfo.destination}</h2>
@@ -1064,14 +1109,17 @@ export function DayItineraryView({
                       <div className="space-y-1">
                         {day.activities.map((activity, index) => (
                           <ActivityItem
-                            key={activity.id}
+                            key={`day-${day.dayNumber}-activity-${activity.id}-${index}`}
                             activity={activity}
                             dayNumber={day.dayNumber}
                             index={index}
                           />
                         ))}
-                        {day.restaurants.map((restaurant) => (
-                          <RestaurantItem key={restaurant.id} restaurant={restaurant} />
+                        {day.restaurants.map((restaurant, index) => (
+                          <RestaurantItem
+                            key={`day-${day.dayNumber}-restaurant-${restaurant.id}-${index}`}
+                            restaurant={restaurant}
+                          />
                         ))}
                       </div>
                     </div>

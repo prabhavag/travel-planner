@@ -86,7 +86,7 @@ export function ActivitySelectionView({
           const isSelected = localSelectedIds.has(activity.id);
           return (
             <ActivityCard
-              key={activity.id}
+              key={`activity-${activity.id}-${index}`}
               activity={activity}
               index={index}
               isSelected={isSelected}

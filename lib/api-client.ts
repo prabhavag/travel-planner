@@ -4,24 +4,82 @@ import type { TimelineAnalysisRequest, TimelineAnalysisResponse } from "@/lib/ti
 
 const BASE_URL = "/api";
 
+type ApiWarningDetail = {
+  url: string;
+  message: string;
+  status?: number;
+  timestamp: string;
+};
+
+class ApiHttpError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+  }
+}
+
+function emitApiWarning(detail: ApiWarningDetail): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent<ApiWarningDetail>("travel-planner:api-warning", { detail }));
+}
+
+async function extractErrorMessage(response: Response): Promise<string> {
+  const raw = await response.text().catch(() => "");
+  const fallback = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+  if (!raw.trim()) return fallback;
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      message?: unknown;
+      error?: unknown;
+      details?: unknown;
+    };
+    const parts = [parsed.message, parsed.error, parsed.details]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim());
+    if (parts.length > 0) {
+      return parts.join(" | ");
+    }
+  } catch {
+    // Not JSON: use raw payload below.
+  }
+
+  return raw.trim();
+}
+
 async function fetchJson<T>(
   url: string,
   options?: RequestInit
 ): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-  });
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: "Request failed" }));
-    throw new Error(error.message || `HTTP ${response.status}`);
+    if (!response.ok) {
+      const message = await extractErrorMessage(response);
+      throw new ApiHttpError(message, response.status);
+    }
+
+    return response.json();
+  } catch (error) {
+    const status = error instanceof ApiHttpError ? error.status : undefined;
+    const message = error instanceof Error ? error.message : "Network request failed";
+    emitApiWarning({
+      url,
+      status,
+      message,
+      timestamp: new Date().toISOString(),
+    });
+    throw error;
   }
-
-  return response.json();
 }
 
 // Legacy endpoints
