@@ -18,6 +18,7 @@ import {
     slotForHour,
     slotDistance,
     recommendedWindowLatestStartMinutes,
+    recommendedWindowMidpointMinutes,
     parseFixedStartTimeMinutes,
     cloneDefaultSlotCapacity,
     getPermutations,
@@ -191,6 +192,15 @@ export function getDayStructuralStats(
 
     let slotMismatchPenalty = 0;
     let recommendedStartMissPenalty = 0;
+    const earliestRecommendedMidpointMinutes = activities.reduce<number | null>((earliest, activity) => {
+        const midpoint = recommendedWindowMidpointMinutes(activity);
+        if (midpoint == null) return earliest;
+        return earliest == null ? midpoint : Math.min(earliest, midpoint);
+    }, null);
+    const softDayStartMinutes =
+        earliestRecommendedMidpointMinutes != null
+            ? Math.min(SOFT_DAY_START_MINUTES, earliestRecommendedMidpointMinutes)
+            : SOFT_DAY_START_MINUTES;
     let currentHour = 0;
     for (const activity of activities) {
         const duration = getLoadDurationHours(preparedMap, activity.id);
@@ -204,7 +214,7 @@ export function getDayStructuralStats(
         const effectiveStartMinutes =
             fixedStartMinutes != null
                 ? fixedStartMinutes
-                : SOFT_DAY_START_MINUTES + Math.round(currentHour * 60);
+                : softDayStartMinutes + Math.round(currentHour * 60);
         if (latestRecommendedStartMinutes != null && effectiveStartMinutes > latestRecommendedStartMinutes) {
             recommendedStartMissPenalty += (effectiveStartMinutes - latestRecommendedStartMinutes) / 60;
         }

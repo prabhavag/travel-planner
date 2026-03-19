@@ -224,6 +224,14 @@ export function recommendedWindowLatestStartMinutes(activity: SuggestedActivity)
     return parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end || null);
 }
 
+export function recommendedWindowMidpointMinutes(activity: SuggestedActivity): number | null {
+    const startMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.start || null);
+    const endMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end || null);
+    if (startMinutes == null || endMinutes == null) return null;
+    if (endMinutes < startMinutes) return null;
+    return Math.round((startMinutes + endMinutes) / 2);
+}
+
 export function activityLoadFactor(activity: SuggestedActivity): number {
     if (!activity.isFixedStartTime) return 1;
     const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);

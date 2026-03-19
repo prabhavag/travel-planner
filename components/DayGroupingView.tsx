@@ -785,6 +785,13 @@ export function DayGroupingView({
     return null;
   }
 
+  function recommendedWindowMidpointMinutes(activity: SuggestedActivity): number | null {
+    const startMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.start);
+    const endMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end);
+    if (startMinutes == null || endMinutes == null || endMinutes < startMinutes) return null;
+    return Math.round((startMinutes + endMinutes) / 2);
+  }
+
   function activityLoadFactor(activity: SuggestedActivity): number {
     if (!activity.isFixedStartTime) return 1;
     const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
@@ -901,6 +908,10 @@ export function DayGroupingView({
       .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
       .filter((minutes): minutes is number => minutes != null)
       .sort((a, b) => a - b)[0];
+    const earliestRecommendedMidpointMinutes = sortedActivities
+      .map((activity) => recommendedWindowMidpointMinutes(activity))
+      .filter((minutes): minutes is number => minutes != null)
+      .sort((a, b) => a - b)[0];
     const hadVeryEarlyFixedStart =
       (earliestFixedStartMinutes != null && earliestFixedStartMinutes <= 6 * 60) ||
       sortedActivities.some((activity) => activity.isFixedStartTime && activity.fixedStartTime?.toLowerCase() === "sunrise");
@@ -978,12 +989,18 @@ export function DayGroupingView({
     const preDayBufferMinutes = 15;
     const bufferedStayStartCommuteMinutes =
       stayStartCommuteMinutes > 0 ? roundToQuarter(stayStartCommuteMinutes + preDayBufferMinutes) : 0;
-    const defaultDayStartMinutes = startContext.dayStartMinutes;
+    const recommendedEarlyStartMinutes =
+      dayIndex !== 0 && earliestRecommendedMidpointMinutes != null
+        ? Math.max(0, roundToQuarter(earliestRecommendedMidpointMinutes - bufferedStayStartCommuteMinutes - preDayBufferMinutes))
+        : null;
+    const defaultDayStartMinutes =
+      recommendedEarlyStartMinutes != null
+        ? Math.min(startContext.dayStartMinutes, recommendedEarlyStartMinutes)
+        : startContext.dayStartMinutes;
     let cursorMinutes = defaultDayStartMinutes;
     if (dayIndex !== 0 && earliestFixedStartMinutes != null) {
       cursorMinutes = Math.max(0, roundToQuarter(earliestFixedStartMinutes - bufferedStayStartCommuteMinutes - preDayBufferMinutes));
     }
-    cursorMinutes = Math.max(cursorMinutes, defaultDayStartMinutes);
     if (startContext.startLabel) {
       timelineItems.push({
         type: "stay",

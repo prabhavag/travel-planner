@@ -226,7 +226,7 @@ export async function assignNightStays({
     let bestDistance = Number.POSITIVE_INFINITY;
     const scoredCandidates: NightStay["candidates"] = [];
 
-    if (candidates.length > 0 && geocodingService && centroid) {
+    if (candidates.length > 0 && geocodingService) {
       const locationPromises = candidates.map(async (candidate) => {
         const query = tripInfo.destination
           ? `${candidate.label}, ${tripInfo.destination}`
@@ -236,6 +236,7 @@ export async function assignNightStays({
         return { candidate, location, driveScore };
       });
       const resolvedLocations = await Promise.all(locationPromises);
+      let firstGeocodedCandidate: NightStay | null = null;
 
       for (const { candidate, location, driveScore } of resolvedLocations) {
         scoredCandidates.push({
@@ -244,7 +245,14 @@ export async function assignNightStays({
           coordinates: location,
           driveScoreKm: Number.isFinite(driveScore) ? Math.round(driveScore * 10) / 10 : null,
         });
-        if (driveScore < bestDistance) {
+        if (!firstGeocodedCandidate && location) {
+          firstGeocodedCandidate = {
+            label: candidate.label,
+            notes: candidate.notes ?? null,
+            coordinates: location,
+          };
+        }
+        if (Number.isFinite(driveScore) && driveScore < bestDistance) {
           bestDistance = driveScore;
           bestCandidate = {
             label: candidate.label,
@@ -252,6 +260,10 @@ export async function assignNightStays({
             coordinates: location,
           };
         }
+      }
+
+      if (!bestCandidate && firstGeocodedCandidate) {
+        bestCandidate = firstGeocodedCandidate;
       }
     }
 

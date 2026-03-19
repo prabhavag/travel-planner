@@ -539,6 +539,13 @@ export function DayItineraryView({
     return null;
   }
 
+  function recommendedWindowMidpointMinutes(activity: SuggestedActivity): number | null {
+    const startMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.start);
+    const endMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end);
+    if (startMinutes == null || endMinutes == null || endMinutes < startMinutes) return null;
+    return Math.round((startMinutes + endMinutes) / 2);
+  }
+
   const formatRecommendedStartWindowLabel = (activity: SuggestedActivity): string | null => {
     const window = activity.recommendedStartWindow;
     if (!window?.start || !window?.end) return null;
@@ -761,6 +768,10 @@ export function DayItineraryView({
       .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
       .filter((minutes): minutes is number => minutes != null)
       .sort((a, b) => a - b)[0];
+    const earliestRecommendedMidpointMinutes = sortedActivities
+      .map((activity) => recommendedWindowMidpointMinutes(activity))
+      .filter((minutes): minutes is number => minutes != null)
+      .sort((a, b) => a - b)[0];
     const hadVeryEarlyFixedStart =
       (earliestFixedStartMinutes != null && earliestFixedStartMinutes <= 6 * 60) ||
       sortedActivities.some((activity) => activity.isFixedStartTime && activity.fixedStartTime?.toLowerCase() === "sunrise");
@@ -782,12 +793,20 @@ export function DayItineraryView({
       ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedEndOfDayCommuteMinutes)
       : 18 * 60;
     const defaultDayStartMinutes = startContext.dayStartMinutes;
+    const recommendedEarlyStartMinutes =
+      dayIndex !== 0 && earliestRecommendedMidpointMinutes != null
+        ? Math.max(0, Math.round((earliestRecommendedMidpointMinutes - stayStartCommuteMinutes - 15) / 15) * 15)
+        : null;
+    const dayStartBaselineMinutes =
+      recommendedEarlyStartMinutes != null
+        ? Math.min(defaultDayStartMinutes, recommendedEarlyStartMinutes)
+        : defaultDayStartMinutes;
     const dayStartMinutes =
       dayIndex === 0
-        ? defaultDayStartMinutes
+        ? dayStartBaselineMinutes
         : earliestFixedStartMinutes != null
           ? Math.max(0, earliestFixedStartMinutes - stayStartCommuteMinutes - 15)
-          : defaultDayStartMinutes;
+          : dayStartBaselineMinutes;
     const estimatedDayEndMinutes = dayStartMinutes + Math.round((totalRequestedHours + lunchHours + totalCommuteHoursEstimate) * 60);
     const freeHoursBeforeEvening = Math.max(0, (eveningCutoffMinutes - estimatedDayEndMinutes) / 60);
     const effectiveFreeHours = Math.min(freeActivityHours, freeHoursBeforeEvening);
