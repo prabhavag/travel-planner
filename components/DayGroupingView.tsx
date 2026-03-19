@@ -22,6 +22,7 @@ import { ResearchOptionCard } from "@/components/ResearchOptionCard";
 interface DayGroupingViewProps {
   groupedDays: GroupedDay[];
   userPreferences?: string[];
+  debugMode?: boolean;
   destination?: string | null;
   tripInfo?: Pick<
     TripInfo,
@@ -37,6 +38,7 @@ interface DayGroupingViewProps {
 export function DayGroupingView({
   groupedDays,
   userPreferences = [],
+  debugMode = false,
   destination = null,
   tripInfo,
   onMoveActivity,
@@ -464,6 +466,38 @@ export function DayGroupingView({
   }) => {
     const isMoving = movingActivity?.id === activity.id;
     const isCollapsed = collapsedActivityCards[activity.id] ?? true;
+    const debugAttributes = {
+      id: activity.id,
+      name: activity.name,
+      type: activity.type,
+      interestTags: activity.interestTags ?? [],
+      description: activity.description ?? null,
+      estimatedDuration: activity.estimatedDuration ?? null,
+      estimatedCost: activity.estimatedCost ?? null,
+      currency: activity.currency ?? null,
+      difficultyLevel: activity.difficultyLevel ?? null,
+      bestTimeOfDay: activity.bestTimeOfDay ?? null,
+      daylightPreference: activity.daylightPreference ?? null,
+      isFixedStartTime: activity.isFixedStartTime ?? null,
+      fixedStartTime: activity.fixedStartTime ?? null,
+      recommendedStartWindow: activity.recommendedStartWindow ?? null,
+      timeReason: activity.timeReason ?? null,
+      timeSourceLinks: activity.timeSourceLinks ?? [],
+      neighborhood: activity.neighborhood ?? null,
+      locationMode: activity.locationMode ?? null,
+      coordinates: activity.coordinates ?? null,
+      startCoordinates: activity.startCoordinates ?? null,
+      endCoordinates: activity.endCoordinates ?? null,
+      routeWaypoints: activity.routeWaypoints ?? [],
+      routePoints: activity.routePoints ?? [],
+      place_id: activity.place_id ?? null,
+      rating: activity.rating ?? null,
+      opening_hours: activity.opening_hours ?? null,
+      photo_url: activity.photo_url ?? null,
+      photo_urls: activity.photo_urls ?? [],
+      researchOptionId: activity.researchOption?.id ?? null,
+    };
+
     const moveControls = (
       <div className="pt-3 mt-3 border-t border-gray-50">
         {affordLabel ? <p className="mb-2 text-[11px] text-gray-500">{affordLabel}</p> : null}
@@ -495,6 +529,14 @@ export function DayGroupingView({
             Change Day
           </Button>
         )}
+        {debugMode ? (
+          <div className="mt-3 space-y-2 rounded-md border border-slate-300 bg-slate-50 p-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">Debug Attributes</p>
+            <pre className="max-h-72 overflow-auto rounded border border-slate-200 bg-white p-2 text-[11px] leading-4 text-slate-800">
+              {JSON.stringify(debugAttributes, null, 2)}
+            </pre>
+          </div>
+        ) : null}
       </div>
     );
 

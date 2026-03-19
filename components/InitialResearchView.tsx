@@ -65,6 +65,8 @@ interface InitialResearchViewProps {
   canProceed?: boolean;
   isLoading?: boolean;
   headerActions?: ReactNode;
+  debugMode?: boolean;
+  onToggleDebugMode?: () => void;
 }
 
 export function InitialResearchView({
@@ -85,6 +87,8 @@ export function InitialResearchView({
   canProceed = true,
   isLoading = false,
   headerActions = null,
+  debugMode = false,
+  onToggleDebugMode,
 }: InitialResearchViewProps) {
   const [showAssumptions, setShowAssumptions] = useState(false);
   const [activeInterest, setActiveInterest] = useState<string>("All");
@@ -562,6 +566,14 @@ export function InitialResearchView({
           <div className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700">
             {selectedOptionIds.length} selected
           </div>
+          <Button
+            variant={debugMode ? "default" : "outline"}
+            size="sm"
+            onClick={onToggleDebugMode}
+            disabled={isLoading}
+          >
+            {debugMode ? "Debug mode: on" : "Debug mode: off"}
+          </Button>
           {selectedOptionIds.length > 0 ? (
             <Button
               variant="outline"
@@ -642,6 +654,7 @@ export function InitialResearchView({
                         deepResearchLoading={isLoading && deepResearchOptionId === option.id}
                         deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
                         lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}
+                        showDebugDetails={debugMode}
                       />
                     </div>
                   ))}
@@ -661,6 +674,7 @@ export function InitialResearchView({
                   deepResearchLoading={isLoading && deepResearchOptionId === option.id}
                   deepResearchDisabled={isLoading && deepResearchOptionId !== option.id}
                   lastDeepResearchAt={lastDeepResearchAtByOptionId[option.id]}
+                  showDebugDetails={debugMode}
                 />
               ))}
             </div>

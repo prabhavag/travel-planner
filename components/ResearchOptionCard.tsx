@@ -24,6 +24,7 @@ interface ResearchOptionCardProps {
   activityDuration?: string | null;
   timeSlotLabel?: string | null;
   showDurationBadge?: boolean;
+  showDebugDetails?: boolean;
 }
 
 const categoryClassMap: Record<string, string> = {
@@ -53,6 +54,7 @@ export function ResearchOptionCard({
   activityDuration = null,
   timeSlotLabel = null,
   showDurationBadge = true,
+  showDebugDetails = false,
 }: ResearchOptionCardProps) {
   const formattedLastDeepResearchAt = lastDeepResearchAt
     ? new Date(lastDeepResearchAt).toLocaleString([], {
@@ -70,6 +72,32 @@ export function ResearchOptionCard({
       ? `${option.recommendedStartWindow.start}-${option.recommendedStartWindow.end}`
       : null;
   const displayTimeSlot = timeSlotLabel || bestTimeOfDay || recommendedStartWindowLabel;
+  const debugAttributes = {
+    id: option.id,
+    title: option.title,
+    category: option.category,
+    whyItMatches: option.whyItMatches,
+    bestForDates: option.bestForDates,
+    reviewSummary: option.reviewSummary,
+    estimatedDuration: option.estimatedDuration ?? null,
+    difficultyLevel: option.difficultyLevel ?? null,
+    bestTimeOfDay: option.bestTimeOfDay ?? null,
+    daylightPreference: option.daylightPreference ?? null,
+    isFixedStartTime: option.isFixedStartTime ?? null,
+    fixedStartTime: option.fixedStartTime ?? null,
+    recommendedStartWindow: option.recommendedStartWindow ?? null,
+    timeReason: option.timeReason ?? null,
+    timeSourceLinks: option.timeSourceLinks ?? [],
+    locationMode: option.locationMode ?? null,
+    coordinates: option.coordinates ?? null,
+    startCoordinates: option.startCoordinates ?? null,
+    endCoordinates: option.endCoordinates ?? null,
+    routeWaypoints: option.routeWaypoints ?? [],
+    routePoints: option.routePoints ?? [],
+    place_id: option.place_id ?? null,
+    sourceLinks: option.sourceLinks ?? [],
+    photoUrls: option.photoUrls ?? [],
+  };
 
   return (
     <Card
@@ -265,6 +293,14 @@ export function ResearchOptionCard({
                   />
                 ))}
               </div>
+            </div>
+          ) : null}
+          {showDebugDetails ? (
+            <div className="space-y-2 rounded-md border border-slate-300 bg-slate-50 p-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">Debug Attributes</p>
+              <pre className="max-h-72 overflow-auto rounded border border-slate-200 bg-white p-2 text-[11px] leading-4 text-slate-800">
+                {JSON.stringify(debugAttributes, null, 2)}
+              </pre>
             </div>
           ) : null}
           {extraContent}

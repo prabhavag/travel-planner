@@ -596,6 +596,7 @@ export default function PlannerPage() {
   const [activeDay, setActiveDay] = useState<number | null>(1);
   const [isChatMinimized, setIsChatMinimized] = useState(false);
   const [tripBasicsSaving, setTripBasicsSaving] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
   const [tripBasicsPreferencesInput, setTripBasicsPreferencesInput] = useState("");
   const [deepResearchOptionId, setDeepResearchOptionId] = useState<string | null>(null);
   const [lastDeepResearchAtByOptionId, setLastDeepResearchAtByOptionId] = useState<Record<string, string>>({});
@@ -2107,11 +2108,22 @@ export default function PlannerPage() {
                 return (
                   <div className="p-4">
                     <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-                      <div className="mb-4">
-                        <h2 className="text-lg font-semibold text-gray-900">Trip Basics</h2>
-                        <p className="mt-1 text-sm text-gray-600">
-                          Fill these details here or share them in chat. Both stay in sync.
-                        </p>
+                      <div className="mb-4 flex items-start justify-between gap-3">
+                        <div>
+                          <h2 className="text-lg font-semibold text-gray-900">Trip Basics</h2>
+                          <p className="mt-1 text-sm text-gray-600">
+                            Fill these details here or share them in chat. Both stay in sync.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={debugMode ? "default" : "outline"}
+                          onClick={() => setDebugMode((prev) => !prev)}
+                          disabled={loading || tripBasicsSaving}
+                        >
+                          {debugMode ? "Debug mode: on" : "Debug mode: off"}
+                        </Button>
                       </div>
 
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -2439,6 +2451,8 @@ export default function PlannerPage() {
                     canProceed={hasAnySelectedResearchOption}
                     isLoading={loading}
                     headerActions={aiInlineActions}
+                    debugMode={debugMode}
+                    onToggleDebugMode={() => setDebugMode((prev) => !prev)}
                   />
                 );
 
@@ -2449,6 +2463,7 @@ export default function PlannerPage() {
                     <DayGroupingView
                       groupedDays={groupedDays}
                       userPreferences={tripInfo?.preferences || []}
+                      debugMode={debugMode}
                       destination={tripInfo?.destination || null}
                       tripInfo={tripInfo || undefined}
                       onMoveActivity={handleMoveActivity}
