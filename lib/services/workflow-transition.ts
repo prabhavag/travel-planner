@@ -39,25 +39,34 @@ export function validateWorkflowTransition({
     return { ok: false, reason: "Unknown workflow state." };
   }
 
-  // Forward transitions are deterministic and one step at a time.
-  if (toIndex === fromIndex + 1) {
-    return { ok: true };
-  }
+  if (toIndex > fromIndex) {
+    // UI navigation can jump to any previously unlocked forward stage.
+    if (owner === "UI") {
+      return { ok: true };
+    }
 
-  // Backward transitions are explicit UI-only.
-  if (toIndex < fromIndex && owner === "UI") {
-    return { ok: true };
+    // Supervisor transitions stay deterministic and one step at a time.
+    if (toIndex === fromIndex + 1) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      reason: "Skipping forward stages is not allowed.",
+    };
   }
 
   if (toIndex < fromIndex) {
+    // Backward transitions are explicit UI-only.
+    if (owner === "UI") {
+      return { ok: true };
+    }
+
     return {
       ok: false,
       reason: "Backward transitions are only allowed for explicit UI navigation.",
     };
   }
 
-  return {
-    ok: false,
-    reason: "Skipping forward stages is not allowed.",
-  };
+  return { ok: true };
 }

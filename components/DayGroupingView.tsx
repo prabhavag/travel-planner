@@ -11,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MapPin, ListChecks, Home, AlertTriangle, Utensils } from "lucide-react";
 import { computeRoutes } from "@/lib/api-client";
 import type { GroupedDay, SuggestedActivity, TripInfo } from "@/lib/api-client";
@@ -1378,10 +1377,11 @@ export function DayGroupingView({
             </div>
           </div>
         ) : null}
-        <div className="space-y-2">
-          {(() => {
-            const seenTimelineIds = new Map<string, number>();
-            return timelineItems.map((item, index) => {
+        <div className="overflow-x-auto pb-1">
+          <div className="min-w-[640px] space-y-2 pr-2">
+            {(() => {
+              const seenTimelineIds = new Map<string, number>();
+              return timelineItems.map((item, index) => {
               const seenCount = seenTimelineIds.get(item.id) ?? 0;
               seenTimelineIds.set(item.id, seenCount + 1);
               const timelineKey = seenCount === 0 ? item.id : `${item.id}-${seenCount + 1}`;
@@ -1429,7 +1429,7 @@ export function DayGroupingView({
                         <span className="font-medium text-gray-700">{item.title}</span>
                         <span className="text-gray-500 truncate">· {item.detail}</span>
                       </div>
-                      <Badge variant="outline" className="h-5 bg-gray-50 text-gray-600 border-gray-200">
+                      <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-gray-50 text-gray-600 border-gray-200">
                         {item.timeRange}
                       </Badge>
                     </div>
@@ -1440,7 +1440,7 @@ export function DayGroupingView({
                         <span className="font-medium text-amber-900">{item.title}</span>
                         <span className="text-amber-700 truncate">· {item.detail}</span>
                       </div>
-                      <Badge variant="outline" className="h-5 bg-amber-50 text-amber-700 border-amber-200">
+                      <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-amber-50 text-amber-700 border-amber-200">
                         {item.timeRange}
                       </Badge>
                     </div>
@@ -1461,7 +1461,7 @@ export function DayGroupingView({
                         </div>
                         <Badge
                           variant="outline"
-                          className={`h-5 ${
+                          className={`h-5 shrink-0 whitespace-nowrap ${
                             item.type === "free"
                                 ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                               : item.type === "continue"
@@ -1478,7 +1478,8 @@ export function DayGroupingView({
               </div>
               );
             });
-          })()}
+            })()}
+          </div>
         </div>
       </>
     );
@@ -1609,7 +1610,7 @@ export function DayGroupingView({
                   </div>
                 </CardHeader>
                 <CardContent className="flex-1 overflow-hidden p-0">
-                  <ScrollArea className="h-full px-4 pb-6">
+                  <div className="h-full overflow-auto px-4 pb-6">
                     <div className="space-y-3">
                       <DayTimelineRows
                         day={day}
@@ -1620,7 +1621,7 @@ export function DayGroupingView({
                         endStayCoordinates={isFinalDepartureDay ? null : day.nightStay?.coordinates}
                       />
                     </div>
-                  </ScrollArea>
+                  </div>
                 </CardContent>
               </Card>
             </div>
@@ -1641,7 +1642,7 @@ export function DayGroupingView({
                   </div>
                 </CardHeader>
                 <CardContent className="flex-1 overflow-hidden p-0">
-                  <ScrollArea className="h-full px-4 pb-6">
+                  <div className="h-full overflow-auto px-4 pb-6">
                     <div className="space-y-3">
                       {unscheduledActivities.map((activity, index) => (
                         <ActivityItem
@@ -1654,7 +1655,7 @@ export function DayGroupingView({
                         />
                       ))}
                     </div>
-                  </ScrollArea>
+                  </div>
                 </CardContent>
               </Card>
             </div>
