@@ -123,33 +123,14 @@ export function DayGroupingView({
     return "flexible";
   }, []);
 
-  const getActivityTimingPolicy = useCallback((activity: SuggestedActivity): { minVisitMinutes: number; settleBufferMinutes: number } => {
+  const getActivityTimingPolicy = useCallback((activity: SuggestedActivity): { settleBufferMinutes: number } => {
     const tags = (activity.interestTags || []).join(" ");
     const category = activity.researchOption?.category || "";
     const text = `${activity.name} ${activity.type} ${tags} ${category}`.toLowerCase();
 
-    let minVisitMinutes = 45;
-    if (category === "snorkeling") minVisitMinutes = Math.max(minVisitMinutes, 60);
-    if (category === "hiking") minVisitMinutes = Math.max(minVisitMinutes, 90);
-    if (category === "food" || category === "culture" || category === "relaxation") minVisitMinutes = Math.max(minVisitMinutes, 60);
-    if (category === "adventure") minVisitMinutes = Math.max(minVisitMinutes, 75);
-
-    if (/(snorkel|snorkeling|scuba|dive|surf|kayak|paddle|canoe|boat tour|sailing|whale watch|water activity)/i.test(text)) {
-      minVisitMinutes = Math.max(minVisitMinutes, 60);
-    }
-    if (/(hike|hiking|trail|trek|outdoor|summit|national park|waterfall hike)/i.test(text)) {
-      minVisitMinutes = Math.max(minVisitMinutes, 90);
-    }
-    if (/(museum|gallery|historic|history|temple|cathedral|cultural|market|walking tour)/i.test(text)) {
-      minVisitMinutes = Math.max(minVisitMinutes, 60);
-    }
-    if (/(restaurant|food|brunch|lunch|dinner|tasting|cafe|coffee)/i.test(text)) {
-      minVisitMinutes = Math.max(minVisitMinutes, 60);
-    }
-
     const settleBufferMinutes =
       /(snorkel|snorkeling|scuba|dive|surf|kayak|paddle|canoe|hike|hiking|trail)/i.test(text) ? 15 : 10;
-    return { minVisitMinutes, settleBufferMinutes };
+    return { settleBufferMinutes };
   }, []);
 
   const timingPriorityRank = useCallback((activity: SuggestedActivity): number => {
@@ -1078,11 +1059,8 @@ export function DayGroupingView({
         ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
         : requestedHours;
       const timingPolicy = getActivityTimingPolicy(activity);
-      const minimumActivityMinutes = durationIsFlexible
-        ? roundToQuarter(timingPolicy.minVisitMinutes)
-        : roundToQuarter(requestedHours * 60);
       const activityMinutes = durationIsFlexible
-        ? Math.max(minimumActivityMinutes, roundToQuarter(allocatedHours * 60 + timingPolicy.settleBufferMinutes))
+        ? roundToQuarter(allocatedHours * 60 + timingPolicy.settleBufferMinutes)
         : roundToQuarter(allocatedHours * 60);
       const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
       const fixedAlignedStartMinutes =
@@ -1107,9 +1085,10 @@ export function DayGroupingView({
         departureHardCapMinutes != null && daylightCapMinutes != null
           ? Math.min(departureHardCapMinutes, daylightCapMinutes)
           : (departureHardCapMinutes ?? daylightCapMinutes);
-      const canApplyDaylightCap = effectiveCapMinutes != null && effectiveCapMinutes > activityStart;
+      const hasHardActivityCap = effectiveCapMinutes != null;
+      const canApplyDaylightCap = hasHardActivityCap && (effectiveCapMinutes as number) > activityStart;
       const activityEnd =
-        canApplyDaylightCap ? Math.min(uncappedActivityEnd, effectiveCapMinutes as number) : uncappedActivityEnd;
+        hasHardActivityCap ? Math.min(uncappedActivityEnd, effectiveCapMinutes as number) : uncappedActivityEnd;
       const recommendedWindowEndMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end);
       const recommendedWindowLabel = formatRecommendedStartWindowLabel(activity);
       const lateStartWarning =
@@ -1132,11 +1111,8 @@ export function DayGroupingView({
           : null;
       const combinedWarning = [arrivalConflictWarning, lateStartWarning, daylightWarning, daylightConflictWarning, nightOnlyWarning].filter(Boolean).join(" ");
       const lunchMinutes = roundToQuarter(60 + 15);
-      const scheduledWindowMinutes = Math.max(0, activityEnd - activityStart);
-      const effectiveActivityEnd =
-        scheduledWindowMinutes < minimumActivityMinutes && !isFinalDepartureDay
-          ? activityStart + minimumActivityMinutes
-          : activityEnd;
+      const effectiveActivityEnd = activityEnd;
+      if (effectiveActivityEnd <= activityStart) return;
       if (isFinalDepartureDay && effectiveActivityEnd <= activityStart) {
         droppedForDepartureBuffer.push(activity.name);
         departureCutoffReached = true;
@@ -1202,12 +1178,13 @@ export function DayGroupingView({
             ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
             : Math.max(roundToQuarter(cursorMinutes), nightStartFloorMinutes ?? 0);
         const uncappedNextActivityEnd = nextActivityStart + activityMinutes;
-        const canApplyDaylightCapForNext = daylightCapMinutes != null && daylightCapMinutes > nextActivityStart;
+        const hasHardCapForNext = daylightCapMinutes != null;
         const nextActivityEndCapped =
-          canApplyDaylightCapForNext && daylightCapMinutes != null
+          hasHardCapForNext && daylightCapMinutes != null
             ? Math.min(uncappedNextActivityEnd, daylightCapMinutes)
             : uncappedNextActivityEnd;
-        const nextActivityEnd = Math.max(nextActivityEndCapped, nextActivityStart + minimumActivityMinutes);
+        const nextActivityEnd = nextActivityEndCapped;
+        if (nextActivityEnd <= nextActivityStart) return;
         trackActivityMinutes(nextActivityStart, nextActivityEnd);
         timelineItems.push({
           type: "activity",
@@ -1250,6 +1227,18 @@ export function DayGroupingView({
         cursorMinutes = commuteEnd;
       }
     });
+
+    if (!hasScheduledPrimaryActivity && stayStartCommuteMinutes > 0) {
+      const stayStartCommuteId = `commute-stay-start-${day.dayNumber}`;
+      const beforeCount = timelineItems.length;
+      const filtered = timelineItems.filter((item) => item.id !== stayStartCommuteId);
+      if (filtered.length !== beforeCount) {
+        timelineItems.length = 0;
+        timelineItems.push(...filtered);
+        const bufferedCommuteMinutes = roundToQuarter(stayStartCommuteMinutes + commuteTransitionBufferMinutes);
+        scheduledCommuteMinutes = Math.max(0, scheduledCommuteMinutes - Math.max(0, bufferedCommuteMinutes));
+      }
+    }
 
     if (droppedForDepartureBuffer.length > 0) {
       const hiddenCount = droppedForDepartureBuffer.length;
@@ -1313,7 +1302,7 @@ export function DayGroupingView({
       if (isFinalDepartureDay) {
         cursorMinutes = Math.min(cursorMinutes, eveningCutoffMinutes);
       }
-      if (endOfDayCommuteMinutes > 0) {
+      if (endOfDayCommuteMinutes > 0 && hasScheduledPrimaryActivity) {
         const bufferedCommuteMinutes = roundToQuarter(endOfDayCommuteMinutes + commuteTransitionBufferMinutes);
         const commuteStart = roundToQuarter(cursorMinutes);
         const commuteEnd = commuteStart + bufferedCommuteMinutes;
