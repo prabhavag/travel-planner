@@ -11,6 +11,7 @@ import {
     NEARBY_CLUSTER_MAX_COMMUTE_MINUTES,
     NEARBY_CLUSTER_SQUEEZE_HOURS,
     SOFT_DAY_START_MINUTES,
+    DEFAULT_DAYLIGHT_END_MINUTES,
     WorkingDay,
 } from "./types";
 import {
@@ -193,6 +194,12 @@ export function getDayStructuralStats(
     let slotMismatchPenalty = 0;
     let recommendedStartMissPenalty = 0;
     let underDurationShortfallPenalty = 0;
+    let daylightViolationHours = 0;
+    const assignedSlotHours: Record<Exclude<SuggestedActivity["bestTimeOfDay"], "any">, number> = {
+        morning: 0,
+        afternoon: 0,
+        evening: 0,
+    };
     const earliestRecommendedMidpointMinutes = activities.reduce<number | null>((earliest, activity) => {
         const midpoint = recommendedWindowMidpointMinutes(activity);
         if (midpoint == null) return earliest;
@@ -212,6 +219,7 @@ export function getDayStructuralStats(
         const duration = getLoadDurationHours(preparedMap, activity.id);
         const midHour = currentHour + duration / 2;
         const assignedSlot = slotForHour(midHour);
+        assignedSlotHours[assignedSlot] += duration;
         if (activity.bestTimeOfDay !== "any") {
             slotMismatchPenalty += slotDistance(activity.bestTimeOfDay, assignedSlot) * duration;
         }
@@ -224,8 +232,17 @@ export function getDayStructuralStats(
         if (latestRecommendedStartMinutes != null && effectiveStartMinutes > latestRecommendedStartMinutes) {
             recommendedStartMissPenalty += (effectiveStartMinutes - latestRecommendedStartMinutes) / 60;
         }
+        if (activity.daylightPreference === "daylight_only") {
+            const activityEndMinutes = effectiveStartMinutes + Math.round(duration * 60);
+            daylightViolationHours += Math.max(0, (activityEndMinutes - DEFAULT_DAYLIGHT_END_MINUTES) / 60);
+        }
         currentHour += duration;
     }
+
+    const emptySlotHours = (Object.keys(dayCapacity.slotCapacity) as Array<keyof typeof dayCapacity.slotCapacity>).reduce(
+        (sum, slot) => sum + Math.max(0, dayCapacity.slotCapacity[slot] - assignedSlotHours[slot]),
+        0
+    );
 
     const overflow = Math.max(0, totalHours - dayCapacity.maxHours);
     const overflowPenaltyMultiplier = dayCapacity.overflowPenaltyMultiplier ?? 1;
@@ -258,7 +275,9 @@ export function getDayStructuralStats(
         slotOverflowPenalty * COST_WEIGHTS.slotOverflow +
         slotMismatchPenalty * COST_WEIGHTS.slotMismatch +
         recommendedStartMissPenalty * COST_WEIGHTS.recommendedStartMiss +
-        underDurationShortfallPenalty * COST_WEIGHTS.underDurationShortfall;
+        underDurationShortfallPenalty * COST_WEIGHTS.underDurationShortfall +
+        daylightViolationHours * COST_WEIGHTS.daylightViolation +
+        emptySlotHours * COST_WEIGHTS.emptySlot;
 
     const stats = { structuralCost, commuteProxy, totalHours };
     structuralStatsCache.set(cacheKey, stats);

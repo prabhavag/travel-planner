@@ -34,23 +34,26 @@ export const SLOT_CAPACITY_HOURS: Record<Exclude<SuggestedActivity["bestTimeOfDa
     evening: 3,
 };
 export const SOFT_DAY_START_MINUTES = 9 * 60 + 30;
+export const DEFAULT_DAYLIGHT_END_MINUTES = 18 * 60;
 
 export const COST_WEIGHTS = {
-    overflow: 50,
-    overflowQuadratic: 8,
-    commute: 0.25,
-    commuteImbalance: 0.15,
-    longLeg: 1.6,
-    spread: 0.8,
-    variety: 3,
-    slotOverflow: 8,
-    slotMismatch: 5,
-    recommendedStartMiss: 7,
-    underDurationShortfall: 2.5,
-    balance: 0.7,
-    fullDayNearbyOverflowRelief: 9,
-    fullDayFarPenalty: 3,
-    nearbySplit: 6,
+    overflow: 30, // Penalizes total scheduled hours exceeding daily capacity.
+    overflowQuadratic: 8, // Escalates cost nonlinearly for heavy overbooking.
+    commute: 0.5, // Penalizes total intra-day travel time.
+    commuteImbalance: 0.25, // Penalizes uneven commute burden across days.
+    longLeg: 1.6, // Penalizes the single longest travel leg in a day.
+    spread: 0.8, // Penalizes high average distance between consecutive stops.
+    variety: 3, // Penalizes repeating the same activity type within a day.
+    slotOverflow: 8, // Penalizes overfilling morning/afternoon/evening slot capacities.
+    slotMismatch: 5, // Penalizes assigning activities outside preferred time-of-day slots.
+    recommendedStartMiss: 7, // Penalizes starts later than recommended start-window end.
+    underDurationShortfall: 2.5, // Penalizes compressing flexible activities below estimated duration.
+    daylightViolation: 40, // Strongly penalizes daylight-only activity hours scheduled past daylight end.
+    emptySlot: 2.0, // Lightly penalizes unfilled capacity across time-of-day slots.
+    balance: 0.7, // Penalizes per-day load variance from weighted target distribution.
+    fullDayNearbyOverflowRelief: 9, // Reduces overflow cost when nearby items pair with a full-day anchor.
+    fullDayFarPenalty: 3, // Reserved weight for discouraging distant full-day placements.
+    nearbySplit: 6, // Penalizes splitting nearby activities across different days.
 };
 
 export const NEARBY_CLUSTER_MAX_COMMUTE_MINUTES = 40;

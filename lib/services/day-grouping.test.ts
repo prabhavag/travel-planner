@@ -111,6 +111,71 @@ describe('day-grouping structural stats', () => {
 
         expect(flexibleStats.structuralCost).toBeGreaterThan(fixedStats.structuralCost);
     });
+
+    it('applies a strong penalty when daylight-only activities run past daylight end', () => {
+        const commuteMatrix = new Map();
+        const capacity = {
+            maxHours: 8,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1
+        };
+
+        const daylightOnly = {
+            ...mockActivity('daylight'),
+            daylightPreference: 'daylight_only',
+            isFixedStartTime: true,
+            fixedStartTime: '5:00 PM',
+            estimatedDuration: '3 hours',
+            bestTimeOfDay: 'evening' as const,
+        };
+        const flexible = {
+            ...mockActivity('flexible'),
+            daylightPreference: 'flexible',
+            isFixedStartTime: true,
+            fixedStartTime: '5:00 PM',
+            estimatedDuration: '3 hours',
+            bestTimeOfDay: 'evening' as const,
+        };
+
+        const daylightMap = new Map();
+        daylightMap.set('daylight', { activity: daylightOnly, durationHours: 3, loadDurationHours: 3, isFullDay: false });
+        const flexibleMap = new Map();
+        flexibleMap.set('flexible', { activity: flexible, durationHours: 3, loadDurationHours: 3, isFullDay: false });
+
+        const daylightStats = getDayStructuralStats(['daylight'], daylightMap, commuteMatrix, capacity);
+        structuralStatsCache.clear();
+        const flexibleStats = getDayStructuralStats(['flexible'], flexibleMap, commuteMatrix, capacity);
+
+        expect(daylightStats.structuralCost).toBeGreaterThan(flexibleStats.structuralCost);
+    });
+
+    it('adds a small penalty when slot capacity remains unfilled', () => {
+        const commuteMatrix = new Map();
+        const activity = {
+            ...mockActivity('single'),
+            bestTimeOfDay: 'afternoon' as const,
+            estimatedDuration: '2 hours',
+        };
+        const preparedMap = new Map();
+        preparedMap.set('single', { activity, durationHours: 2, loadDurationHours: 2, isFullDay: false });
+
+        const roomyCapacity = {
+            maxHours: 8,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1
+        };
+        const tightCapacity = {
+            maxHours: 8,
+            slotCapacity: { morning: 0, afternoon: 2, evening: 0 },
+            targetWeight: 1
+        };
+
+        const roomyStats = getDayStructuralStats(['single'], preparedMap, commuteMatrix, roomyCapacity);
+        structuralStatsCache.clear();
+        const tightStats = getDayStructuralStats(['single'], preparedMap, commuteMatrix, tightCapacity);
+
+        expect(roomyStats.structuralCost).toBeGreaterThan(tightStats.structuralCost);
+    });
 });
 
 describe('day-grouping load factor', () => {
