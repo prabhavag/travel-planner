@@ -34,6 +34,8 @@ import { formatTripPreferenceSummary, getTripFoodPreferences } from "@/lib/utils
 const DEFAULT_MODEL = "gpt-4o";
 const DEFAULT_TEMPERATURE = 0.5;
 const RESEARCH_CATEGORIES = ["snorkeling", "hiking", "food", "culture", "relaxation", "adventure", "other"] as const;
+const ROUTES_API_URL = "https://routes.googleapis.com/directions/v2:computeRoutes";
+const ROUTE_WAYPOINT_CORRIDOR_METERS = 3000;
 
 const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -1160,6 +1162,133 @@ class LLMClient {
     return 2 * r * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
   }
 
+  private _getRoutesApiKey(): string | null {
+    const key = process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_PLACES_API_KEY || null;
+    if (!key) return null;
+    const sanitized = key.replace(/[^\x20-\x7E]/g, "").trim();
+    return sanitized.length > 0 ? sanitized : null;
+  }
+
+  private _decodeEncodedPolyline(encodedPolyline: string): Coordinates[] {
+    const points: Coordinates[] = [];
+    let index = 0;
+    let lat = 0;
+    let lng = 0;
+
+    while (index < encodedPolyline.length) {
+      let result = 0;
+      let shift = 0;
+      let byte = 0;
+
+      do {
+        byte = encodedPolyline.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20 && index <= encodedPolyline.length);
+
+      const deltaLat = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+      lat += deltaLat;
+
+      result = 0;
+      shift = 0;
+      do {
+        byte = encodedPolyline.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20 && index <= encodedPolyline.length);
+
+      const deltaLng = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+      lng += deltaLng;
+
+      points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+    }
+
+    return points;
+  }
+
+  private _distancePointToSegmentMeters(point: Coordinates, segmentStart: Coordinates, segmentEnd: Coordinates): number {
+    const latScale = 111320;
+    const lngScale = 111320 * Math.cos((point.lat * Math.PI) / 180);
+
+    const px = 0;
+    const py = 0;
+    const ax = (segmentStart.lng - point.lng) * lngScale;
+    const ay = (segmentStart.lat - point.lat) * latScale;
+    const bx = (segmentEnd.lng - point.lng) * lngScale;
+    const by = (segmentEnd.lat - point.lat) * latScale;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const segmentLengthSquared = dx * dx + dy * dy;
+
+    if (segmentLengthSquared <= 1e-6) {
+      const distX = px - ax;
+      const distY = py - ay;
+      return Math.hypot(distX, distY);
+    }
+
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / segmentLengthSquared));
+    const closestX = ax + t * dx;
+    const closestY = ay + t * dy;
+    return Math.hypot(px - closestX, py - closestY);
+  }
+
+  private _distanceToPolylineMeters(point: Coordinates, polylinePoints: Coordinates[]): number | null {
+    if (polylinePoints.length < 2) return null;
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = 1; i < polylinePoints.length; i += 1) {
+      const dist = this._distancePointToSegmentMeters(point, polylinePoints[i - 1], polylinePoints[i]);
+      if (dist < best) best = dist;
+    }
+    return Number.isFinite(best) ? best : null;
+  }
+
+  private async _computeRoutePolylinePoints(entryPoint: Coordinates, exitPoint: Coordinates): Promise<Coordinates[] | null> {
+    const apiKey = this._getRoutesApiKey();
+    if (!apiKey) return null;
+
+    try {
+      const response = await fetch(ROUTES_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask": "routes.polyline.encodedPolyline",
+        },
+        body: JSON.stringify({
+          origin: {
+            location: {
+              latLng: {
+                latitude: entryPoint.lat,
+                longitude: entryPoint.lng,
+              },
+            },
+          },
+          destination: {
+            location: {
+              latLng: {
+                latitude: exitPoint.lat,
+                longitude: exitPoint.lng,
+              },
+            },
+          },
+          travelMode: "DRIVE",
+          routingPreference: "TRAFFIC_UNAWARE",
+          languageCode: "en-US",
+        }),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const encodedPolyline = data?.routes?.[0]?.polyline?.encodedPolyline;
+      if (typeof encodedPolyline !== "string" || !encodedPolyline.trim()) return null;
+      const decoded = this._decodeEncodedPolyline(encodedPolyline);
+      return decoded.length >= 2 ? decoded : null;
+    } catch {
+      return null;
+    }
+  }
+
   private _logRouteDebug(label: string, payload: Record<string, unknown>) {
     if (process.env.NODE_ENV === "production") return;
     console.info(`[route-debug] ${label}`, payload);
@@ -1223,6 +1352,10 @@ class LLMClient {
       `${baseQuery} viewpoint`,
       `${baseQuery} attraction`,
     ];
+    const routePolylinePoints =
+      entryPoint && exitPoint
+        ? await this._computeRoutePolylinePoints(entryPoint, exitPoint)
+        : null;
 
     const results = await Promise.all(
       queries.map((query) => placesClient.searchPlaces(query, center, radius))
@@ -1243,7 +1376,7 @@ class LLMClient {
       }
     });
 
-    const candidates = Array.from(uniqueById.values())
+    const preliminaryCandidates = Array.from(uniqueById.values())
       .filter((waypoint) => {
         if (entryPoint && this._distanceMeters(waypoint.coordinates, entryPoint) < 500) return false;
         if (exitPoint && this._distanceMeters(waypoint.coordinates, exitPoint) < 500) return false;
@@ -1251,6 +1384,16 @@ class LLMClient {
       })
       .sort((a, b) => b.score - a.score)
       .slice(0, 6);
+    const candidatesAlongRoute =
+      routePolylinePoints && routePolylinePoints.length >= 2
+        ? preliminaryCandidates.filter((candidate) => {
+          const distanceToRoute = this._distanceToPolylineMeters(candidate.coordinates, routePolylinePoints);
+          return distanceToRoute != null && distanceToRoute <= ROUTE_WAYPOINT_CORRIDOR_METERS;
+        })
+        : [];
+    const candidates = routePolylinePoints && routePolylinePoints.length >= 2
+      ? candidatesAlongRoute
+      : [];
 
     let ordered = candidates;
     if (entryPoint && exitPoint && !isLoop) {
@@ -1268,14 +1411,22 @@ class LLMClient {
       }
     }
 
-    const routeWaypoints: RouteWaypoint[] = ordered.map(({ score, ...waypoint }) => waypoint).slice(0, 5);
-    const routePoints = this._buildRoutePointSequence({ entryPoint, exitPoint, waypoints: routeWaypoints });
+    const intermediateWaypoints: RouteWaypoint[] = ordered.map(({ score, ...waypoint }) => waypoint).slice(0, 5);
+    const routeWaypoints: RouteWaypoint[] = [
+      ...(entryPoint ? [{ name: "Route start", place_id: null, coordinates: entryPoint }] : []),
+      ...intermediateWaypoints,
+      ...(exitPoint ? [{ name: "Route end", place_id: null, coordinates: exitPoint }] : []),
+    ];
+    const routePoints = this._buildRoutePointSequence({ entryPoint, exitPoint, waypoints: intermediateWaypoints });
     this._logRouteDebug("buildRouteFromPlaces", {
       optionTitle,
       destinationName,
       isLoop,
       entryPoint,
       exitPoint,
+      routePolylinePointCount: routePolylinePoints?.length ?? 0,
+      preliminaryCandidateCount: preliminaryCandidates.length,
+      alongRouteCandidateCount: candidatesAlongRoute.length,
       candidateCount: candidates.length,
       selectedWaypoints: routeWaypoints.map((waypoint) => ({
         name: waypoint.name,
