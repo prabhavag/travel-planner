@@ -1309,7 +1309,12 @@ export function DayGroupingView({
           </div>
         ) : null}
         <div className="space-y-2">
-          {timelineItems.map((item, index) => {
+          {(() => {
+            const seenTimelineIds = new Map<string, number>();
+            return timelineItems.map((item, index) => {
+              const seenCount = seenTimelineIds.get(item.id) ?? 0;
+              seenTimelineIds.set(item.id, seenCount + 1);
+              const timelineKey = seenCount === 0 ? item.id : `${item.id}-${seenCount + 1}`;
             const isLast = index === timelineItems.length - 1;
             const dotClass =
               item.type === "activity"
@@ -1324,8 +1329,8 @@ export function DayGroupingView({
                       ? "bg-emerald-400 border-emerald-500"
                       : "bg-gray-300 border-gray-400";
 
-            return (
-              <div key={item.id} className="flex gap-3">
+              return (
+              <div key={timelineKey} className="flex gap-3">
                 <div className="w-10 shrink-0 relative flex flex-col items-center">
                   <div className={`mt-2 h-3 w-3 rounded-full border-2 ${dotClass}`} />
                   {!isLast ? <div className="w-px flex-1 bg-gray-200 my-1" /> : null}
@@ -1401,8 +1406,9 @@ export function DayGroupingView({
                   )}
                 </div>
               </div>
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       </>
     );
@@ -1521,8 +1527,8 @@ export function DayGroupingView({
                       )}
                       {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && !isFinalDepartureDay && (
                         <div className="mt-2 space-y-1 text-xs text-slate-600">
-                          {day.nightStay.candidates.slice(0, 3).map((candidate) => (
-                            <div key={candidate.label}>
+                          {day.nightStay.candidates.slice(0, 3).map((candidate, candidateIndex) => (
+                            <div key={`${candidate.label}-${candidateIndex}`}>
                               Alt: {candidate.label}
                               {candidate.driveScoreKm != null ? ` · ~${candidate.driveScoreKm} km drive` : ""}
                             </div>
@@ -1569,7 +1575,7 @@ export function DayGroupingView({
                     <div className="space-y-3">
                       {unscheduledActivities.map((activity, index) => (
                         <ActivityItem
-                          key={`unscheduled-${activity.id}`}
+                          key={`unscheduled-${activity.id}-${index}`}
                           activity={activity}
                           dayNumber={sourceDayByActivityId[activity.id] ?? 1}
                           sourceDayNumber={sourceDayByActivityId[activity.id]}
