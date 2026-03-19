@@ -473,6 +473,7 @@ export function DayGroupingView({
       interestTags: activity.interestTags ?? [],
       description: activity.description ?? null,
       estimatedDuration: activity.estimatedDuration ?? null,
+      isDurationFlexible: activity.isDurationFlexible ?? true,
       estimatedCost: activity.estimatedCost ?? null,
       currency: activity.currency ?? null,
       difficultyLevel: activity.difficultyLevel ?? null,
@@ -793,6 +794,7 @@ export function DayGroupingView({
   }
 
   function activityLoadFactor(activity: SuggestedActivity): number {
+    if (activity.isDurationFlexible === false) return 1;
     if (!activity.isFixedStartTime) return 1;
     const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
     if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
@@ -1064,11 +1066,18 @@ export function DayGroupingView({
       const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
       const recommendedHours = Math.max(estimatedHours, routeFloorHours);
       const requestedHours = recommendedHours * activityLoadFactor(activity);
-      const minimumScheduledHours = Math.max(0.75, recommendedHours * 0.5);
-      const allocatedHours = Math.max(minimumScheduledHours, requestedHours * scaleFactor);
+      const durationIsFlexible = activity.isDurationFlexible !== false;
+      const minimumScheduledHours = durationIsFlexible ? Math.max(0.75, recommendedHours * 0.5) : requestedHours;
+      const allocatedHours = durationIsFlexible
+        ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
+        : requestedHours;
       const timingPolicy = getActivityTimingPolicy(activity);
-      const minimumActivityMinutes = roundToQuarter(timingPolicy.minVisitMinutes);
-      const activityMinutes = Math.max(minimumActivityMinutes, roundToQuarter(allocatedHours * 60 + timingPolicy.settleBufferMinutes));
+      const minimumActivityMinutes = durationIsFlexible
+        ? roundToQuarter(timingPolicy.minVisitMinutes)
+        : roundToQuarter(requestedHours * 60);
+      const activityMinutes = durationIsFlexible
+        ? Math.max(minimumActivityMinutes, roundToQuarter(allocatedHours * 60 + timingPolicy.settleBufferMinutes))
+        : roundToQuarter(allocatedHours * 60);
       const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
       const fixedAlignedStartMinutes =
         activity.isFixedStartTime && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;

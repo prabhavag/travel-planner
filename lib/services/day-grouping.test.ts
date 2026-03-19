@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
     parseDurationHours,
+    activityLoadFactor,
     getDayStructuralStats,
     structuralStatsCache,
     computeAllDayStats,
@@ -15,6 +16,7 @@ const mockActivity = (id: string): SuggestedActivity => ({
     interestTags: [],
     description: '',
     estimatedDuration: '2 hours',
+    isDurationFlexible: true,
     estimatedCost: 10,
     currency: 'USD',
     difficultyLevel: 'moderate',
@@ -84,6 +86,51 @@ describe('day-grouping structural stats', () => {
         // Different order should still hit cache because we sort keys
         getDayStructuralStats(['b', 'a'], preparedMap, commuteMatrix, capacity);
         expect(structuralStatsCache.size).toBe(1);
+    });
+
+    it('penalizes under-duration only for flexible activities', () => {
+        const commuteMatrix = new Map();
+        const capacity = {
+            maxHours: 8,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1
+        };
+
+        const flexibleActivity = { ...mockActivity('flex'), isDurationFlexible: true };
+        const fixedActivity = { ...mockActivity('fixed'), isDurationFlexible: false };
+
+        const flexibleMap = new Map();
+        flexibleMap.set('flex', { activity: flexibleActivity, durationHours: 2, loadDurationHours: 1, isFullDay: false });
+
+        const fixedMap = new Map();
+        fixedMap.set('fixed', { activity: fixedActivity, durationHours: 2, loadDurationHours: 1, isFullDay: false });
+
+        const flexibleStats = getDayStructuralStats(['flex'], flexibleMap, commuteMatrix, capacity);
+        const fixedStats = getDayStructuralStats(['fixed'], fixedMap, commuteMatrix, capacity);
+
+        expect(flexibleStats.structuralCost).toBeGreaterThan(fixedStats.structuralCost);
+    });
+});
+
+describe('day-grouping load factor', () => {
+    it('does not reduce fixed-duration activities below estimated duration', () => {
+        const nonFlexible = {
+            ...mockActivity('nf'),
+            isDurationFlexible: false,
+            isFixedStartTime: true,
+            fixedStartTime: '6:00 AM',
+            bestTimeOfDay: 'morning' as const,
+        };
+        const flexible = {
+            ...mockActivity('f'),
+            isDurationFlexible: true,
+            isFixedStartTime: true,
+            fixedStartTime: '6:00 AM',
+            bestTimeOfDay: 'morning' as const,
+        };
+
+        expect(activityLoadFactor(nonFlexible)).toBe(1);
+        expect(activityLoadFactor(flexible)).toBe(0.7);
     });
 });
 

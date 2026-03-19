@@ -46,6 +46,7 @@ export const COST_WEIGHTS = {
     slotOverflow: 8,
     slotMismatch: 5,
     recommendedStartMiss: 7,
+    underDurationShortfall: 2.5,
     balance: 0.7,
     fullDayNearbyOverflowRelief: 9,
     fullDayFarPenalty: 3,

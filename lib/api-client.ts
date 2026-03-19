@@ -276,6 +276,7 @@ export interface ResearchOption {
   bestForDates: string;
   reviewSummary: string;
   estimatedDuration?: string | null;
+  isDurationFlexible?: boolean;
   sourceLinks: ResearchSource[];
   photoUrls?: string[];
   difficultyLevel?: "easy" | "moderate" | "hard";
@@ -573,6 +574,7 @@ export interface SuggestedActivity {
   interestTags?: string[];
   description: string;
   estimatedDuration: string;
+  isDurationFlexible?: boolean;
   estimatedCost: number | null;
   currency?: string;
   difficultyLevel: "easy" | "moderate" | "hard";

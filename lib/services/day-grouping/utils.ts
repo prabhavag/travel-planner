@@ -233,6 +233,7 @@ export function recommendedWindowMidpointMinutes(activity: SuggestedActivity): n
 }
 
 export function activityLoadFactor(activity: SuggestedActivity): number {
+    if (activity.isDurationFlexible === false) return 1;
     if (!activity.isFixedStartTime) return 1;
     const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
     if (fixedStartMinutes != null && fixedStartMinutes <= EARLY_FIXED_ACTIVITY_CUTOFF_MINUTES) {

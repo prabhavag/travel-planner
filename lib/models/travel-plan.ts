@@ -262,6 +262,7 @@ export const ResearchOptionSchema = z.object({
   bestForDates: z.string(),
   reviewSummary: z.string(),
   estimatedDuration: z.string().optional().nullable(),
+  isDurationFlexible: z.boolean().optional().default(true),
   sourceLinks: z.array(ResearchSourceSchema).default([]),
   photoUrls: z.array(z.string()).max(3).default([]),
   difficultyLevel: z.enum(["easy", "moderate", "hard"]).optional(),
@@ -301,6 +302,7 @@ export const SuggestedActivitySchema = z.object({
   interestTags: z.array(z.string()).max(3).default([]), // user-interest aligned tags
   description: z.string(),
   estimatedDuration: z.string(), // "2-3 hours"
+  isDurationFlexible: z.boolean().optional().default(true),
   estimatedCost: z.number().nullable(),
   currency: z.string().default("USD"), // Currency code (e.g., "USD", "EUR", "JPY")
   difficultyLevel: z.enum(["easy", "moderate", "hard"]).default("moderate"),

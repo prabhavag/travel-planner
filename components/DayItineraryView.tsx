@@ -553,6 +553,7 @@ export function DayItineraryView({
   };
 
   function activityLoadFactor(activity: SuggestedActivity): number {
+    if (activity.isDurationFlexible === false) return 1;
     if (!activity.isFixedStartTime) return 1;
     const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
     if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
@@ -848,8 +849,11 @@ export function DayItineraryView({
     sortedActivities.forEach((activity, index) => {
       const recommendedHours = parseEstimatedHours(activity.estimatedDuration);
       const requestedHours = recommendedHours * activityLoadFactor(activity);
-      const minimumScheduledHours = Math.max(0.75, recommendedHours * 0.5);
-      const allocatedHours = Math.max(minimumScheduledHours, requestedHours * scaleFactor);
+      const durationIsFlexible = activity.isDurationFlexible !== false;
+      const minimumScheduledHours = durationIsFlexible ? Math.max(0.75, recommendedHours * 0.5) : requestedHours;
+      const allocatedHours = durationIsFlexible
+        ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
+        : requestedHours;
       const recommendedStartWindowLabel = formatRecommendedStartWindowLabel(activity);
       const recommendedStartSuffix =
         !activity.isFixedStartTime && recommendedStartWindowLabel

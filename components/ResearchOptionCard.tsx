@@ -80,6 +80,7 @@ export function ResearchOptionCard({
     bestForDates: option.bestForDates,
     reviewSummary: option.reviewSummary,
     estimatedDuration: option.estimatedDuration ?? null,
+    isDurationFlexible: option.isDurationFlexible ?? true,
     difficultyLevel: option.difficultyLevel ?? null,
     bestTimeOfDay: option.bestTimeOfDay ?? null,
     daylightPreference: option.daylightPreference ?? null,

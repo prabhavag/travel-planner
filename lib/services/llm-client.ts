@@ -61,6 +61,7 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
               bestForDates: { type: "string" },
               reviewSummary: { type: "string" },
               estimatedDuration: { type: ["string", "null"] },
+              isDurationFlexible: { type: "boolean" },
               difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
               bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
               daylightPreference: { type: "string", enum: ["daylight_only", "night_only", "flexible"] },
@@ -184,6 +185,7 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
           bestForDates: { type: "string" },
           reviewSummary: { type: "string" },
           estimatedDuration: { type: ["string", "null"] },
+          isDurationFlexible: { type: "boolean" },
           difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
           bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
           daylightPreference: { type: "string", enum: ["daylight_only", "night_only", "flexible"] },
@@ -281,6 +283,7 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
         bestForDates: { type: "string" },
         reviewSummary: { type: "string" },
         estimatedDuration: { type: ["string", "null"] },
+        isDurationFlexible: { type: "boolean" },
         difficultyLevel: { type: "string", enum: ["easy", "moderate", "hard"] },
         bestTimeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "any"] },
         daylightPreference: { type: "string", enum: ["daylight_only", "night_only", "flexible"] },
@@ -783,11 +786,23 @@ class LLMClient {
     const normalizedFixedStartTime = this._normalizeFixedStartTime(activity.fixedStartTime);
     const isFixedStartTime = Boolean(activity.isFixedStartTime || normalizedFixedStartTime);
     const recommendedStartWindow = this._normalizeRecommendedStartWindow(activity.recommendedStartWindow);
+    const inferredDurationFlexibility = this._inferDurationFlexibility({
+      title: activity.name || "",
+      category: activity.type || "other",
+      whyItMatches: activity.description || "",
+      bestForDates: "",
+      reviewSummary: activity.description || "",
+      timeReason: activity.timeReason || "",
+    });
+    const isDurationFlexible =
+      this._normalizeDurationFlexibility((activity as SuggestedActivity & { isDurationFlexible?: unknown }).isDurationFlexible) ??
+      inferredDurationFlexibility;
 
     return {
       ...activity,
       bestTimeOfDay: normalizedBestTimeOfDay,
       daylightPreference,
+      isDurationFlexible,
       isFixedStartTime,
       fixedStartTime: isFixedStartTime
         ? normalizedFixedStartTime || this._fallbackFixedStartFromBestTime(normalizedBestTimeOfDay)
@@ -1391,6 +1406,11 @@ class LLMClient {
     return normalized.length > 0 ? normalized : null;
   }
 
+  private _normalizeDurationFlexibility(value: unknown): boolean | null {
+    if (typeof value !== "boolean") return null;
+    return value;
+  }
+
   private _normalizeFixedStartTime(value: unknown): string | null {
     if (typeof value !== "string") return null;
     const normalized = value.trim();
@@ -1520,6 +1540,28 @@ class LLMClient {
     if (category === "hiking" || category === "snorkeling" || category === "adventure") return "2-4 hours";
     if (category === "food" || category === "culture" || category === "relaxation") return "1-3 hours";
     return "2-3 hours";
+  }
+
+  private _inferDurationFlexibility({
+    title,
+    category,
+    whyItMatches,
+    bestForDates,
+    reviewSummary,
+    timeReason,
+  }: {
+    title: string;
+    category: string;
+    whyItMatches: string;
+    bestForDates: string;
+    reviewSummary: string;
+    timeReason: string;
+  }): boolean {
+    const text = `${title} ${category} ${whyItMatches} ${bestForDates} ${reviewSummary} ${timeReason}`.toLowerCase();
+    if (/(guided tour|tour\b|ticketed|timed entry|time slot|set departure|show\b|performance|class\b|workshop|ferry crossing|cruise departure|boat departure)/i.test(text)) {
+      return false;
+    }
+    return true;
   }
 
   private _inferDifficultyLevel({
@@ -1950,10 +1992,21 @@ class LLMClient {
           }
 
           if (!placeId) {
+            const isDurationFlexible =
+              option.isDurationFlexible ??
+              this._inferDurationFlexibility({
+                title: option.title,
+                category: option.category,
+                whyItMatches: option.whyItMatches,
+                bestForDates: option.bestForDates,
+                reviewSummary: option.reviewSummary,
+                timeReason: option.timeReason || "",
+              });
             return {
               ...option,
               photoUrls: option.photoUrls || [],
               estimatedDuration: option.estimatedDuration || inferredEstimatedDuration,
+              isDurationFlexible,
               difficultyLevel: option.difficultyLevel || inferredDifficulty,
               bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
               isFixedStartTime: option.isFixedStartTime || false,
@@ -1972,10 +2025,21 @@ class LLMClient {
 
           const photoUrls = await placesClient.getPlacePhotoUrlsFromId(placeId, 320);
           const placeCoordinates = preferredPlace?.location || places[0]?.location || null;
+          const isDurationFlexible =
+            option.isDurationFlexible ??
+            this._inferDurationFlexibility({
+              title: option.title,
+              category: option.category,
+              whyItMatches: option.whyItMatches,
+              bestForDates: option.bestForDates,
+              reviewSummary: option.reviewSummary,
+              timeReason: option.timeReason || "",
+            });
           return {
             ...option,
             photoUrls: photoUrls.slice(0, 3),
             estimatedDuration: option.estimatedDuration || inferredEstimatedDuration,
+            isDurationFlexible,
             difficultyLevel: option.difficultyLevel || inferredDifficulty,
             bestTimeOfDay: option.bestTimeOfDay || inferredTime.bestTimeOfDay,
             isFixedStartTime: option.isFixedStartTime || false,
@@ -2072,6 +2136,16 @@ class LLMClient {
             reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
           });
           const estimatedDuration = this._normalizeEstimatedDuration(opt.estimatedDuration) || inferredEstimatedDuration;
+          const isDurationFlexible =
+            this._normalizeDurationFlexibility(opt.isDurationFlexible) ??
+            this._inferDurationFlexibility({
+              title: typeof opt.title === "string" ? opt.title : "",
+              category: typeof opt.category === "string" ? opt.category : "other",
+              whyItMatches: typeof opt.whyItMatches === "string" ? opt.whyItMatches : "",
+              bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
+              reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
+              timeReason: typeof opt.timeReason === "string" ? opt.timeReason : "",
+            });
           const rawDifficultyLevel = opt.difficultyLevel;
           const hasExplicitDifficultyLevel =
             rawDifficultyLevel === "easy" ||
@@ -2143,6 +2217,7 @@ class LLMClient {
             bestForDates: typeof opt.bestForDates === "string" ? opt.bestForDates : "",
             reviewSummary: typeof opt.reviewSummary === "string" ? opt.reviewSummary : "",
             estimatedDuration,
+            isDurationFlexible,
             sourceLinks,
             photoUrls,
             difficultyLevel: hasExplicitDifficultyLevel ? difficultyLevel : inferredDifficulty,
@@ -2844,6 +2919,7 @@ class LLMClient {
   }
 
   private _activityLoadFactorForAiCheck(activity: SuggestedActivity): number {
+    if (activity.isDurationFlexible === false) return 1;
     if (!activity.isFixedStartTime) return 1;
     const fixedStartMinutes = this._parseFixedStartTimeMinutesForAiCheck(activity.fixedStartTime);
     if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;

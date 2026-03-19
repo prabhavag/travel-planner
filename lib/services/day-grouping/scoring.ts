@@ -192,6 +192,7 @@ export function getDayStructuralStats(
 
     let slotMismatchPenalty = 0;
     let recommendedStartMissPenalty = 0;
+    let underDurationShortfallPenalty = 0;
     const earliestRecommendedMidpointMinutes = activities.reduce<number | null>((earliest, activity) => {
         const midpoint = recommendedWindowMidpointMinutes(activity);
         if (midpoint == null) return earliest;
@@ -203,6 +204,11 @@ export function getDayStructuralStats(
             : SOFT_DAY_START_MINUTES;
     let currentHour = 0;
     for (const activity of activities) {
+        const prepared = preparedMap.get(activity.id);
+        if (prepared && activity.isDurationFlexible !== false) {
+            const shortfallHours = Math.max(0, prepared.durationHours - prepared.loadDurationHours);
+            underDurationShortfallPenalty += shortfallHours * shortfallHours;
+        }
         const duration = getLoadDurationHours(preparedMap, activity.id);
         const midHour = currentHour + duration / 2;
         const assignedSlot = slotForHour(midHour);
@@ -248,7 +254,8 @@ export function getDayStructuralStats(
         varietyPenalty * COST_WEIGHTS.variety +
         slotOverflowPenalty * COST_WEIGHTS.slotOverflow +
         slotMismatchPenalty * COST_WEIGHTS.slotMismatch +
-        recommendedStartMissPenalty * COST_WEIGHTS.recommendedStartMiss;
+        recommendedStartMissPenalty * COST_WEIGHTS.recommendedStartMiss +
+        underDurationShortfallPenalty * COST_WEIGHTS.underDurationShortfall;
 
     const stats = { structuralCost, commuteProxy, totalHours };
     structuralStatsCache.set(cacheKey, stats);

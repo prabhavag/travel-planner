@@ -53,6 +53,15 @@ function inferDaylightPreferenceFromText(option: ResearchOption): "daylight_only
   return "flexible";
 }
 
+function inferDurationFlexibilityFromText(option: ResearchOption): boolean {
+  if (typeof option.isDurationFlexible === "boolean") return option.isDurationFlexible;
+  const text = `${option.title} ${option.category} ${option.whyItMatches} ${option.bestForDates} ${option.reviewSummary} ${option.timeReason || ""}`.toLowerCase();
+  if (/(guided tour|tour\b|ticketed|timed entry|time slot|set departure|show\b|performance|class\b|workshop|ferry crossing|cruise departure|boat departure)/i.test(text)) {
+    return false;
+  }
+  return true;
+}
+
 function mapResearchOptionToSuggestedActivity(option: ResearchOption): SuggestedActivity {
   const fallbackDuration =
     option.category === "food"
@@ -76,6 +85,7 @@ function mapResearchOptionToSuggestedActivity(option: ResearchOption): Suggested
     interestTags: [option.category],
     description: option.reviewSummary || option.whyItMatches || option.bestForDates,
     estimatedDuration: option.estimatedDuration || fallbackDuration,
+    isDurationFlexible: inferDurationFlexibilityFromText(option),
     estimatedCost: null,
     currency: "USD",
     difficultyLevel: option.difficultyLevel || "moderate",
