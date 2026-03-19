@@ -6,12 +6,23 @@ import {
     TIME_ORDER,
     TYPE_THEME_MAP,
     MAX_DAY_HOURS,
+    SOFT_DAY_START_MINUTES,
     SLOT_CAPACITY_HOURS,
     EARLY_FIXED_ACTIVITY_CUTOFF_MINUTES,
     EARLY_FIXED_ACTIVITY_LOAD_FACTOR,
     DayCapacityProfile,
     PreparedActivity,
 } from "./types";
+
+const REGULAR_DAY_END_MINUTES = 20 * 60;
+const ARRIVAL_RECOVERY_BUFFER_MINUTES = 120;
+const DEPARTURE_AIRPORT_LEAD_MINUTES = 120;
+const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = 90;
+const DEPARTURE_COMMUTE_BUFFER_MINUTES = 20;
+
+function roundToQuarterMinutes(minutes: number): number {
+    return Math.round(minutes / 15) * 15;
+}
 
 export function parseDate(value: string | null): Date | null {
     if (!value) return null;
@@ -87,13 +98,24 @@ export function buildDayCapacityProfiles(tripInfo: TripInfo, dayCount: number): 
         maxHours: MAX_DAY_HOURS,
         slotCapacity: cloneDefaultSlotCapacity(),
         targetWeight: 1,
+        overflowPenaltyMultiplier: 1,
     }));
 
     if (dayCount === 0) return capacities;
 
+    const isFlightTrip = (tripInfo.transportMode || "flight") === "flight";
     const first = capacities[0];
     if (first) {
         const arrivalMinutes = parseClockMinutes(tripInfo.arrivalTimePreference) ?? 12 * 60;
+        if (isFlightTrip) {
+            const earliestUsableMinutes = Math.max(
+                SOFT_DAY_START_MINUTES,
+                roundToQuarterMinutes(arrivalMinutes + ARRIVAL_RECOVERY_BUFFER_MINUTES)
+            );
+            const hardArrivalCapacityHours = Math.max(0, (REGULAR_DAY_END_MINUTES - earliestUsableMinutes) / 60);
+            first.maxHours = Math.min(first.maxHours, hardArrivalCapacityHours);
+            first.overflowPenaltyMultiplier = Math.max(first.overflowPenaltyMultiplier ?? 1, 2.25);
+        }
         if (arrivalMinutes < 11 * 60) {
             first.maxHours = Math.min(first.maxHours, 7);
             first.slotCapacity.morning = Math.min(first.slotCapacity.morning, 3);
@@ -121,6 +143,16 @@ export function buildDayCapacityProfiles(tripInfo: TripInfo, dayCount: number): 
     const last = capacities[capacities.length - 1];
     if (last) {
         const departureMinutes = parseClockMinutes(tripInfo.departureTimePreference) ?? 18 * 60;
+        if (isFlightTrip) {
+            const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - DEPARTURE_AIRPORT_LEAD_MINUTES);
+            const latestActivityEndMinutes =
+                airportArrivalDeadlineMinutes - DEPARTURE_TRANSFER_MINUTES_ESTIMATE - DEPARTURE_COMMUTE_BUFFER_MINUTES;
+            const hardDepartureCapacityHours = Math.max(0, (latestActivityEndMinutes - SOFT_DAY_START_MINUTES) / 60);
+            last.maxHours = Math.min(last.maxHours, hardDepartureCapacityHours);
+            last.slotCapacity.evening = 0;
+            last.targetWeight = Math.min(last.targetWeight, 0.45);
+            last.overflowPenaltyMultiplier = Math.max(last.overflowPenaltyMultiplier ?? 1, 5);
+        }
         if (departureMinutes <= 11 * 60) {
             last.maxHours = Math.min(last.maxHours, 3.5);
             last.slotCapacity.morning = Math.min(last.slotCapacity.morning, 1.5);
@@ -150,8 +182,9 @@ export function buildDayCapacityProfiles(tripInfo: TripInfo, dayCount: number): 
 
     return capacities.map((profile) => ({
         ...profile,
-        maxHours: Math.max(1.5, Math.min(MAX_DAY_HOURS, profile.maxHours)),
+        maxHours: Math.max(0, Math.min(MAX_DAY_HOURS, profile.maxHours)),
         targetWeight: Math.max(0.2, profile.targetWeight),
+        overflowPenaltyMultiplier: Math.max(1, profile.overflowPenaltyMultiplier ?? 1),
         slotCapacity: {
             morning: Math.max(0, profile.slotCapacity.morning),
             afternoon: Math.max(0, profile.slotCapacity.afternoon),

@@ -71,6 +71,7 @@ export interface DayCapacityProfile {
     maxHours: number;
     slotCapacity: Record<Exclude<SuggestedActivity["bestTimeOfDay"], "any">, number>;
     targetWeight: number;
+    overflowPenaltyMultiplier?: number;
 }
 
 export interface DayBucket {

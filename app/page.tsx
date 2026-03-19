@@ -2459,7 +2459,7 @@ export default function PlannerPage() {
 
               case WORKFLOW_STATES.GROUP_DAYS:
                 return (
-                  <div className="p-4 overflow-hidden">
+                  <div className="p-4 h-full min-h-0 flex flex-col">
                     <DayGroupingView
                       groupedDays={groupedDays}
                       userPreferences={tripInfo?.preferences || []}

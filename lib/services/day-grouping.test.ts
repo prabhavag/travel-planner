@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
     parseDurationHours,
     activityLoadFactor,
+    buildDayCapacityProfiles,
     getDayStructuralStats,
     structuralStatsCache,
     computeAllDayStats,
@@ -154,5 +155,48 @@ describe('day-grouping total cost', () => {
         const costWithStats = computeTotalCost(days, preparedMap, commuteMatrix, capacities, stats);
 
         expect(costWithStats).toBeCloseTo(costFull, 5);
+    });
+});
+
+describe('day-grouping flight timing constraints', () => {
+    it('reserves at least 2 hours before departure plus transfer buffer on final day', () => {
+        const tripInfo = {
+            destination: 'Maui',
+            startDate: '2026-03-10',
+            endDate: '2026-03-12',
+            durationDays: 3,
+            arrivalTimePreference: '12:00 PM',
+            departureTimePreference: '6:00 PM',
+            transportMode: 'flight',
+        } as any;
+
+        const capacities = buildDayCapacityProfiles(tripInfo, 3);
+        const finalDay = capacities[2];
+        expect(finalDay.maxHours).toBeCloseTo(4.67, 1);
+        expect(finalDay.slotCapacity.evening).toBe(0);
+        expect(finalDay.overflowPenaltyMultiplier).toBeGreaterThanOrEqual(5);
+    });
+
+    it('applies stricter overflow cost when overflow multiplier increases', () => {
+        const commuteMatrix = new Map();
+        const preparedMap = new Map();
+        const longActivity = { ...mockActivity('long'), estimatedDuration: '8 hours' };
+        preparedMap.set('long', { activity: longActivity, durationHours: 8, loadDurationHours: 8, isFullDay: true });
+
+        const normalStats = getDayStructuralStats(['long'], preparedMap, commuteMatrix, {
+            maxHours: 4,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1,
+            overflowPenaltyMultiplier: 1,
+        });
+        structuralStatsCache.clear();
+        const strictStats = getDayStructuralStats(['long'], preparedMap, commuteMatrix, {
+            maxHours: 4,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1,
+            overflowPenaltyMultiplier: 5,
+        });
+
+        expect(strictStats.structuralCost).toBeGreaterThan(normalStats.structuralCost);
     });
 });

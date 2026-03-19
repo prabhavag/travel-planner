@@ -1061,7 +1061,14 @@ export function DayGroupingView({
     let lunchInserted = timelineItems.some((item) => item.type === "lunch");
     let hasScheduledPrimaryActivity = false;
 
+    const droppedForDepartureBuffer: string[] = [];
+    let departureCutoffReached = false;
+
     sortedActivities.forEach((activity, index) => {
+      if (departureCutoffReached) {
+        droppedForDepartureBuffer.push(activity.name);
+        return;
+      }
       const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
       const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
       const recommendedHours = Math.max(estimatedHours, routeFloorHours);
@@ -1089,11 +1096,21 @@ export function DayGroupingView({
       const activityStart = fixedAlignedStartMinutes != null
         ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
         : Math.max(roundToQuarter(cursorMinutes), nightStartFloorMinutes ?? 0);
+      if (isFinalDepartureDay && activityStart >= eveningCutoffMinutes) {
+        droppedForDepartureBuffer.push(activity.name);
+        departureCutoffReached = true;
+        return;
+      }
       const uncappedActivityEnd = activityStart + activityMinutes;
       const daylightCapMinutes = daylightEndCapMinutes(activity, eveningCutoffMinutes);
-      const canApplyDaylightCap = daylightCapMinutes != null && daylightCapMinutes > activityStart;
+      const departureHardCapMinutes = isFinalDepartureDay ? eveningCutoffMinutes : null;
+      const effectiveCapMinutes =
+        departureHardCapMinutes != null && daylightCapMinutes != null
+          ? Math.min(departureHardCapMinutes, daylightCapMinutes)
+          : (departureHardCapMinutes ?? daylightCapMinutes);
+      const canApplyDaylightCap = effectiveCapMinutes != null && effectiveCapMinutes > activityStart;
       const activityEnd =
-        canApplyDaylightCap ? Math.min(uncappedActivityEnd, daylightCapMinutes as number) : uncappedActivityEnd;
+        canApplyDaylightCap ? Math.min(uncappedActivityEnd, effectiveCapMinutes as number) : uncappedActivityEnd;
       const recommendedWindowEndMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end);
       const recommendedWindowLabel = formatRecommendedStartWindowLabel(activity);
       const lateStartWarning =
@@ -1101,12 +1118,14 @@ export function DayGroupingView({
           ? `Late-start risk: recommended ${recommendedWindowLabel || "earlier"}${activity.recommendedStartWindow?.reason ? ` (${activity.recommendedStartWindow.reason})` : ""}.`
           : null;
       const daylightWarning =
-        canApplyDaylightCap && daylightCapMinutes != null && uncappedActivityEnd > daylightCapMinutes
-          ? `Ends by ${toClockLabel(daylightCapMinutes)} to stay in daylight.`
+        canApplyDaylightCap && effectiveCapMinutes != null && uncappedActivityEnd > effectiveCapMinutes
+          ? `Ends by ${toClockLabel(effectiveCapMinutes)} to stay on schedule.`
           : null;
       const daylightConflictWarning =
-        !canApplyDaylightCap && daylightCapMinutes != null
-          ? `Daylight conflict: no daylight remains for this slot.`
+        !canApplyDaylightCap && effectiveCapMinutes != null
+          ? isFinalDepartureDay
+            ? `Departure cutoff conflict: no time remains before airport transfer.`
+            : `Daylight conflict: no daylight remains for this slot.`
           : null;
       const nightOnlyWarning =
         nightStartFloorMinutes != null
@@ -1116,7 +1135,14 @@ export function DayGroupingView({
       const lunchMinutes = roundToQuarter(60 + 15);
       const scheduledWindowMinutes = Math.max(0, activityEnd - activityStart);
       const effectiveActivityEnd =
-        scheduledWindowMinutes < minimumActivityMinutes ? activityStart + minimumActivityMinutes : activityEnd;
+        scheduledWindowMinutes < minimumActivityMinutes && !isFinalDepartureDay
+          ? activityStart + minimumActivityMinutes
+          : activityEnd;
+      if (isFinalDepartureDay && effectiveActivityEnd <= activityStart) {
+        droppedForDepartureBuffer.push(activity.name);
+        departureCutoffReached = true;
+        return;
+      }
 
       // If a long activity crosses lunch, split it into before-lunch and continue-after-lunch.
       const crossesLunchWindow = !lunchInserted && activityStart < lunchTargetStart && effectiveActivityEnd > lunchTargetStart;
@@ -1226,6 +1252,21 @@ export function DayGroupingView({
       }
     });
 
+    if (droppedForDepartureBuffer.length > 0) {
+      const hiddenCount = droppedForDepartureBuffer.length;
+      const lead = droppedForDepartureBuffer[0];
+      timelineItems.push({
+        type: "continue",
+        id: `departure-buffer-trim-${day.dayNumber}`,
+        title: "Departure buffer enforced",
+        detail:
+          hiddenCount === 1
+            ? `${lead} was deferred to preserve on-time airport arrival.`
+            : `${lead} and ${hiddenCount - 1} more activit${hiddenCount - 1 === 1 ? "y were" : "ies were"} deferred to preserve on-time airport arrival.`,
+        timeRange: "Auto-adjusted",
+      });
+    }
+
     // Ensure lunch is always present in the afternoon even if all activities finished early.
     if (!lunchInserted) {
       const lunchMinutes = roundToQuarter(60 + 15);
@@ -1270,6 +1311,9 @@ export function DayGroupingView({
     const showFreeSlotNotice = freeSlotMinutesBeforeEvening >= 45;
 
     if (isFinalDepartureDay || endStayLabel) {
+      if (isFinalDepartureDay) {
+        cursorMinutes = Math.min(cursorMinutes, eveningCutoffMinutes);
+      }
       if (endOfDayCommuteMinutes > 0) {
         const bufferedCommuteMinutes = roundToQuarter(endOfDayCommuteMinutes + commuteTransitionBufferMinutes);
         const commuteStart = roundToQuarter(cursorMinutes);
@@ -1441,7 +1485,7 @@ export function DayGroupingView({
   };
 
   return (
-    <div className="space-y-6 h-full flex flex-col">
+    <div className="space-y-6 h-full min-h-0 flex flex-col">
       {routingError ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <div className="flex items-start gap-2">
@@ -1472,7 +1516,7 @@ export function DayGroupingView({
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 min-h-0 flex flex-col">
         {/* Day tabs */}
         <div className="flex items-center justify-between mb-4 shrink-0 px-2">
           <div className="flex items-baseline gap-2 px-1">
@@ -1525,7 +1569,7 @@ export function DayGroupingView({
         {/* Day-based horizontal carousel */}
         <div
           ref={scrollContainerRef}
-          className="flex-1 flex overflow-x-auto snap-x snap-mandatory scrollbar-none"
+          className="flex-1 min-h-0 flex overflow-x-auto overflow-y-hidden snap-x snap-mandatory scrollbar-none"
           style={{ scrollBehavior: 'smooth' }}
         >
           {displayGroupedDays.map((day, index) => {

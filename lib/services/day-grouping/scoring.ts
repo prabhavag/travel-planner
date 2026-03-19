@@ -228,8 +228,11 @@ export function getDayStructuralStats(
     }
 
     const overflow = Math.max(0, totalHours - dayCapacity.maxHours);
+    const overflowPenaltyMultiplier = dayCapacity.overflowPenaltyMultiplier ?? 1;
     const fullDayActivities = activities.filter((activity) => preparedMap.get(activity.id)?.isFullDay);
-    let overflowPenalty = overflow * COST_WEIGHTS.overflow + overflow * overflow * COST_WEIGHTS.overflowQuadratic;
+    let overflowPenalty =
+        (overflow * COST_WEIGHTS.overflow + overflow * overflow * COST_WEIGHTS.overflowQuadratic) *
+        overflowPenaltyMultiplier;
 
     if (fullDayActivities.length > 0) {
         let nearbyWeightedHours = 0;
