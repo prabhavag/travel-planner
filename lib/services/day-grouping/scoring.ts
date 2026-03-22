@@ -3,6 +3,8 @@ import type {
 } from "@/lib/models/travel-plan";
 import {
     DayStructuralStats,
+    DayCostBreakdown,
+    TripCostBreakdown,
     PreparedActivity,
     DayCapacityProfile,
     ActivityCommuteMatrix,
@@ -342,13 +344,29 @@ export function computeTotalCost(
     dayCapacities: DayCapacityProfile[],
     existingDayStats?: DayStructuralStats[]
 ): number {
+    return computeTotalCostBreakdown(
+        days,
+        preparedMap,
+        commuteMinutesByPair,
+        dayCapacities,
+        existingDayStats
+    ).overallCost;
+}
+
+export function computeTotalCostBreakdown(
+    days: WorkingDay[],
+    preparedMap: Map<string, PreparedActivity>,
+    commuteMinutesByPair: ActivityCommuteMatrix,
+    dayCapacities: DayCapacityProfile[],
+    existingDayStats?: DayStructuralStats[]
+): TripCostBreakdown {
     const dayStats =
         existingDayStats ?? computeAllDayStats(days, preparedMap, commuteMinutesByPair, dayCapacities);
 
     const totalHours = dayStats.reduce((sum, s) => sum + s.totalHours, 0);
     const totalCapacityWeight = Math.max(0.01, dayCapacities.reduce((sum, profile) => sum + profile.targetWeight, 0));
 
-    const baseCost = dayStats.reduce((sum, s, i) => {
+    const dayBreakdowns: DayCostBreakdown[] = dayStats.map((s, i) => {
         const profile = dayCapacities[i] || {
             maxHours: MAX_DAY_HOURS,
             slotCapacity: cloneDefaultSlotCapacity(),
@@ -358,8 +376,16 @@ export function computeTotalCost(
             totalCapacityWeight > 0 ? profile.targetWeight / totalCapacityWeight : 1 / Math.max(1, days.length);
         const targetHours = Math.min(profile.maxHours, totalHours * normalizedWeight);
         const balancePenalty = Math.abs(s.totalHours - targetHours) * COST_WEIGHTS.balance;
-        return sum + s.structuralCost + balancePenalty;
-    }, 0);
+        return {
+            structuralCost: s.structuralCost,
+            balancePenalty,
+            dayCost: s.structuralCost + balancePenalty,
+            commuteProxy: s.commuteProxy,
+            totalHours: s.totalHours,
+        };
+    });
+
+    const baseCost = dayBreakdowns.reduce((sum, breakdown) => sum + breakdown.dayCost, 0);
 
     const totalCommute = dayStats.reduce((sum, s) => sum + s.commuteProxy, 0);
     const avgCommute = totalCommute / Math.max(1, dayStats.length);
@@ -416,10 +442,16 @@ export function computeTotalCost(
         }
     }
 
-    return (
+    return {
+        overallCost:
         baseCost +
         commuteImbalancePenalty +
         nearbySplitPenalty * COST_WEIGHTS.nearbySplit +
-        durationMismatchPenalty * COST_WEIGHTS.underDurationShortfall
-    );
+        durationMismatchPenalty * COST_WEIGHTS.underDurationShortfall,
+        baseCost,
+        commuteImbalancePenalty,
+        nearbySplitPenalty: nearbySplitPenalty * COST_WEIGHTS.nearbySplit,
+        durationMismatchPenalty: durationMismatchPenalty * COST_WEIGHTS.underDurationShortfall,
+        dayBreakdowns,
+    };
 }

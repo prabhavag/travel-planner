@@ -34,6 +34,7 @@ import {
     computeAllDayStats,
     getDayStructuralStats,
     computeTotalCost,
+    computeTotalCostBreakdown,
 } from "./scoring";
 
 export function assignActivityToBestDay({
@@ -256,7 +257,50 @@ export function buildGroupedDays({
             .filter((activity): activity is SuggestedActivity => activity !== undefined),
         restaurants: [],
         nightStay: group.nightStay ?? null,
+        debugCost: group.debugCost ?? null,
     }));
+}
+
+export function annotateDayGroupsWithCostDebug({
+    dayGroups,
+    dayCapacities,
+    preparedMap,
+    commuteMinutesByPair,
+}: {
+    dayGroups: DayGroup[];
+    dayCapacities: DayCapacityProfile[];
+    preparedMap: Map<string, PreparedActivity>;
+    commuteMinutesByPair: ActivityCommuteMatrix;
+}): DayGroup[] {
+    if (dayGroups.length === 0) return dayGroups.map((dayGroup) => ({ ...dayGroup, debugCost: null }));
+
+    const days: WorkingDay[] = dayGroups.map((group) => ({
+        activityIds: [...group.activityIds],
+    }));
+    const dayStats = computeAllDayStats(days, preparedMap, commuteMinutesByPair, dayCapacities);
+    const costBreakdown = computeTotalCostBreakdown(days, preparedMap, commuteMinutesByPair, dayCapacities, dayStats);
+
+    return dayGroups.map((group, index) => {
+        const dayBreakdown = costBreakdown.dayBreakdowns[index];
+        if (!dayBreakdown) {
+            return {
+                ...group,
+                debugCost: null,
+            };
+        }
+
+        return {
+            ...group,
+            debugCost: {
+                ...dayBreakdown,
+                overallTripCost: costBreakdown.overallCost,
+                baseCost: costBreakdown.baseCost,
+                commuteImbalancePenalty: costBreakdown.commuteImbalancePenalty,
+                nearbySplitPenalty: costBreakdown.nearbySplitPenalty,
+                durationMismatchPenalty: costBreakdown.durationMismatchPenalty,
+            },
+        };
+    });
 }
 
 export async function groupActivitiesByDay(
@@ -330,12 +374,19 @@ export async function groupActivitiesByDay(
 
     const orderedBuckets = orderDayBucketsByProximity(buckets);
 
-    return orderedBuckets.map((bucket, i) => {
+    const reorderedDayGroups = orderedBuckets.map((bucket, i) => {
         const group = result[bucket.originalIndex];
         return {
             ...group,
             dayNumber: i + 1,
             date: dates[i]
         };
+    });
+
+    return annotateDayGroupsWithCostDebug({
+        dayGroups: reorderedDayGroups,
+        dayCapacities,
+        preparedMap,
+        commuteMinutesByPair,
     });
 }

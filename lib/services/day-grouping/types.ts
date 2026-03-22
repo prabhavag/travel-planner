@@ -97,3 +97,20 @@ export interface DayStructuralStats {
     commuteProxy: number;
     totalHours: number;
 }
+
+export interface DayCostBreakdown {
+    structuralCost: number;
+    balancePenalty: number;
+    dayCost: number;
+    commuteProxy: number;
+    totalHours: number;
+}
+
+export interface TripCostBreakdown {
+    overallCost: number;
+    baseCost: number;
+    commuteImbalancePenalty: number;
+    nearbySplitPenalty: number;
+    durationMismatchPenalty: number;
+    dayBreakdowns: DayCostBreakdown[];
+}

@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import type { SuggestedActivity, GroupedDay, DayGroup } from "@/lib/models/travel-plan";
-import { generateDayTheme } from "@/lib/services/day-grouping";
+import {
+  generateDayTheme,
+  buildDayCapacityProfiles,
+  parseDurationHours,
+  activityLoadFactor,
+  isFullDayDuration,
+  computeActivityCommuteMatrix,
+  annotateDayGroupsWithCostDebug,
+} from "@/lib/services/day-grouping";
 import { assignNightStays } from "@/lib/services/night-stays";
 
 /**
@@ -22,6 +30,7 @@ function buildGroupedDays(
       .filter((a): a is SuggestedActivity => a !== undefined),
     restaurants: [],
     nightStay: group.nightStay ?? null,
+    debugCost: group.debugCost ?? null,
   }));
 }
 
@@ -115,14 +124,37 @@ export async function POST(request: NextRequest) {
     sourceDay.theme = generateDayTheme(sourceActivities);
     targetDay.theme = generateDayTheme(targetActivities);
 
+    const dayCapacities = buildDayCapacityProfiles(session.tripInfo, updatedDayGroups.length);
+    const commuteMinutesByPair = await computeActivityCommuteMatrix(selectedActivities);
+    const preparedMap = new Map(
+      selectedActivities.map((activity) => {
+        const durationHours = parseDurationHours(activity.estimatedDuration);
+        return [
+          activity.id,
+          {
+            activity,
+            durationHours,
+            loadDurationHours: Math.min(durationHours, durationHours * activityLoadFactor(activity)),
+            isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
+          },
+        ] as const;
+      })
+    );
+    const dayGroupsWithDebugCosts = annotateDayGroupsWithCostDebug({
+      dayGroups: updatedDayGroups,
+      dayCapacities,
+      preparedMap,
+      commuteMinutesByPair,
+    });
+
     // Rebuild grouped days
-    let groupedDays = buildGroupedDays(updatedDayGroups, selectedActivities);
+    let groupedDays = buildGroupedDays(dayGroupsWithDebugCosts, selectedActivities);
     const selectedAccommodation = session.selectedAccommodationOptionId
       ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
       : null;
     const nightStayResult = await assignNightStays({
       tripInfo: session.tripInfo,
-      dayGroups: updatedDayGroups,
+      dayGroups: dayGroupsWithDebugCosts,
       groupedDays,
       selectedAccommodation,
     });

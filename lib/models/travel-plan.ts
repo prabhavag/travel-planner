@@ -349,6 +349,21 @@ export const NightStaySchema = z.object({
 
 export type NightStay = z.infer<typeof NightStaySchema>;
 
+export const DayCostDebugSchema = z.object({
+  structuralCost: z.number(),
+  balancePenalty: z.number(),
+  dayCost: z.number(),
+  commuteProxy: z.number(),
+  totalHours: z.number(),
+  overallTripCost: z.number(),
+  baseCost: z.number(),
+  commuteImbalancePenalty: z.number(),
+  nearbySplitPenalty: z.number(),
+  durationMismatchPenalty: z.number(),
+});
+
+export type DayCostDebug = z.infer<typeof DayCostDebugSchema>;
+
 // Day grouping from LLM
 export const DayGroupSchema = z.object({
   dayNumber: z.number(),
@@ -356,6 +371,7 @@ export const DayGroupSchema = z.object({
   theme: z.string(), // Auto-generated theme based on grouped activities
   activityIds: z.array(z.string()), // References to SuggestedActivity.id
   nightStay: NightStaySchema.optional().nullable(),
+  debugCost: DayCostDebugSchema.optional().nullable(),
 });
 
 export type DayGroup = z.infer<typeof DayGroupSchema>;
@@ -389,6 +405,7 @@ export const GroupedDaySchema = z.object({
   activities: z.array(SuggestedActivitySchema),
   restaurants: z.array(RestaurantSuggestionSchema).default([]),
   nightStay: NightStaySchema.optional().nullable(),
+  debugCost: DayCostDebugSchema.optional().nullable(),
 });
 
 export type GroupedDay = z.infer<typeof GroupedDaySchema>;

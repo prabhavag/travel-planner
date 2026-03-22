@@ -606,6 +606,7 @@ export interface DayGroup {
   theme: string;
   activityIds: string[];
   nightStay?: NightStay | null;
+  debugCost?: DayCostDebug | null;
 }
 
 export interface RestaurantSuggestion {
@@ -633,6 +634,20 @@ export interface GroupedDay {
   activities: SuggestedActivity[];
   restaurants: RestaurantSuggestion[];
   nightStay?: NightStay | null;
+  debugCost?: DayCostDebug | null;
+}
+
+export interface DayCostDebug {
+  structuralCost: number;
+  balancePenalty: number;
+  dayCost: number;
+  commuteProxy: number;
+  totalHours: number;
+  overallTripCost: number;
+  baseCost: number;
+  commuteImbalancePenalty: number;
+  nearbySplitPenalty: number;
+  durationMismatchPenalty: number;
 }
 
 export interface NightStay {

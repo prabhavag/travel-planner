@@ -169,6 +169,11 @@ export function DayGroupingView({
   const displayGroupedDays = displayPlan.groupedDays;
   const unscheduledActivities = displayPlan.unscheduledActivities;
   const sourceDayByActivityId = displayPlan.sourceDayByActivityId;
+  const overallDebugCost = displayGroupedDays[0]?.debugCost?.overallTripCost ?? null;
+
+  const formatCostScore = useCallback((value: number): string => {
+    return Number.isFinite(value) ? value.toFixed(2) : "N/A";
+  }, []);
 
   const sortActivitiesForTimeline = useCallback((activities: SuggestedActivity[]) => {
     const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
@@ -1812,6 +1817,12 @@ export function DayGroupingView({
             ) : null}
           </div>
         </div>
+        {debugMode && overallDebugCost != null ? (
+          <div className="mb-4 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+            <p className="font-semibold uppercase tracking-wide text-slate-800">Trip Cost Function</p>
+            <p>Total score: {formatCostScore(overallDebugCost)}</p>
+          </div>
+        ) : null}
 
         {/* Day-based horizontal carousel */}
         <div
@@ -1852,6 +1863,16 @@ export function DayGroupingView({
                           ))}
                         </div>
                       )}
+                      {debugMode && day.debugCost ? (
+                        <div className="mt-2 rounded-md border border-slate-300 bg-slate-50 p-2 text-[11px] text-slate-700">
+                          <p className="font-semibold uppercase tracking-wide text-slate-800">Day Cost Function</p>
+                          <p>Day total: {formatCostScore(day.debugCost.dayCost)}</p>
+                          <p>Structural: {formatCostScore(day.debugCost.structuralCost)}</p>
+                          <p>Balance: {formatCostScore(day.debugCost.balancePenalty)}</p>
+                          <p>Commute proxy: {formatCostScore(day.debugCost.commuteProxy)}</p>
+                          <p>Hours: {formatCostScore(day.debugCost.totalHours)}</p>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </CardHeader>
