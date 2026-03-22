@@ -52,7 +52,8 @@ async function computeRoute(apiKey: string, leg: RouteLegRequest): Promise<Route
     fieldMask.push("routes.polyline.encodedPolyline");
   }
 
-  const body = {
+  const travelMode = leg.travelMode || "DRIVE";
+  const body: Record<string, unknown> = {
     origin: {
       location: {
         latLng: {
@@ -77,10 +78,12 @@ async function computeRoute(apiKey: string, leg: RouteLegRequest): Promise<Route
         },
       },
     })),
-    travelMode: leg.travelMode || "DRIVE",
-    routingPreference: "TRAFFIC_UNAWARE",
+    travelMode,
     languageCode: "en-US",
   };
+  if (travelMode === "DRIVE" || travelMode === "TWO_WHEELER") {
+    body.routingPreference = "TRAFFIC_UNAWARE";
+  }
 
   const response = await fetch(ROUTES_API_URL, {
     method: "POST",

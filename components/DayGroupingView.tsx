@@ -552,7 +552,7 @@ export function DayGroupingView({
     );
   };
 
-  const parseEstimatedHours = (duration?: string | null): number => {
+  function parseEstimatedHours(duration?: string | null): number {
     if (!duration) return 2;
     const text = duration.toLowerCase().trim();
     if (!text) return 2;
@@ -577,7 +577,7 @@ export function DayGroupingView({
     if (/30\s*min/.test(text)) return 0.5;
     if (/45\s*min/.test(text)) return 0.75;
     return 2;
-  };
+  }
 
   function haversineKm(
     from: { lat: number; lng: number } | null | undefined,
@@ -817,6 +817,265 @@ export function DayGroupingView({
     [tripInfo?.arrivalAirport, tripInfo?.arrivalTimePreference]
   );
 
+  const regroupSchedulableActivitiesForDay = useCallback(
+    ({
+      day,
+      dayIndex,
+      startStayLabel,
+      endStayLabel,
+      startStayCoordinates,
+      endStayCoordinates,
+    }: {
+      day: GroupedDay;
+      dayIndex: number;
+      startStayLabel?: string | null;
+      endStayLabel?: string | null;
+      startStayCoordinates?: { lat: number; lng: number } | null;
+      endStayCoordinates?: { lat: number; lng: number } | null;
+    }): { scheduledActivities: SuggestedActivity[]; prunedActivities: SuggestedActivity[] } => {
+      const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = 90;
+      const startContext = getDayStartContext(dayIndex, startStayLabel);
+      const availableVisitHours = startContext.availableVisitHours;
+      const isFinalDepartureDay = isDepartureDay(day, dayIndex);
+      const lunchHours = 1;
+      const lunchMinStart = 12 * 60;
+      const lunchTargetStart = 12 * 60 + 30;
+      const commuteTransitionBufferMinutes = 20;
+      const airportArrivalLeadMinutes = 120;
+      const departureClock = tripInfo?.departureTimePreference || "6:00 PM";
+      const departureMinutes = parseClockMinutes(departureClock) ?? 18 * 60;
+      const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - airportArrivalLeadMinutes);
+      const preDayBufferMinutes = 15;
+      const initialSortedActivities = sortActivitiesForTimeline(day.activities);
+      let currentActivities = [...initialSortedActivities];
+      const prunedById = new Map<string, SuggestedActivity>();
+
+      for (let attempt = 0; attempt < initialSortedActivities.length; attempt += 1) {
+        if (currentActivities.length === 0) break;
+
+        const firstActivity = currentActivities[0];
+        const lastActivity = currentActivities[currentActivities.length - 1];
+        const stayStartCommuteMinutes =
+          startContext.startLabel && firstActivity && startStayCoordinates
+            ? (commuteByLeg[buildStayStartLegId(day.dayNumber, firstActivity.id)]?.minutes ??
+              estimateCommuteMinutes(startStayCoordinates, getActivityStartPoint(firstActivity)))
+            : 0;
+        const endOfDayCommuteMinutes =
+          isFinalDepartureDay
+            ? DEPARTURE_TRANSFER_MINUTES_ESTIMATE
+            : endStayLabel && lastActivity && endStayCoordinates
+              ? (commuteByLeg[buildStayEndLegId(day.dayNumber, lastActivity.id)]?.minutes ??
+                estimateCommuteMinutes(getActivityEndPoint(lastActivity), endStayCoordinates))
+              : 0;
+        const bufferedEndOfDayCommuteMinutes =
+          endOfDayCommuteMinutes > 0 ? roundToQuarter(endOfDayCommuteMinutes + commuteTransitionBufferMinutes) : 0;
+        const eveningCutoffMinutes = isFinalDepartureDay
+          ? Math.max(10 * 60, airportArrivalDeadlineMinutes - bufferedEndOfDayCommuteMinutes)
+          : 18 * 60;
+
+        const interActivityCommuteMinutesEstimate = currentActivities.reduce((sum, activity, index) => {
+          const next = currentActivities[index + 1];
+          if (!next) return sum;
+          const legId = buildLegId(day.dayNumber, activity.id, next.id);
+          const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
+          const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
+          return sum + commuteMinutes;
+        }, 0);
+        const totalCommuteHoursEstimate =
+          (interActivityCommuteMinutesEstimate + stayStartCommuteMinutes + endOfDayCommuteMinutes) / 60;
+        const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
+        const totalRequestedHours = currentActivities.reduce((sum, activity) => {
+          const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
+          const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
+          return sum + Math.max(estimatedHours, routeFloorHours) * activityLoadFactor(activity);
+        }, 0);
+        const scaleFactor =
+          totalRequestedHours > 0 && totalRequestedHours > remainingForActivities && remainingForActivities > 0
+            ? remainingForActivities / totalRequestedHours
+            : 1;
+
+        const earliestFixedStartMinutes = currentActivities
+          .filter((activity) => activity.isFixedStartTime)
+          .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
+          .filter((minutes): minutes is number => minutes != null)
+          .sort((a, b) => a - b)[0];
+        const earliestRecommendedMidpointMinutes = currentActivities
+          .map((activity) => recommendedWindowMidpointMinutes(activity))
+          .filter((minutes): minutes is number => minutes != null)
+          .sort((a, b) => a - b)[0];
+        const bufferedStayStartCommuteMinutes =
+          stayStartCommuteMinutes > 0 ? roundToQuarter(stayStartCommuteMinutes + preDayBufferMinutes) : 0;
+        const recommendedEarlyStartMinutes =
+          dayIndex !== 0 && earliestRecommendedMidpointMinutes != null
+            ? Math.max(0, roundToQuarter(earliestRecommendedMidpointMinutes - bufferedStayStartCommuteMinutes - preDayBufferMinutes))
+            : null;
+        const defaultDayStartMinutes =
+          recommendedEarlyStartMinutes != null
+            ? Math.min(startContext.dayStartMinutes, recommendedEarlyStartMinutes)
+            : startContext.dayStartMinutes;
+
+        let cursorMinutes = defaultDayStartMinutes;
+        if (dayIndex !== 0 && earliestFixedStartMinutes != null) {
+          cursorMinutes = Math.max(
+            0,
+            roundToQuarter(earliestFixedStartMinutes - bufferedStayStartCommuteMinutes - preDayBufferMinutes)
+          );
+        }
+        let lunchInserted = false;
+        if (startContext.startLabel) {
+          if (dayIndex === 0) {
+            cursorMinutes += roundToQuarter(Math.max(20, Math.min(90, roundToQuarter((stayStartCommuteMinutes > 0 ? stayStartCommuteMinutes : 15) + 30))) + commuteTransitionBufferMinutes);
+          }
+          if (stayStartCommuteMinutes > 0) {
+            if (cursorMinutes >= lunchMinStart) {
+              const lunchStart = roundToQuarter(Math.max(cursorMinutes, lunchTargetStart, lunchMinStart));
+              const lunchEnd = lunchStart + roundToQuarter(60 + 15);
+              cursorMinutes = lunchEnd;
+              lunchInserted = true;
+            }
+            cursorMinutes += roundToQuarter(stayStartCommuteMinutes + commuteTransitionBufferMinutes);
+          }
+        }
+
+        const droppedThisAttempt = new Set<string>();
+        let hasScheduledPrimaryActivity = false;
+        let departureCutoffReached = false;
+
+        currentActivities.forEach((activity, index) => {
+          if (departureCutoffReached) {
+            droppedThisAttempt.add(activity.id);
+            return;
+          }
+
+          const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
+          const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
+          const recommendedHours = Math.max(estimatedHours, routeFloorHours);
+          const requestedHours = recommendedHours * activityLoadFactor(activity);
+          const durationIsFlexible = activity.isDurationFlexible !== false;
+          const minimumScheduledHours = durationIsFlexible ? Math.max(0.75, recommendedHours * 0.5) : requestedHours;
+          const allocatedHours = durationIsFlexible
+            ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
+            : requestedHours;
+          const timingPolicy = getActivityTimingPolicy(activity);
+          const activityMinutes = durationIsFlexible
+            ? roundToQuarter(allocatedHours * 60 + timingPolicy.settleBufferMinutes)
+            : roundToQuarter(allocatedHours * 60);
+          const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
+          const fixedAlignedStartMinutes =
+            activity.isFixedStartTime && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
+          const nightStartFloorMinutes = nightOnlyStartFloorMinutes(activity);
+          const roundedCursorMinutes = roundToQuarter(cursorMinutes);
+          if (fixedAlignedStartMinutes != null && roundedCursorMinutes > fixedAlignedStartMinutes) {
+            droppedThisAttempt.add(activity.id);
+            return;
+          }
+          const activityStart = fixedAlignedStartMinutes != null
+            ? Math.max(fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
+            : Math.max(roundedCursorMinutes, nightStartFloorMinutes ?? 0);
+          if (isFinalDepartureDay && activityStart >= eveningCutoffMinutes) {
+            droppedThisAttempt.add(activity.id);
+            departureCutoffReached = true;
+            return;
+          }
+
+          const uncappedActivityEnd = activityStart + activityMinutes;
+          const daylightCapMinutes = daylightEndCapMinutes(activity, eveningCutoffMinutes);
+          const departureHardCapMinutes = isFinalDepartureDay ? eveningCutoffMinutes : null;
+          const effectiveCapMinutes =
+            departureHardCapMinutes != null && daylightCapMinutes != null
+              ? Math.min(departureHardCapMinutes, daylightCapMinutes)
+              : (departureHardCapMinutes ?? daylightCapMinutes);
+          const activityEnd =
+            effectiveCapMinutes != null ? Math.min(uncappedActivityEnd, effectiveCapMinutes) : uncappedActivityEnd;
+          if (activityEnd <= activityStart) {
+            droppedThisAttempt.add(activity.id);
+            return;
+          }
+
+          const crossesLunchWindow = !lunchInserted && activityStart < lunchTargetStart && activityEnd > lunchTargetStart;
+          if (crossesLunchWindow) {
+            const lunchStart = roundToQuarter(Math.max(lunchTargetStart, lunchMinStart));
+            const lunchMinutes = roundToQuarter(60 + 15);
+            const lunchEnd = lunchStart + lunchMinutes;
+            const beforeLunchEnd = Math.max(activityStart + 30, lunchStart);
+            const afterLunchStart = lunchEnd;
+            const afterLunchEnd = afterLunchStart + Math.max(30, activityEnd - beforeLunchEnd);
+            cursorMinutes = afterLunchEnd;
+            lunchInserted = true;
+          } else {
+            const lunchMinutes = roundToQuarter(60 + 15);
+            const preLunchGapMinutes = Math.max(0, activityStart - roundToQuarter(cursorMinutes));
+            const canInsertLunchBeforeFirstActivity = !hasScheduledPrimaryActivity && preLunchGapMinutes >= lunchMinutes;
+            if (!lunchInserted && activityStart >= lunchMinStart && (hasScheduledPrimaryActivity || canInsertLunchBeforeFirstActivity)) {
+              const lunchStart = roundToQuarter(Math.max(cursorMinutes, lunchTargetStart, lunchMinStart));
+              const lunchEnd = lunchStart + lunchMinutes;
+              cursorMinutes = lunchEnd;
+              lunchInserted = true;
+            }
+            const nextActivityStart =
+              fixedAlignedStartMinutes != null
+                ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
+                : Math.max(roundToQuarter(cursorMinutes), nightStartFloorMinutes ?? 0);
+            const nextActivityEnd = effectiveCapMinutes != null
+              ? Math.min(nextActivityStart + activityMinutes, effectiveCapMinutes)
+              : nextActivityStart + activityMinutes;
+            if (nextActivityEnd <= nextActivityStart) {
+              droppedThisAttempt.add(activity.id);
+              return;
+            }
+            cursorMinutes = nextActivityEnd;
+          }
+
+          hasScheduledPrimaryActivity = true;
+          const next = currentActivities[index + 1];
+          if (next) {
+            const legId = buildLegId(day.dayNumber, activity.id, next.id);
+            const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
+            const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
+            const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + commuteTransitionBufferMinutes);
+            cursorMinutes = roundToQuarter(cursorMinutes) + bufferedCommuteMinutes;
+          }
+        });
+
+        if (droppedThisAttempt.size === 0) {
+          return {
+            scheduledActivities: currentActivities,
+            prunedActivities: [...prunedById.values()],
+          };
+        }
+
+        currentActivities = currentActivities.filter((activity) => {
+          if (!droppedThisAttempt.has(activity.id)) return true;
+          prunedById.set(activity.id, activity);
+          return false;
+        });
+      }
+
+      return {
+        scheduledActivities: currentActivities,
+        prunedActivities: [...prunedById.values()],
+      };
+    },
+    [
+      getDayStartContext,
+      isDepartureDay,
+      tripInfo?.departureTimePreference,
+      parseClockMinutes,
+      sortActivitiesForTimeline,
+      commuteByLeg,
+      parseEstimatedHours,
+      estimateRouteIntrinsicMinutes,
+      activityLoadFactor,
+      recommendedWindowMidpointMinutes,
+      getActivityStartPoint,
+      getActivityEndPoint,
+      getActivityTimingPolicy,
+      nightOnlyStartFloorMinutes,
+      daylightEndCapMinutes,
+      roundToQuarter,
+    ]
+  );
+
   const DayTimelineRows = ({
     day,
     dayIndex,
@@ -837,7 +1096,15 @@ export function DayGroupingView({
     const availableVisitHours = startContext.availableVisitHours;
     const isFinalDepartureDay = isDepartureDay(day, dayIndex);
     const lunchHours = 1;
-    const sortedActivities = sortActivitiesForTimeline(day.activities);
+    const regroupedDayActivities = regroupSchedulableActivitiesForDay({
+      day,
+      dayIndex,
+      startStayLabel,
+      endStayLabel,
+      startStayCoordinates,
+      endStayCoordinates,
+    });
+    const sortedActivities = regroupedDayActivities.scheduledActivities;
     const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
       const next = sortedActivities[index + 1];
       if (!next) return sum;
@@ -879,7 +1146,7 @@ export function DayGroupingView({
     const endOfDayCommuteMode: CommuteMode = isFinalDepartureDay ? "DRIVE" : stayEndCommuteMode;
     const totalCommuteHoursEstimate = (totalCommuteMinutesEstimate + stayStartCommuteMinutes + endOfDayCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
-    const totalRequestedHours = day.activities.reduce((sum, activity) => {
+    const totalRequestedHours = sortedActivities.reduce((sum, activity) => {
       const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
       const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
       return sum + Math.max(estimatedHours, routeFloorHours) * activityLoadFactor(activity);
@@ -1041,7 +1308,7 @@ export function DayGroupingView({
     let lunchInserted = timelineItems.some((item) => item.type === "lunch");
     let hasScheduledPrimaryActivity = false;
 
-    const droppedForDepartureBuffer: string[] = [];
+    const droppedForDepartureBuffer: string[] = regroupedDayActivities.prunedActivities.map((activity) => activity.name);
     let departureCutoffReached = false;
 
     sortedActivities.forEach((activity, index) => {
@@ -1070,9 +1337,14 @@ export function DayGroupingView({
           ? `Arrival conflict: fixed start ${toClockLabel(fixedStartMinutes)} is before feasible start ${toClockLabel(startContext.dayStartMinutes)}.`
           : null;
       const nightStartFloorMinutes = nightOnlyStartFloorMinutes(activity);
+      const roundedCursorMinutes = roundToQuarter(cursorMinutes);
+      if (fixedAlignedStartMinutes != null && roundedCursorMinutes > fixedAlignedStartMinutes) {
+        droppedForDepartureBuffer.push(activity.name);
+        return;
+      }
       const activityStart = fixedAlignedStartMinutes != null
-        ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
-        : Math.max(roundToQuarter(cursorMinutes), nightStartFloorMinutes ?? 0);
+        ? Math.max(fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
+        : Math.max(roundedCursorMinutes, nightStartFloorMinutes ?? 0);
       if (isFinalDepartureDay && activityStart >= eveningCutoffMinutes) {
         droppedForDepartureBuffer.push(activity.name);
         departureCutoffReached = true;
@@ -1238,21 +1510,6 @@ export function DayGroupingView({
         const bufferedCommuteMinutes = roundToQuarter(stayStartCommuteMinutes + commuteTransitionBufferMinutes);
         scheduledCommuteMinutes = Math.max(0, scheduledCommuteMinutes - Math.max(0, bufferedCommuteMinutes));
       }
-    }
-
-    if (droppedForDepartureBuffer.length > 0) {
-      const hiddenCount = droppedForDepartureBuffer.length;
-      const lead = droppedForDepartureBuffer[0];
-      timelineItems.push({
-        type: "continue",
-        id: `departure-buffer-trim-${day.dayNumber}`,
-        title: "Departure buffer enforced",
-        detail:
-          hiddenCount === 1
-            ? `${lead} was deferred to preserve on-time airport arrival.`
-            : `${lead} and ${hiddenCount - 1} more activit${hiddenCount - 1 === 1 ? "y were" : "ies were"} deferred to preserve on-time airport arrival.`,
-        timeRange: "Auto-adjusted",
-      });
     }
 
     // Ensure lunch is always present in the afternoon even if all activities finished early.
