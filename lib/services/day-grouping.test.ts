@@ -6,9 +6,13 @@ import {
     getDayStructuralStats,
     structuralStatsCache,
     computeAllDayStats,
-    computeTotalCost
+    computeTotalCost,
+    activityCommuteMinutes,
+    buildOptimalDayRoute,
+    getLoadDurationHours,
 } from './day-grouping'
 import type { SuggestedActivity } from '@/lib/models/travel-plan'
+import type { PreparedActivity } from './day-grouping'
 
 const mockActivity = (id: string): SuggestedActivity => ({
     id,
@@ -89,7 +93,7 @@ describe('day-grouping structural stats', () => {
         expect(structuralStatsCache.size).toBe(1);
     });
 
-    it('penalizes under-duration only for flexible activities', () => {
+    it('does not include duration mismatch in structural cost', () => {
         const commuteMatrix = new Map();
         const capacity = {
             maxHours: 8,
@@ -109,7 +113,7 @@ describe('day-grouping structural stats', () => {
         const flexibleStats = getDayStructuralStats(['flex'], flexibleMap, commuteMatrix, capacity);
         const fixedStats = getDayStructuralStats(['fixed'], fixedMap, commuteMatrix, capacity);
 
-        expect(flexibleStats.structuralCost).toBeGreaterThan(fixedStats.structuralCost);
+        expect(flexibleStats.structuralCost).toBeCloseTo(fixedStats.structuralCost, 5);
     });
 
     it('applies a strong penalty when daylight-only activities run past daylight end', () => {
@@ -198,6 +202,19 @@ describe('day-grouping load factor', () => {
         expect(activityLoadFactor(nonFlexible)).toBe(1);
         expect(activityLoadFactor(flexible)).toBe(0.7);
     });
+
+    it('caps scheduled load duration at recommended duration', () => {
+        const activity = mockActivity('capped');
+        const preparedMap = new Map();
+        preparedMap.set('capped', {
+            activity,
+            durationHours: 2,
+            loadDurationHours: 3,
+            isFullDay: false,
+        });
+
+        expect(getLoadDurationHours(preparedMap, 'capped')).toBe(2);
+    });
 });
 
 describe('day-grouping total cost', () => {
@@ -220,6 +237,75 @@ describe('day-grouping total cost', () => {
         const costWithStats = computeTotalCost(days, preparedMap, commuteMatrix, capacities, stats);
 
         expect(costWithStats).toBeCloseTo(costFull, 5);
+    });
+
+    it('penalizes duration mismatch for unscheduled activities', () => {
+        structuralStatsCache.clear();
+        const activity = { ...mockActivity('duration-mismatch'), bestTimeOfDay: 'morning' as const, estimatedDuration: '2 hours' };
+        const preparedMap = new Map();
+        preparedMap.set('duration-mismatch', { activity, durationHours: 2, loadDurationHours: 2, isFullDay: false });
+
+        const capacities = [
+            { maxHours: 8, slotCapacity: { morning: 2, afternoon: 0, evening: 0 }, targetWeight: 1 }
+        ];
+        const unscheduledCost = computeTotalCost([{ activityIds: [] }], preparedMap, new Map(), capacities);
+        const scheduledCost = computeTotalCost([{ activityIds: ['duration-mismatch'] }], preparedMap, new Map(), capacities);
+
+        expect(unscheduledCost).toBeGreaterThan(scheduledCost);
+    });
+});
+
+describe('day-grouping road route direction swaps', () => {
+    it('uses the nearer route endpoint for road activities when computing commute', () => {
+        const road = {
+            ...mockActivity('road'),
+            type: 'road',
+            locationMode: 'route' as const,
+            startCoordinates: { lat: 0, lng: 0 },
+            endCoordinates: { lat: 0, lng: 10 },
+            coordinates: null,
+        };
+        const point = {
+            ...mockActivity('point'),
+            coordinates: { lat: 0, lng: 9.95 },
+            locationMode: 'point' as const,
+        };
+
+        const minutes = activityCommuteMinutes(point, road, new Map());
+        expect(minutes).toBeLessThan(60);
+    });
+
+    it('applies route endpoint swapping inside day route optimization', () => {
+        const startPoint = {
+            ...mockActivity('start'),
+            bestTimeOfDay: 'any' as const,
+            coordinates: { lat: 0, lng: 0.05 },
+            locationMode: 'point' as const,
+        };
+        const endPoint = {
+            ...mockActivity('end'),
+            bestTimeOfDay: 'any' as const,
+            coordinates: { lat: 0, lng: 9.95 },
+            locationMode: 'point' as const,
+        };
+        const road = {
+            ...mockActivity('road'),
+            bestTimeOfDay: 'any' as const,
+            type: 'road',
+            locationMode: 'route' as const,
+            startCoordinates: { lat: 0, lng: 0 },
+            endCoordinates: { lat: 0, lng: 10 },
+            coordinates: null,
+        };
+
+        const activities = [startPoint, endPoint, road];
+        const preparedMap = new Map<string, PreparedActivity>(activities.map((activity) => [
+            activity.id,
+            { activity, durationHours: 1, loadDurationHours: 1, isFullDay: false }
+        ]));
+
+        const ordered = buildOptimalDayRoute(activities, preparedMap, new Map());
+        expect(ordered[1]?.id).toBe('road');
     });
 });
 

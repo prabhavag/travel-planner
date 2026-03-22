@@ -288,7 +288,9 @@ export function isFullDayDuration(estimatedDuration: string | null | undefined, 
 }
 
 export function getLoadDurationHours(preparedMap: Map<string, PreparedActivity>, activityId: string): number {
-    return preparedMap.get(activityId)?.loadDurationHours ?? 0;
+    const prepared = preparedMap.get(activityId);
+    if (!prepared) return 0;
+    return Math.min(prepared.durationHours, prepared.loadDurationHours);
 }
 
 export function getPermutations<T>(array: T[]): T[][] {
@@ -305,7 +307,7 @@ export function getPermutations<T>(array: T[]): T[][] {
     return result;
 }
 
-export function slotForHour(hour: number): SuggestedActivity["bestTimeOfDay"] {
+export function slotForHour(hour: number): Exclude<SuggestedActivity["bestTimeOfDay"], "any"> {
     if (hour < 12) return "morning";
     if (hour < 17) return "afternoon";
     return "evening";

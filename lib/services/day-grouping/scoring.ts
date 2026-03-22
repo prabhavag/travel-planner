@@ -193,7 +193,6 @@ export function getDayStructuralStats(
 
     let slotMismatchPenalty = 0;
     let recommendedStartMissPenalty = 0;
-    let underDurationShortfallPenalty = 0;
     let daylightViolationHours = 0;
     const assignedSlotHours: Record<Exclude<SuggestedActivity["bestTimeOfDay"], "any">, number> = {
         morning: 0,
@@ -212,10 +211,6 @@ export function getDayStructuralStats(
     let currentHour = 0;
     for (const activity of activities) {
         const prepared = preparedMap.get(activity.id);
-        if (prepared && activity.isDurationFlexible !== false) {
-            const shortfallHours = Math.max(0, prepared.durationHours - prepared.loadDurationHours);
-            underDurationShortfallPenalty += shortfallHours * shortfallHours;
-        }
         const duration = getLoadDurationHours(preparedMap, activity.id);
         const midHour = currentHour + duration / 2;
         const assignedSlot = slotForHour(midHour);
@@ -275,7 +270,6 @@ export function getDayStructuralStats(
         slotOverflowPenalty * COST_WEIGHTS.slotOverflow +
         slotMismatchPenalty * COST_WEIGHTS.slotMismatch +
         recommendedStartMissPenalty * COST_WEIGHTS.recommendedStartMiss +
-        underDurationShortfallPenalty * COST_WEIGHTS.underDurationShortfall +
         daylightViolationHours * COST_WEIGHTS.daylightViolation +
         emptySlotHours * COST_WEIGHTS.emptySlot;
 
@@ -336,9 +330,24 @@ export function computeTotalCost(
     const commuteImbalancePenalty = Math.max(0, maxCommute - avgCommute) * COST_WEIGHTS.commuteImbalance;
 
     const activityDayIndex = new Map<string, number>();
+    const scheduledHoursByActivity = new Map<string, number>();
     days.forEach((day, dayIndex) => {
-        day.activityIds.forEach((id) => activityDayIndex.set(id, dayIndex));
+        day.activityIds.forEach((id) => {
+            activityDayIndex.set(id, dayIndex);
+            const prepared = preparedMap.get(id);
+            if (!prepared) return;
+            const scheduledHours = Math.min(prepared.loadDurationHours, prepared.durationHours);
+            scheduledHoursByActivity.set(id, (scheduledHoursByActivity.get(id) ?? 0) + scheduledHours);
+        });
     });
+
+    let durationMismatchPenalty = 0;
+    for (const [activityId, prepared] of preparedMap.entries()) {
+        const recommendedHours = Math.max(0, prepared.durationHours);
+        const scheduledHours = Math.max(0, scheduledHoursByActivity.get(activityId) ?? 0);
+        const durationDeltaHours = Math.abs(scheduledHours - recommendedHours);
+        durationMismatchPenalty += durationDeltaHours * durationDeltaHours;
+    }
 
     const prepared = Array.from(preparedMap.values());
     let nearbySplitPenalty = 0;
@@ -370,5 +379,10 @@ export function computeTotalCost(
         }
     }
 
-    return baseCost + commuteImbalancePenalty + nearbySplitPenalty * COST_WEIGHTS.nearbySplit;
+    return (
+        baseCost +
+        commuteImbalancePenalty +
+        nearbySplitPenalty * COST_WEIGHTS.nearbySplit +
+        durationMismatchPenalty * COST_WEIGHTS.underDurationShortfall
+    );
 }

@@ -74,6 +74,69 @@ export function getActivityRoutingPoint(activity: SuggestedActivity): Coordinate
     return activity.coordinates || activity.startCoordinates || activity.endCoordinates || null;
 }
 
+function getActivityRouteEntryPoint(activity: SuggestedActivity): Coordinate | null {
+    if (activity.locationMode !== "route") {
+        return activity.coordinates || activity.startCoordinates || activity.endCoordinates || null;
+    }
+    const routeStart = activity.routePoints?.[0] || null;
+    return activity.startCoordinates || routeStart || activity.coordinates || activity.endCoordinates || null;
+}
+
+function getActivityRouteExitPoint(activity: SuggestedActivity): Coordinate | null {
+    if (activity.locationMode !== "route") {
+        return activity.coordinates || activity.endCoordinates || activity.startCoordinates || null;
+    }
+    const routeEnd = activity.routePoints && activity.routePoints.length > 0
+        ? activity.routePoints[activity.routePoints.length - 1]
+        : null;
+    return activity.endCoordinates || routeEnd || activity.coordinates || activity.startCoordinates || null;
+}
+
+function isReversibleRoadActivity(activity: SuggestedActivity): boolean {
+    if (activity.locationMode !== "route") return false;
+    const type = (activity.type || "").trim().toLowerCase();
+    return type === "road" || type.includes("road");
+}
+
+function coordinateKey(point: Coordinate): string {
+    return `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`;
+}
+
+function pushUniquePoint(points: Coordinate[], seen: Set<string>, point: Coordinate | null): void {
+    if (!point) return;
+    const key = coordinateKey(point);
+    if (seen.has(key)) return;
+    seen.add(key);
+    points.push(point);
+}
+
+function getActivityRoutingVariants(activity: SuggestedActivity): {
+    entryPoints: Coordinate[];
+    exitPoints: Coordinate[];
+} {
+    const entryPoint = getActivityRouteEntryPoint(activity);
+    const exitPoint = getActivityRouteExitPoint(activity);
+
+    if (!isReversibleRoadActivity(activity)) {
+        return {
+            entryPoints: entryPoint ? [entryPoint] : [],
+            exitPoints: exitPoint ? [exitPoint] : [],
+        };
+    }
+
+    const entryPoints: Coordinate[] = [];
+    const exitPoints: Coordinate[] = [];
+    const seenEntry = new Set<string>();
+    const seenExit = new Set<string>();
+
+    pushUniquePoint(entryPoints, seenEntry, entryPoint);
+    pushUniquePoint(entryPoints, seenEntry, exitPoint);
+    pushUniquePoint(exitPoints, seenExit, exitPoint);
+    pushUniquePoint(exitPoints, seenExit, entryPoint);
+
+    return { entryPoints, exitPoints };
+}
+
 export function parseRouteMatrixEntries(rawText: string): Array<Record<string, unknown>> {
     const trimmed = rawText.trim();
     if (!trimmed) return [];
@@ -117,11 +180,23 @@ export async function computeActivityCommuteMatrix(activities: SuggestedActivity
         }
     }
 
-    const points = activities.map((activity) => ({
-        id: activity.id,
-        point: getActivityRoutingPoint(activity),
-    }));
-    const valid = points.filter((entry): entry is { id: string; point: Coordinate } => entry.point !== null);
+    const routingVariantsById = new Map<string, { entryPoints: Coordinate[]; exitPoints: Coordinate[] }>();
+    for (const activity of activities) {
+        routingVariantsById.set(activity.id, getActivityRoutingVariants(activity));
+    }
+
+    const pointByKey = new Map<string, Coordinate>();
+    for (const activity of activities) {
+        const variants = routingVariantsById.get(activity.id);
+        for (const point of variants?.entryPoints ?? []) {
+            pointByKey.set(coordinateKey(point), point);
+        }
+        for (const point of variants?.exitPoints ?? []) {
+            pointByKey.set(coordinateKey(point), point);
+        }
+    }
+    const valid = Array.from(pointByKey.entries()).map(([id, point]) => ({ id, point }));
+    const routeMinutesByPointPair = new Map<string, number>();
 
     const apiKey = getRoutesApiKey();
     if (apiKey && valid.length > 1) {
@@ -184,7 +259,7 @@ export async function computeActivityCommuteMatrix(activities: SuggestedActivity
                             typeof entry.duration === "string" ? entry.duration : undefined
                         );
                         if (durationSeconds == null) continue;
-                        commuteMinutesByPair.set(
+                        routeMinutesByPointPair.set(
                             activityPairKey(origin.id, destination.id),
                             Math.max(5, Math.round(durationSeconds / 60))
                         );
@@ -197,13 +272,43 @@ export async function computeActivityCommuteMatrix(activities: SuggestedActivity
     }
 
     for (const from of activities) {
-        const fromPoint = getActivityRoutingPoint(from);
+        const fromVariants = routingVariantsById.get(from.id) ?? getActivityRoutingVariants(from);
+        const fromPoints = fromVariants.exitPoints.length > 0
+            ? fromVariants.exitPoints
+            : [getActivityRouteExitPoint(from)].filter((point): point is Coordinate => point !== null);
+
         for (const to of activities) {
             if (from.id === to.id) continue;
             const key = activityPairKey(from.id, to.id);
             if (commuteMinutesByPair.has(key)) continue;
-            const toPoint = getActivityRoutingPoint(to);
-            commuteMinutesByPair.set(key, estimateDriveMinutesFallback(fromPoint, toPoint));
+            const toVariants = routingVariantsById.get(to.id) ?? getActivityRoutingVariants(to);
+            const toPoints = toVariants.entryPoints.length > 0
+                ? toVariants.entryPoints
+                : [getActivityRouteEntryPoint(to)].filter((point): point is Coordinate => point !== null);
+
+            let bestMinutes = Number.POSITIVE_INFINITY;
+            const safeFromPoints = fromPoints.length > 0 ? fromPoints : [null];
+            const safeToPoints = toPoints.length > 0 ? toPoints : [null];
+
+            for (const fromPoint of safeFromPoints) {
+                for (const toPoint of safeToPoints) {
+                    let minutes: number;
+                    if (fromPoint && toPoint) {
+                        const matrixMinutes = routeMinutesByPointPair.get(activityPairKey(coordinateKey(fromPoint), coordinateKey(toPoint)));
+                        minutes = typeof matrixMinutes === "number"
+                            ? matrixMinutes
+                            : estimateDriveMinutesFallback(fromPoint, toPoint);
+                    } else {
+                        minutes = estimateDriveMinutesFallback(fromPoint, toPoint);
+                    }
+                    bestMinutes = Math.min(bestMinutes, minutes);
+                }
+            }
+
+            commuteMinutesByPair.set(
+                key,
+                Number.isFinite(bestMinutes) ? bestMinutes : estimateDriveMinutesFallback(null, null)
+            );
         }
     }
 
@@ -220,7 +325,26 @@ export function activityCommuteMinutes(
     if (typeof fromMatrix === "number" && Number.isFinite(fromMatrix)) {
         return fromMatrix;
     }
-    return estimateDriveMinutesFallback(getActivityRoutingPoint(from), getActivityRoutingPoint(to));
+    const fromVariants = getActivityRoutingVariants(from);
+    const toVariants = getActivityRoutingVariants(to);
+    const fromPoints = fromVariants.exitPoints.length > 0
+        ? fromVariants.exitPoints
+        : [getActivityRouteExitPoint(from)].filter((point): point is Coordinate => point !== null);
+    const toPoints = toVariants.entryPoints.length > 0
+        ? toVariants.entryPoints
+        : [getActivityRouteEntryPoint(to)].filter((point): point is Coordinate => point !== null);
+
+    const safeFromPoints = fromPoints.length > 0 ? fromPoints : [null];
+    const safeToPoints = toPoints.length > 0 ? toPoints : [null];
+    let bestMinutes = Number.POSITIVE_INFINITY;
+
+    for (const fromPoint of safeFromPoints) {
+        for (const toPoint of safeToPoints) {
+            bestMinutes = Math.min(bestMinutes, estimateDriveMinutesFallback(fromPoint, toPoint));
+        }
+    }
+
+    return Number.isFinite(bestMinutes) ? bestMinutes : estimateDriveMinutesFallback(null, null);
 }
 
 export function listActivityDistancePoints(activity: SuggestedActivity): Array<{ lat: number; lng: number }> {

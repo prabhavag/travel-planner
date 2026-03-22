@@ -280,7 +280,7 @@ export async function groupActivitiesByDay(
         preparedMap.set(activity.id, {
             activity,
             durationHours,
-            loadDurationHours: durationHours * activityLoadFactor(activity),
+            loadDurationHours: Math.min(durationHours, durationHours * activityLoadFactor(activity)),
             isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
         });
     }
