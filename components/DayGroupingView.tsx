@@ -30,6 +30,7 @@ interface DayGroupingViewProps {
   onMoveActivity: (activityId: string, fromDay: number, toDay: number, targetIndex?: number) => void;
   onConfirm: () => void;
   onDayChange?: (dayNumber: number) => void;
+  onSchedulingPlanChange?: (plan: { scheduledActivityIds: string[]; unscheduledActivityIds: string[] }) => void;
   isLoading?: boolean;
   headerActions?: ReactNode;
 }
@@ -43,6 +44,7 @@ export function DayGroupingView({
   onMoveActivity,
   onConfirm,
   onDayChange,
+  onSchedulingPlanChange,
   isLoading = false,
   headerActions = null,
 }: DayGroupingViewProps) {
@@ -59,6 +61,8 @@ export function DayGroupingView({
   const [routingError, setRoutingError] = useState<string | null>(null);
   const [draggedActivity, setDraggedActivity] = useState<{ id: string; dayNumber: number; index: number } | null>(null);
   const [dragInsertion, setDragInsertion] = useState<{ dayNumber: number; index: number } | null>(null);
+  const [unscheduledByDay, setUnscheduledByDay] = useState<Record<number, SuggestedActivity[]>>({});
+  const unscheduledSyncSignatureByDayRef = useRef<Record<number, string>>({});
 
   const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
     `${dayNumber}:${fromId}->${toId}`;
@@ -145,25 +149,55 @@ export function DayGroupingView({
     return inferDaylightPreference(activity) === "night_only" ? sunsetMinutes : null;
   }, [inferDaylightPreference, sunsetMinutes]);
 
-  const displayPlan = useMemo(() => {
-    const sourceDayByActivityId: Record<string, number> = {};
-
-    groupedDays.forEach((day) => {
-      day.activities.forEach((activity) => {
-        sourceDayByActivityId[activity.id] = day.dayNumber;
-      });
-    });
-
-    return {
-      groupedDays,
-      unscheduledActivities: [] as SuggestedActivity[],
-      sourceDayByActivityId,
-    };
+  useEffect(() => {
+    setUnscheduledByDay({});
+    unscheduledSyncSignatureByDayRef.current = {};
   }, [groupedDays]);
 
-  const displayGroupedDays = displayPlan.groupedDays;
-  const unscheduledActivities = displayPlan.unscheduledActivities;
-  const sourceDayByActivityId = displayPlan.sourceDayByActivityId;
+  const sourceDayByActivityId = useMemo(() => {
+    const sourceDayById: Record<string, number> = {};
+    groupedDays.forEach((day) => {
+      day.activities.forEach((activity) => {
+        sourceDayById[activity.id] = day.dayNumber;
+      });
+    });
+    return sourceDayById;
+  }, [groupedDays]);
+
+  const unscheduledActivities = useMemo(() => {
+    const deduped = new Map<string, SuggestedActivity>();
+    Object.values(unscheduledByDay).forEach((activities) => {
+      activities.forEach((activity) => {
+        if (!deduped.has(activity.id)) {
+          deduped.set(activity.id, activity);
+        }
+      });
+    });
+    return [...deduped.values()];
+  }, [unscheduledByDay]);
+
+  const unscheduledActivityIds = useMemo(() => new Set(unscheduledActivities.map((activity) => activity.id)), [unscheduledActivities]);
+
+  const displayGroupedDays = useMemo(() => {
+    return groupedDays.map((day) => ({
+      ...day,
+      activities: day.activities.filter((activity) => !unscheduledActivityIds.has(activity.id)),
+    }));
+  }, [groupedDays, unscheduledActivityIds]);
+  const rawDayByNumber = useMemo(
+    () => new Map(groupedDays.map((day) => [day.dayNumber, day])),
+    [groupedDays]
+  );
+
+  useEffect(() => {
+    if (!onSchedulingPlanChange) return;
+    const scheduledActivityIds = displayGroupedDays.flatMap((day) => day.activities.map((activity) => activity.id));
+    onSchedulingPlanChange({
+      scheduledActivityIds,
+      unscheduledActivityIds: unscheduledActivities.map((activity) => activity.id),
+    });
+  }, [displayGroupedDays, onSchedulingPlanChange, unscheduledActivities]);
+
   const overallDebugCost = displayGroupedDays[0]?.debugCost?.overallTripCost ?? null;
 
   const formatCostScore = useCallback((value: number): string => {
@@ -381,7 +415,7 @@ export function DayGroupingView({
       const scrollAmount = scrollContainerRef.current.clientWidth * index;
       scrollContainerRef.current.scrollTo({
         left: scrollAmount,
-        behavior: "smooth",
+        behavior: "auto",
       });
       setActiveDayNumber(dayNumber);
       if (dayNumber !== "unscheduled") onDayChange?.(dayNumber);
@@ -1121,6 +1155,7 @@ export function DayGroupingView({
 
   const DayTimelineRows = ({
     day,
+    rawDay,
     dayIndex,
     startStayLabel,
     endStayLabel,
@@ -1128,19 +1163,21 @@ export function DayGroupingView({
     endStayCoordinates,
   }: {
     day: GroupedDay;
+    rawDay?: GroupedDay;
     dayIndex: number;
     startStayLabel?: string | null;
     endStayLabel?: string | null;
     startStayCoordinates?: { lat: number; lng: number } | null;
     endStayCoordinates?: { lat: number; lng: number } | null;
   }) => {
+    const planningDay = rawDay ?? day;
     const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = 90;
     const startContext = getDayStartContext(dayIndex, startStayLabel);
     const availableVisitHours = startContext.availableVisitHours;
     const isFinalDepartureDay = isDepartureDay(day, dayIndex);
     const lunchHours = 1;
     const regroupedDayActivities = regroupSchedulableActivitiesForDay({
-      day,
+      day: planningDay,
       dayIndex,
       startStayLabel,
       endStayLabel,
@@ -1148,6 +1185,31 @@ export function DayGroupingView({
       endStayCoordinates,
     });
     const sortedActivities = regroupedDayActivities.scheduledActivities;
+    const unscheduledForDay = useMemo(() => {
+      const scheduledIds = new Set(sortedActivities.map((activity) => activity.id));
+      return planningDay.activities.filter((activity) => !scheduledIds.has(activity.id));
+    }, [planningDay.activities, sortedActivities]);
+
+    useEffect(() => {
+      const nextIds = unscheduledForDay.map((activity) => activity.id).sort().join("|");
+      if (unscheduledSyncSignatureByDayRef.current[planningDay.dayNumber] === nextIds) return;
+      unscheduledSyncSignatureByDayRef.current[planningDay.dayNumber] = nextIds;
+
+      setUnscheduledByDay((prev) => {
+        const prevIds = (prev[planningDay.dayNumber] || []).map((activity) => activity.id).sort().join("|");
+        if (prevIds === nextIds) return prev;
+        if (unscheduledForDay.length === 0) {
+          if (prev[planningDay.dayNumber] == null) return prev;
+          const { [planningDay.dayNumber]: _removed, ...rest } = prev;
+          return rest;
+        }
+        return {
+          ...prev,
+          [planningDay.dayNumber]: unscheduledForDay,
+        };
+      });
+    }, [planningDay.dayNumber, unscheduledForDay]);
+
     const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
       const next = sortedActivities[index + 1];
       if (!next) return sum;
@@ -1893,7 +1955,6 @@ export function DayGroupingView({
         <div
           ref={scrollContainerRef}
           className="flex-1 min-h-0 flex overflow-x-auto overflow-y-hidden snap-x snap-mandatory scrollbar-none"
-          style={{ scrollBehavior: 'smooth' }}
         >
           {displayGroupedDays.map((day, index) => {
             const isFinalDepartureDay = isDepartureDay(day, index);
@@ -1947,6 +2008,7 @@ export function DayGroupingView({
                     <div className="space-y-3">
                       <DayTimelineRows
                         day={day}
+                        rawDay={rawDayByNumber.get(day.dayNumber)}
                         dayIndex={index}
                         startStayLabel={displayGroupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
                         endStayLabel={isFinalDepartureDay ? null : day.nightStay?.label}

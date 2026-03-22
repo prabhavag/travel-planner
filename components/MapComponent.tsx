@@ -856,6 +856,7 @@ function GoogleMapContent({
       loc.activityId === hoveredActivityId ||
       (loc.mode === "timeline" && hoveredMarker?.timelineId === loc.timelineId);
     const isStayMarker = loc.slot === "stay-start" || loc.slot === "stay-end";
+    const isRestaurantMarker = loc.slot === "restaurant";
 
     if (isStayMarker) {
       return {
@@ -863,6 +864,19 @@ function GoogleMapContent({
         scaledSize: new window.google.maps.Size(isHovered ? 40 : 36, isHovered ? 40 : 36),
         anchor: new window.google.maps.Point(isHovered ? 20 : 18, isHovered ? 40 : 36),
         labelOrigin: new window.google.maps.Point(isHovered ? 20 : 18, 12),
+      };
+    }
+
+    if (isRestaurantMarker) {
+      return {
+        path: "M12 0C7.58 0 4 3.58 4 8c0 5.25 8 13 8 13s8-7.75 8-13c0-4.42-3.58-8-8-8z",
+        fillColor: "#F59E0B",
+        fillOpacity: isHovered ? 1 : 0.9,
+        strokeColor: isHovered ? "#1F2937" : "#ffffff",
+        strokeWeight: isHovered ? 2 : 1,
+        scale: isHovered ? 1.95 : 1.5,
+        anchor: new window.google.maps.Point(12, 21),
+        labelOrigin: new window.google.maps.Point(12, 8),
       };
     }
 
@@ -1084,13 +1098,14 @@ function GoogleMapContent({
       {/* Draw markers for each location */}
       {locations.map((loc, idx) => {
         const isStayMarker = loc.slot === "stay-start" || loc.slot === "stay-end";
+        const isRestaurantMarker = loc.slot === "restaurant";
         return (
           <Marker
             key={idx}
             position={{ lat: loc.lat, lng: loc.lng }}
             icon={getMarkerIcon(loc)}
             label={
-              isStayMarker || loc.mode === "timeline"
+              isStayMarker || isRestaurantMarker || loc.mode === "timeline"
                 ? undefined
                 : {
                   text: (loc.actIndex + 1).toString(),

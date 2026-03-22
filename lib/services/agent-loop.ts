@@ -93,6 +93,10 @@ const selectFlightInputSchema = z.object({
   optionId: z.string().min(1),
 });
 
+const confirmDayGroupingInputSchema = z.object({
+  selectedActivityIdsOverride: z.array(z.string()).optional(),
+});
+
 const RESTAURANT_TYPE_TOKENS = [
   "italian_restaurant",
   "chinese_restaurant",
@@ -499,6 +503,19 @@ async function executeAction({
   }
 
   if (action.tool === "confirm_day_grouping") {
+    const parsed = confirmDayGroupingInputSchema.parse(action.input ?? {});
+    if (parsed.selectedActivityIdsOverride) {
+      const keepIds = new Set(parsed.selectedActivityIdsOverride);
+      working.selectedActivityIds = working.selectedActivityIds.filter((id) => keepIds.has(id));
+      working.groupedDays = working.groupedDays.map((day) => ({
+        ...day,
+        activities: day.activities.filter((activity) => keepIds.has(activity.id)),
+      }));
+      working.dayGroups = working.dayGroups.map((dayGroup) => ({
+        ...dayGroup,
+        activityIds: dayGroup.activityIds.filter((id) => keepIds.has(id)),
+      }));
+    }
     if (session.workflowState !== WORKFLOW_STATES.GROUP_DAYS) {
       throw new Error("Can only confirm day grouping from GROUP_DAYS state");
     }
@@ -1441,6 +1458,11 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
       fallbackMessage = "I've moved the activity.";
     } else if (uiType === "confirm_grouping") {
       toolName = "confirm_day_grouping";
+      input = {
+        selectedActivityIdsOverride: Array.isArray(payload.selectedActivityIdsOverride)
+          ? payload.selectedActivityIdsOverride
+          : undefined,
+      };
       proposedTransition = WORKFLOW_STATES.DAY_ITINERARY;
       fallbackMessage = "I've confirmed your day grouping.";
     } else if (uiType === "continue_to_restaurants") {

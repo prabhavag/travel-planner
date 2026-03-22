@@ -575,6 +575,8 @@ export default function PlannerPage() {
   const [isAiCheckCollapsed, setIsAiCheckCollapsed] = useState(true);
   const [maxReachedState, setMaxReachedState] = useState(WORKFLOW_STATES.INFO_GATHERING);
   const [lastGroupedActivityIds, setLastGroupedActivityIds] = useState<string[]>([]);
+  const [groupingScheduledActivityIds, setGroupingScheduledActivityIds] = useState<string[] | null>(null);
+  const [groupingMapPreviewDays, setGroupingMapPreviewDays] = useState<GroupedDay[] | null>(null);
 
   // Timeline State
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -1493,8 +1495,14 @@ export default function PlannerPage() {
     setLoading(true);
 
     try {
+      const selectedActivityIdsOverride =
+        groupingScheduledActivityIds ??
+        groupedDays.flatMap((day) => day.activities.map((activity) => activity.id));
       const response = await agentTurn(sessionId, "ui_action", undefined, {
         type: "confirm_grouping",
+        payload: {
+          selectedActivityIdsOverride,
+        },
       });
       if (response.success) {
         applySessionResponse(response, true);
@@ -2469,6 +2477,16 @@ export default function PlannerPage() {
                       onMoveActivity={handleMoveActivity}
                       onConfirm={handleConfirmDayGrouping}
                       onDayChange={setActiveDay}
+                      onSchedulingPlanChange={({ scheduledActivityIds }) => {
+                        const scheduledIdsSet = new Set(scheduledActivityIds);
+                        setGroupingScheduledActivityIds(scheduledActivityIds);
+                        setGroupingMapPreviewDays(
+                          groupedDays.map((day) => ({
+                            ...day,
+                            activities: day.activities.filter((activity) => scheduledIdsSet.has(activity.id)),
+                          }))
+                        );
+                      }}
                       isLoading={loading}
                       headerActions={aiInlineActions}
                     />
@@ -2744,7 +2762,7 @@ export default function PlannerPage() {
                     workflowState === WORKFLOW_STATES.MEAL_PREFERENCES ||
                     workflowState === WORKFLOW_STATES.REVIEW ||
                     workflowState === WORKFLOW_STATES.FINALIZE
-                    ? groupedDays
+                    ? (workflowState === WORKFLOW_STATES.GROUP_DAYS && groupingMapPreviewDays ? groupingMapPreviewDays : groupedDays)
                     : undefined
                 }
                 onActivityClick={handleMapActivityClick}
