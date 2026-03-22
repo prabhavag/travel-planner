@@ -35,11 +35,14 @@ export const SLOT_CAPACITY_HOURS: Record<Exclude<SuggestedActivity["bestTimeOfDa
 };
 export const SOFT_DAY_START_MINUTES = 9 * 60 + 30;
 export const DEFAULT_DAYLIGHT_END_MINUTES = 18 * 60;
+export const EARLY_MORNING_AFTER_HOURS_END_MINUTES = 8 * 60;
+export const NIGHT_AFTER_HOURS_START_MINUTES = 20 * 60;
+export const AFTER_HOURS_DRIVE_MULTIPLIER = 2;
 
 export const COST_WEIGHTS = {
     overflow: 30, // Penalizes total scheduled hours exceeding daily capacity.
     overflowQuadratic: 8, // Escalates cost nonlinearly for heavy overbooking.
-    commute: 0.5, // Penalizes total intra-day travel time.
+    commute: 1.2, // Penalizes total intra-day travel time.
     commuteImbalance: 0.25, // Penalizes uneven commute burden across days.
     longLeg: 1.6, // Penalizes the single longest travel leg in a day.
     spread: 0.8, // Penalizes high average distance between consecutive stops.
@@ -53,11 +56,11 @@ export const COST_WEIGHTS = {
     balance: 0.7, // Penalizes per-day load variance from weighted target distribution.
     fullDayNearbyOverflowRelief: 9, // Reduces overflow cost when nearby items pair with a full-day anchor.
     fullDayFarPenalty: 3, // Reserved weight for discouraging distant full-day placements.
-    nearbySplit: 6, // Penalizes splitting nearby activities across different days.
+    nearbySplit: 10, // Strongly penalizes splitting nearby activities across different days.
 };
 
-export const NEARBY_CLUSTER_MAX_COMMUTE_MINUTES = 40;
-export const NEARBY_CLUSTER_SQUEEZE_HOURS = 1.25;
+export const NEARBY_CLUSTER_MAX_COMMUTE_MINUTES = 55;
+export const NEARBY_CLUSTER_SQUEEZE_HOURS = 1.75;
 
 export interface PreparedActivity {
     activity: SuggestedActivity;

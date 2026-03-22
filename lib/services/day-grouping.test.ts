@@ -180,6 +180,61 @@ describe('day-grouping structural stats', () => {
 
         expect(roomyStats.structuralCost).toBeGreaterThan(tightStats.structuralCost);
     });
+
+    it('applies a 2x driving penalty for after-hours commute legs', () => {
+        const capacity = {
+            maxHours: 8,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1
+        };
+
+        const daytimeA = {
+            ...mockActivity('daytime-a'),
+            bestTimeOfDay: 'any' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '10:00 AM',
+        };
+        const daytimeB = {
+            ...mockActivity('daytime-b'),
+            bestTimeOfDay: 'any' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '1:30 PM',
+        };
+        const nightA = {
+            ...mockActivity('night-a'),
+            bestTimeOfDay: 'any' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '8:30 PM',
+        };
+        const nightB = {
+            ...mockActivity('night-b'),
+            bestTimeOfDay: 'any' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '11:30 PM',
+        };
+
+        const daytimeMap = new Map();
+        daytimeMap.set('daytime-a', { activity: daytimeA, durationHours: 1, loadDurationHours: 1, isFullDay: false });
+        daytimeMap.set('daytime-b', { activity: daytimeB, durationHours: 1, loadDurationHours: 1, isFullDay: false });
+        const nightMap = new Map();
+        nightMap.set('night-a', { activity: nightA, durationHours: 1, loadDurationHours: 1, isFullDay: false });
+        nightMap.set('night-b', { activity: nightB, durationHours: 1, loadDurationHours: 1, isFullDay: false });
+
+        const daytimeCommuteMatrix = new Map([
+            ['daytime-a->daytime-b', 120],
+            ['daytime-b->daytime-a', 120],
+        ]);
+        const nightCommuteMatrix = new Map([
+            ['night-a->night-b', 120],
+            ['night-b->night-a', 120],
+        ]);
+
+        const daytimeStats = getDayStructuralStats(['daytime-a', 'daytime-b'], daytimeMap, daytimeCommuteMatrix, capacity);
+        structuralStatsCache.clear();
+        const nightStats = getDayStructuralStats(['night-a', 'night-b'], nightMap, nightCommuteMatrix, capacity);
+
+        expect(nightStats.structuralCost).toBeGreaterThan(daytimeStats.structuralCost);
+    });
 });
 
 describe('day-grouping load factor', () => {

@@ -12,6 +12,9 @@ import {
     NEARBY_CLUSTER_SQUEEZE_HOURS,
     SOFT_DAY_START_MINUTES,
     DEFAULT_DAYLIGHT_END_MINUTES,
+    EARLY_MORNING_AFTER_HOURS_END_MINUTES,
+    NIGHT_AFTER_HOURS_START_MINUTES,
+    AFTER_HOURS_DRIVE_MULTIPLIER,
     WorkingDay,
 } from "./types";
 import {
@@ -30,6 +33,17 @@ import {
 } from "./routing";
 
 export const structuralStatsCache = new Map<string, DayStructuralStats>();
+
+function computeAfterHoursMinutes(startMinutes: number, endMinutes: number): number {
+    if (endMinutes <= startMinutes) return 0;
+
+    const earlyMorningMinutes = Math.max(
+        0,
+        Math.min(endMinutes, EARLY_MORNING_AFTER_HOURS_END_MINUTES) - startMinutes
+    );
+    const nightMinutes = Math.max(0, endMinutes - Math.max(startMinutes, NIGHT_AFTER_HOURS_START_MINUTES));
+    return earlyMorningMinutes + nightMinutes;
+}
 
 export function computeDayCommuteProxy(
     activities: SuggestedActivity[],
@@ -208,6 +222,28 @@ export function getDayStructuralStats(
         earliestRecommendedMidpointMinutes != null
             ? Math.min(SOFT_DAY_START_MINUTES, earliestRecommendedMidpointMinutes)
             : SOFT_DAY_START_MINUTES;
+    let afterHoursCommuteMinutes = 0;
+    let timelineCursorMinutes = softDayStartMinutes;
+    for (let i = 0; i < activities.length; i += 1) {
+        const activity = activities[i];
+        const durationMinutes = Math.round(getLoadDurationHours(preparedMap, activity.id) * 60);
+        const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+        const activityStartMinutes =
+            fixedStartMinutes != null
+                ? Math.max(timelineCursorMinutes, fixedStartMinutes)
+                : timelineCursorMinutes;
+        const activityEndMinutes = activityStartMinutes + durationMinutes;
+
+        if (i < activities.length - 1) {
+            const commuteMinutes = activityCommuteMinutes(activity, activities[i + 1], commuteMinutesByPair);
+            const commuteStartMinutes = activityEndMinutes;
+            const commuteEndMinutes = commuteStartMinutes + commuteMinutes;
+            afterHoursCommuteMinutes += computeAfterHoursMinutes(commuteStartMinutes, commuteEndMinutes);
+            timelineCursorMinutes = commuteEndMinutes;
+        } else {
+            timelineCursorMinutes = activityEndMinutes;
+        }
+    }
     let currentHour = 0;
     for (const activity of activities) {
         const prepared = preparedMap.get(activity.id);
@@ -264,6 +300,7 @@ export function getDayStructuralStats(
     const structuralCost =
         overflowPenalty +
         commuteProxy * COST_WEIGHTS.commute +
+        afterHoursCommuteMinutes * COST_WEIGHTS.commute * Math.max(0, AFTER_HOURS_DRIVE_MULTIPLIER - 1) +
         longLegPenalty * COST_WEIGHTS.longLeg +
         spreadPenalty * COST_WEIGHTS.spread +
         varietyPenalty * COST_WEIGHTS.variety +
