@@ -1515,6 +1515,20 @@ export default function PlannerPage() {
     }
   };
 
+  const handleGroupingSchedulingPlanChange = useCallback(
+    ({ scheduledActivityIds }: { scheduledActivityIds: string[]; unscheduledActivityIds: string[] }) => {
+      const scheduledIdsSet = new Set(scheduledActivityIds);
+      setGroupingScheduledActivityIds(scheduledActivityIds);
+      setGroupingMapPreviewDays(
+        groupedDays.map((day) => ({
+          ...day,
+          activities: day.activities.filter((activity) => scheduledIdsSet.has(activity.id)),
+        }))
+      );
+    },
+    [groupedDays]
+  );
+
   const handleRefreshAccommodationSearch = async () => {
     if (!sessionId) return;
     setLoading(true);
@@ -2477,16 +2491,7 @@ export default function PlannerPage() {
                       onMoveActivity={handleMoveActivity}
                       onConfirm={handleConfirmDayGrouping}
                       onDayChange={setActiveDay}
-                      onSchedulingPlanChange={({ scheduledActivityIds }) => {
-                        const scheduledIdsSet = new Set(scheduledActivityIds);
-                        setGroupingScheduledActivityIds(scheduledActivityIds);
-                        setGroupingMapPreviewDays(
-                          groupedDays.map((day) => ({
-                            ...day,
-                            activities: day.activities.filter((activity) => scheduledIdsSet.has(activity.id)),
-                          }))
-                        );
-                      }}
+                      onSchedulingPlanChange={handleGroupingSchedulingPlanChange}
                       isLoading={loading}
                       headerActions={aiInlineActions}
                     />
