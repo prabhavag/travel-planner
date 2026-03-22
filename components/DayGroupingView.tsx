@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, type DragEvent, type ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -57,6 +57,8 @@ export function DayGroupingView({
   const [activeDayNumber, setActiveDayNumber] = useState<DayTabKey | null>(groupedDays[0]?.dayNumber ?? null);
   const [commuteByLeg, setCommuteByLeg] = useState<Record<string, { minutes: number; mode: CommuteMode }>>({});
   const [routingError, setRoutingError] = useState<string | null>(null);
+  const [draggedActivity, setDraggedActivity] = useState<{ id: string; dayNumber: number; index: number } | null>(null);
+  const [dragInsertion, setDragInsertion] = useState<{ dayNumber: number; index: number } | null>(null);
 
   const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
     `${dayNumber}:${fromId}->${toId}`;
@@ -326,6 +328,14 @@ export function DayGroupingView({
     }
   }, [displayGroupedDays, onDayChange, unscheduledActivities.length]);
 
+  const handleDayPanelWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    // Keep vertical scrolling inside the day panel instead of bubbling to the
+    // horizontal snap container.
+    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+      event.stopPropagation();
+    }
+  }, []);
+
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (container) {
@@ -389,25 +399,62 @@ export function DayGroupingView({
     setMovingActivity(null);
   };
 
-  const handleReorderWithinDay = (activityId: string, dayNumber: number, targetIndex: number) => {
-    onMoveActivity(activityId, dayNumber, dayNumber, targetIndex);
+  const handleMoveCancel = () => {
     setMovingActivity(null);
   };
 
-  const resolveActivityOrderContext = useCallback((activityId: string, fallbackDayNumber: number) => {
-    const day = displayGroupedDays.find((entry) => entry.dayNumber === fallbackDayNumber);
-    if (!day) return null;
-    const index = day.activities.findIndex((entry) => entry.id === activityId);
-    if (index < 0) return null;
-    return {
-      dayNumber: day.dayNumber,
-      index,
-      count: day.activities.length,
-    };
-  }, [displayGroupedDays]);
+  const handleActivityDragStart = (
+    event: DragEvent<HTMLDivElement>,
+    activityId: string,
+    dayNumber: number,
+    index: number
+  ) => {
+    event.dataTransfer.effectAllowed = "move";
+    setDraggedActivity({ id: activityId, dayNumber, index });
+    setDragInsertion({ dayNumber, index });
+  };
 
-  const handleMoveCancel = () => {
-    setMovingActivity(null);
+  const handleActivityDragOver = (
+    event: DragEvent<HTMLDivElement>,
+    dayNumber: number,
+    hoverIndex: number
+  ) => {
+    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const insertAfter = event.clientY > rect.top + rect.height / 2;
+    setDragInsertion({ dayNumber, index: insertAfter ? hoverIndex + 1 : hoverIndex });
+  };
+
+  const handleDayDragOver = (
+    event: DragEvent<HTMLDivElement>,
+    dayNumber: number,
+    activitiesLength: number
+  ) => {
+    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    event.preventDefault();
+    setDragInsertion({ dayNumber, index: activitiesLength });
+  };
+
+  const handleActivityDrop = (
+    event: DragEvent<HTMLDivElement>,
+    dayNumber: number,
+    fallbackIndex: number
+  ) => {
+    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    event.preventDefault();
+    const targetIndexRaw = dragInsertion?.dayNumber === dayNumber ? dragInsertion.index : fallbackIndex;
+    const targetIndex = draggedActivity.index < targetIndexRaw ? targetIndexRaw - 1 : targetIndexRaw;
+    if (targetIndex !== draggedActivity.index) {
+      onMoveActivity(draggedActivity.id, dayNumber, dayNumber, targetIndex);
+    }
+    setDraggedActivity(null);
+    setDragInsertion(null);
+  };
+
+  const handleActivityDragEnd = () => {
+    setDraggedActivity(null);
+    setDragInsertion(null);
   };
 
   const toggleActivityCollapse = (activityId: string) => {
@@ -434,7 +481,20 @@ export function DayGroupingView({
   }) => {
     const isMoving = movingActivity?.id === activity.id;
     const isCollapsed = collapsedActivityCards[activity.id] ?? true;
-    const orderContext = resolveActivityOrderContext(activity.id, sourceDayNumber ?? dayNumber);
+    const sourceDay = sourceDayNumber ?? dayNumber;
+    const changeDayButton = (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={(e) => {
+          e.stopPropagation();
+          handleMoveStart(activity.id, sourceDay);
+        }}
+        className="h-6 px-2 text-[10px] text-gray-500"
+      >
+        Change Day
+      </Button>
+    );
     const debugAttributes = {
       id: activity.id,
       name: activity.name,
@@ -468,37 +528,10 @@ export function DayGroupingView({
       researchOptionId: activity.researchOption?.id ?? null,
     };
 
+    const showMoveControls = Boolean(affordLabel) || isMoving || debugMode;
     const moveControls = (
       <div className="pt-3 mt-3 border-t border-gray-50">
         {affordLabel ? <p className="mb-2 text-[11px] text-gray-500">{affordLabel}</p> : null}
-        <div className="mb-2 grid grid-cols-2 gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              orderContext
-                ? handleReorderWithinDay(activity.id, orderContext.dayNumber, orderContext.index - 1)
-                : null
-            }
-            disabled={!orderContext || orderContext.index === 0}
-            className="h-8 text-[10px]"
-          >
-            Move Up
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              orderContext
-                ? handleReorderWithinDay(activity.id, orderContext.dayNumber, orderContext.index + 1)
-                : null
-            }
-            disabled={!orderContext || orderContext.index >= orderContext.count - 1}
-            className="h-8 text-[10px]"
-          >
-            Move Down
-          </Button>
-        </div>
         {isMoving ? (
           <div className="flex items-center gap-2">
             <Select onValueChange={(val) => handleMoveConfirm(parseInt(val, 10))}>
@@ -517,17 +550,8 @@ export function DayGroupingView({
               Cancel
             </Button>
           </div>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleMoveStart(activity.id, sourceDayNumber ?? dayNumber)}
-            className="w-full h-8 text-[10px] font-medium text-gray-500 hover:text-primary hover:border-primary transition-colors"
-          >
-            Change Day
-          </Button>
-        )}
-        {debugMode ? (
+        ) : null}
+        {debugMode && !isCollapsed ? (
           <div className="mt-3 space-y-2 rounded-md border border-slate-300 bg-slate-50 p-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">Debug Attributes</p>
             <pre className="max-h-72 overflow-auto rounded border border-slate-200 bg-white p-2 text-[11px] leading-4 text-slate-800">
@@ -549,7 +573,8 @@ export function DayGroupingView({
           showDurationBadge={false}
           collapsed={isCollapsed}
           onToggleCollapse={() => toggleActivityCollapse(activity.id)}
-          extraContent={moveControls}
+          headerActions={changeDayButton}
+          extraContent={showMoveControls ? moveControls : undefined}
         />
       );
     }
@@ -564,7 +589,8 @@ export function DayGroupingView({
         showDurationBadge={false}
         collapsed={isCollapsed}
         onToggleCollapse={() => toggleActivityCollapse(activity.id)}
-        extraContent={moveControls}
+        headerActions={changeDayButton}
+        extraContent={showMoveControls ? moveControls : undefined}
       />
     );
   };
@@ -1641,7 +1667,11 @@ export function DayGroupingView({
           </div>
         ) : null}
         <div className="overflow-x-auto pb-1">
-          <div className="min-w-[640px] space-y-2 pr-2">
+          <div
+            className="min-w-[640px] space-y-2 pr-2"
+            onDragOver={(event) => handleDayDragOver(event, day.dayNumber, sortedActivities.length)}
+            onDrop={(event) => handleActivityDrop(event, day.dayNumber, sortedActivities.length)}
+          >
             {(() => {
               const seenTimelineIds = new Map<string, number>();
               return timelineItems.map((item, index) => {
@@ -1670,14 +1700,34 @@ export function DayGroupingView({
                 </div>
                 <div className="flex-1 pb-2">
                   {item.type === "activity" ? (
-                    <ActivityItem
-                      activity={item.activity}
-                      dayNumber={day.dayNumber}
-                      sourceDayNumber={sourceDayByActivityId[item.activity.id]}
-                      index={sortedActivities.findIndex((a) => a.id === item.activity.id)}
-                      timeSlotLabel={item.timeRange}
-                      affordLabel={item.affordLabel}
-                    />
+                    (() => {
+                      const activityIndex = sortedActivities.findIndex((a) => a.id === item.activity.id);
+                      const safeActivityIndex = activityIndex >= 0 ? activityIndex : 0;
+                      const insertionBefore =
+                        dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === activityIndex;
+                      const isDragging =
+                        draggedActivity?.id === item.activity.id && draggedActivity.dayNumber === day.dayNumber;
+                      return (
+                        <div
+                          draggable={activityIndex >= 0}
+                          onDragStart={(event) => handleActivityDragStart(event, item.activity.id, day.dayNumber, activityIndex)}
+                          onDragOver={(event) => handleActivityDragOver(event, day.dayNumber, activityIndex)}
+                          onDrop={(event) => handleActivityDrop(event, day.dayNumber, activityIndex)}
+                          onDragEnd={handleActivityDragEnd}
+                          className={`rounded-md ${activityIndex >= 0 ? "cursor-grab active:cursor-grabbing" : ""} ${isDragging ? "opacity-50" : ""}`}
+                        >
+                          {insertionBefore ? <div className="mb-1 h-0.5 rounded bg-primary/70" /> : null}
+                          <ActivityItem
+                            activity={item.activity}
+                            dayNumber={day.dayNumber}
+                            sourceDayNumber={sourceDayByActivityId[item.activity.id]}
+                            index={safeActivityIndex}
+                            timeSlotLabel={item.timeRange}
+                            affordLabel={item.affordLabel}
+                          />
+                        </div>
+                      );
+                    })()
                   ) : item.type === "stay" ? (
                     <div className="flex items-center justify-between gap-3 text-xs text-emerald-800">
                       <div className="flex items-center gap-2 min-w-0">
@@ -1742,6 +1792,9 @@ export function DayGroupingView({
               );
             });
             })()}
+            {dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === sortedActivities.length ? (
+              <div className="h-0.5 rounded bg-primary/70" />
+            ) : null}
           </div>
         </div>
       </>
@@ -1848,7 +1901,7 @@ export function DayGroupingView({
             <div key={day.dayNumber} className="w-full flex-shrink-0 snap-center px-2">
               <Card className="h-full border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
                 <CardHeader className="pb-3 shrink-0">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <Badge className={`${getDayBadgeColors(day.dayNumber)} h-6 px-2`}>
@@ -1875,21 +1928,22 @@ export function DayGroupingView({
                           ))}
                         </div>
                       )}
-                      {debugMode && day.debugCost ? (
-                        <div className="mt-2 rounded-md border border-slate-300 bg-slate-50 p-2 text-[11px] text-slate-700">
-                          <p className="font-semibold uppercase tracking-wide text-slate-800">Day Cost Function</p>
-                          <p>Day total: {formatCostScore(day.debugCost.dayCost)}</p>
-                          <p>Structural: {formatCostScore(day.debugCost.structuralCost)}</p>
-                          <p>Balance: {formatCostScore(day.debugCost.balancePenalty)}</p>
-                          <p>Commute proxy: {formatCostScore(day.debugCost.commuteProxy)}</p>
-                          <p>Hours: {formatCostScore(day.debugCost.totalHours)}</p>
-                        </div>
-                      ) : null}
                     </div>
+                    {debugMode && day.debugCost ? (
+                      <div className="shrink-0 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-[10px] leading-4 text-slate-700">
+                        <p className="font-semibold uppercase tracking-wide text-slate-800">Day Cost</p>
+                        <p>Total {formatCostScore(day.debugCost.dayCost)}</p>
+                        <p>S {formatCostScore(day.debugCost.structuralCost)} · B {formatCostScore(day.debugCost.balancePenalty)}</p>
+                        <p>C {formatCostScore(day.debugCost.commuteProxy)} · H {formatCostScore(day.debugCost.totalHours)}</p>
+                      </div>
+                    ) : null}
                   </div>
                 </CardHeader>
                 <CardContent className="flex-1 overflow-hidden p-0">
-                  <div className="h-full overflow-auto px-4 pb-6">
+                  <div
+                    className="h-full overflow-auto px-4 pb-6"
+                    onWheelCapture={handleDayPanelWheel}
+                  >
                     <div className="space-y-3">
                       <DayTimelineRows
                         day={day}

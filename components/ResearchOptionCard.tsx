@@ -25,6 +25,7 @@ interface ResearchOptionCardProps {
   timeSlotLabel?: string | null;
   showDurationBadge?: boolean;
   showDebugDetails?: boolean;
+  headerActions?: ReactNode;
 }
 
 const categoryClassMap: Record<string, string> = {
@@ -55,6 +56,7 @@ export function ResearchOptionCard({
   timeSlotLabel = null,
   showDurationBadge = true,
   showDebugDetails = false,
+  headerActions,
 }: ResearchOptionCardProps) {
   const formattedLastDeepResearchAt = lastDeepResearchAt
     ? new Date(lastDeepResearchAt).toLocaleString([], {
@@ -113,6 +115,7 @@ export function ResearchOptionCard({
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="text-sm line-clamp-1 flex-1">{option.title}</CardTitle>
               <div className="flex items-center gap-1">
+                {headerActions}
                 {isSelected ? (
                   <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white">
                     <Check className="h-4 w-4" />
@@ -171,6 +174,7 @@ export function ResearchOptionCard({
           <div className="flex items-center justify-between gap-2">
             <CardTitle className="text-base flex-1">{option.title}</CardTitle>
             <div className="flex items-center gap-1">
+              {headerActions}
               {showDurationBadge && displayedDuration ? (
                 <Badge className="border border-blue-200 bg-blue-50 text-blue-800">
                   <Clock className="mr-1 h-3 w-3" />

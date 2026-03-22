@@ -20,6 +20,7 @@ interface ActivityCardProps {
   onToggleCollapse?: () => void;
   timeSlotLabel?: string | null;
   showDurationBadge?: boolean;
+  headerActions?: ReactNode;
 }
 
 export function ActivityCard({
@@ -34,6 +35,7 @@ export function ActivityCard({
   onToggleCollapse,
   timeSlotLabel = null,
   showDurationBadge = true,
+  headerActions,
 }: ActivityCardProps) {
   const normalize = (value: string) =>
     value
@@ -107,6 +109,7 @@ export function ActivityCard({
             {activity.name}
           </CardTitle>
           <div className="flex items-center gap-1 flex-shrink-0">
+            {headerActions}
             {onToggleCollapse && (
               <Button
                 variant="ghost"

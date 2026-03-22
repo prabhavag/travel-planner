@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, type DragEvent } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,8 @@ export function DayItineraryView({
   const [collapsedRestaurantCards, setCollapsedRestaurantCards] = useState<Record<string, boolean>>({});
   const [commuteByLeg, setCommuteByLeg] = useState<Record<string, { minutes: number; mode: CommuteMode }>>({});
   const [routingError, setRoutingError] = useState<string | null>(null);
+  const [draggedActivity, setDraggedActivity] = useState<{ id: string; dayNumber: number; index: number } | null>(null);
+  const [dragInsertion, setDragInsertion] = useState<{ dayNumber: number; index: number } | null>(null);
 
   type CommuteMode = "TRAIN" | "TRANSIT" | "WALK" | "DRIVE";
 
@@ -250,14 +252,62 @@ export function DayItineraryView({
     setMovingActivity(null);
   };
 
-  const handleReorderWithinDay = (activityId: string, dayNumber: number, targetIndex: number) => {
-    if (!onMoveActivity) return;
-    onMoveActivity(activityId, dayNumber, dayNumber, targetIndex);
+  const handleMoveCancel = () => {
     setMovingActivity(null);
   };
 
-  const handleMoveCancel = () => {
-    setMovingActivity(null);
+  const handleActivityDragStart = (
+    event: DragEvent<HTMLDivElement>,
+    activityId: string,
+    dayNumber: number,
+    index: number
+  ) => {
+    event.dataTransfer.effectAllowed = "move";
+    setDraggedActivity({ id: activityId, dayNumber, index });
+    setDragInsertion({ dayNumber, index });
+  };
+
+  const handleActivityDragOver = (
+    event: DragEvent<HTMLDivElement>,
+    dayNumber: number,
+    hoverIndex: number
+  ) => {
+    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const insertAfter = event.clientY > rect.top + rect.height / 2;
+    setDragInsertion({ dayNumber, index: insertAfter ? hoverIndex + 1 : hoverIndex });
+  };
+
+  const handleDayDragOver = (
+    event: DragEvent<HTMLDivElement>,
+    dayNumber: number,
+    activitiesLength: number
+  ) => {
+    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    event.preventDefault();
+    setDragInsertion({ dayNumber, index: activitiesLength });
+  };
+
+  const handleActivityDrop = (
+    event: DragEvent<HTMLDivElement>,
+    dayNumber: number,
+    fallbackIndex: number
+  ) => {
+    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber || !onMoveActivity) return;
+    event.preventDefault();
+    const targetIndexRaw = dragInsertion?.dayNumber === dayNumber ? dragInsertion.index : fallbackIndex;
+    const targetIndex = draggedActivity.index < targetIndexRaw ? targetIndexRaw - 1 : targetIndexRaw;
+    if (targetIndex !== draggedActivity.index) {
+      onMoveActivity(draggedActivity.id, dayNumber, dayNumber, targetIndex);
+    }
+    setDraggedActivity(null);
+    setDragInsertion(null);
+  };
+
+  const handleActivityDragEnd = () => {
+    setDraggedActivity(null);
+    setDragInsertion(null);
   };
 
   const toggleActivityCollapse = (activityId: string) => {
@@ -309,29 +359,21 @@ export function DayItineraryView({
   }) => {
     const isMoving = movingActivity?.id === activity.id;
     const isCollapsed = collapsedActivityCards[activity.id] || false;
-    const dayActivitiesCount = groupedDays.find((day) => day.dayNumber === dayNumber)?.activities.length ?? 0;
+    const changeDayButton = (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={(e) => {
+          e.stopPropagation();
+          handleMoveStart(activity.id, dayNumber);
+        }}
+        className="h-6 px-2 text-[10px] text-gray-500"
+      >
+        Change Day
+      </Button>
+    );
     const moveControls = (
       <div className="pt-3 mt-3 border-t border-gray-50" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-2 grid grid-cols-2 gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleReorderWithinDay(activity.id, dayNumber, index - 1)}
-            disabled={index === 0 || !onMoveActivity}
-            className="h-8 text-[10px]"
-          >
-            Move Up
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleReorderWithinDay(activity.id, dayNumber, index + 1)}
-            disabled={index >= dayActivitiesCount - 1 || !onMoveActivity}
-            className="h-8 text-[10px]"
-          >
-            Move Down
-          </Button>
-        </div>
         {isMoving ? (
           <div className="flex items-center gap-2">
             <Select onValueChange={(val) => handleMoveConfirm(parseInt(val, 10))}>
@@ -350,16 +392,7 @@ export function DayItineraryView({
               Cancel
             </Button>
           </div>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleMoveStart(activity.id, dayNumber)}
-            className="w-full h-8 text-[10px] font-medium text-gray-500 hover:text-primary hover:border-primary transition-colors"
-          >
-            Change Day
-          </Button>
-        )}
+        ) : null}
       </div>
     );
 
@@ -372,7 +405,8 @@ export function DayItineraryView({
           activityDuration={activity.estimatedDuration}
           collapsed={isCollapsed}
           onToggleCollapse={() => toggleActivityCollapse(activity.id)}
-          extraContent={moveControls}
+          headerActions={changeDayButton}
+          extraContent={isMoving ? moveControls : undefined}
         />
       );
     }
@@ -385,7 +419,8 @@ export function DayItineraryView({
         onHoverActivity={onActivityHover}
         collapsed={isCollapsed}
         onToggleCollapse={() => toggleActivityCollapse(activity.id)}
-        extraContent={moveControls}
+        headerActions={changeDayButton}
+        extraContent={isMoving ? moveControls : undefined}
       />
     );
   };
@@ -1128,15 +1163,37 @@ export function DayItineraryView({
                         startStayCoordinates={groupedDays[index - 1]?.nightStay?.coordinates ?? day.nightStay?.coordinates}
                         endStayCoordinates={isFinalDepartureDay ? null : day.nightStay?.coordinates}
                       />
-                      <div className="space-y-1">
-                        {day.activities.map((activity, index) => (
-                          <ActivityItem
-                            key={`day-${day.dayNumber}-activity-${activity.id}-${index}`}
-                            activity={activity}
-                            dayNumber={day.dayNumber}
-                            index={index}
-                          />
-                        ))}
+                      <div
+                        className="space-y-1"
+                        onDragOver={(event) => handleDayDragOver(event, day.dayNumber, day.activities.length)}
+                        onDrop={(event) => handleActivityDrop(event, day.dayNumber, day.activities.length)}
+                      >
+                        {day.activities.map((activity, index) => {
+                          const insertionBefore =
+                            dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === index;
+                          const isDragging = draggedActivity?.id === activity.id && draggedActivity.dayNumber === day.dayNumber;
+                          return (
+                            <div
+                              key={`day-${day.dayNumber}-activity-${activity.id}-${index}`}
+                              draggable={Boolean(onMoveActivity)}
+                              onDragStart={(event) => handleActivityDragStart(event, activity.id, day.dayNumber, index)}
+                              onDragOver={(event) => handleActivityDragOver(event, day.dayNumber, index)}
+                              onDrop={(event) => handleActivityDrop(event, day.dayNumber, index)}
+                              onDragEnd={handleActivityDragEnd}
+                              className={`rounded-md ${onMoveActivity ? "cursor-grab active:cursor-grabbing" : ""} ${isDragging ? "opacity-50" : ""}`}
+                            >
+                              {insertionBefore ? <div className="mb-1 h-0.5 rounded bg-primary/70" /> : null}
+                              <ActivityItem
+                                activity={activity}
+                                dayNumber={day.dayNumber}
+                                index={index}
+                              />
+                            </div>
+                          );
+                        })}
+                        {dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === day.activities.length ? (
+                          <div className="h-0.5 rounded bg-primary/70" />
+                        ) : null}
                         {day.restaurants.map((restaurant, index) => (
                           <RestaurantItem
                             key={`day-${day.dayNumber}-restaurant-${restaurant.id}-${index}`}
