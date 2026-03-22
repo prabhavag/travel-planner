@@ -54,7 +54,29 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["id", "title", "category", "whyItMatches", "bestForDates", "reviewSummary", "sourceLinks"],
+            required: [
+              "id",
+              "title",
+              "category",
+              "whyItMatches",
+              "bestForDates",
+              "reviewSummary",
+              "estimatedDuration",
+              "isDurationFlexible",
+              "difficultyLevel",
+              "bestTimeOfDay",
+              "daylightPreference",
+              "isFixedStartTime",
+              "fixedStartTime",
+              "recommendedStartWindow",
+              "timeReason",
+              "timeSourceLinks",
+              "locationMode",
+              "routePoints",
+              "startCoordinates",
+              "endCoordinates",
+              "sourceLinks",
+            ],
             properties: {
               id: { type: "string" },
               title: { type: "string" },
@@ -72,7 +94,7 @@ const RESEARCH_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
               recommendedStartWindow: {
                 type: ["object", "null"],
                 additionalProperties: false,
-                required: ["start", "end"],
+                required: ["start", "end", "reason"],
                 properties: {
                   start: { type: "string" },
                   end: { type: "string" },
@@ -178,7 +200,29 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "title", "category", "whyItMatches", "bestForDates", "reviewSummary", "sourceLinks"],
+        required: [
+          "id",
+          "title",
+          "category",
+          "whyItMatches",
+          "bestForDates",
+          "reviewSummary",
+          "estimatedDuration",
+          "isDurationFlexible",
+          "difficultyLevel",
+          "bestTimeOfDay",
+          "daylightPreference",
+          "isFixedStartTime",
+          "fixedStartTime",
+          "recommendedStartWindow",
+          "timeReason",
+          "timeSourceLinks",
+          "locationMode",
+          "routePoints",
+          "startCoordinates",
+          "endCoordinates",
+          "sourceLinks",
+        ],
         properties: {
           id: { type: "string" },
           title: { type: "string" },
@@ -196,7 +240,7 @@ const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
           recommendedStartWindow: {
             type: ["object", "null"],
             additionalProperties: false,
-            required: ["start", "end"],
+            required: ["start", "end", "reason"],
             properties: {
               start: { type: "string" },
               end: { type: "string" },
@@ -276,7 +320,29 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
     option: {
       type: "object",
       additionalProperties: false,
-      required: ["id", "title", "category", "whyItMatches", "bestForDates", "reviewSummary", "sourceLinks"],
+      required: [
+        "id",
+        "title",
+        "category",
+        "whyItMatches",
+        "bestForDates",
+        "reviewSummary",
+        "estimatedDuration",
+        "isDurationFlexible",
+        "difficultyLevel",
+        "bestTimeOfDay",
+        "daylightPreference",
+        "isFixedStartTime",
+        "fixedStartTime",
+        "recommendedStartWindow",
+        "timeReason",
+        "timeSourceLinks",
+        "locationMode",
+        "routePoints",
+        "startCoordinates",
+        "endCoordinates",
+        "sourceLinks",
+      ],
       properties: {
         id: { type: "string" },
         title: { type: "string" },
@@ -294,7 +360,7 @@ const SINGLE_RESEARCH_OPTION_JSON_SCHEMA: Record<string, unknown> = {
         recommendedStartWindow: {
           type: ["object", "null"],
           additionalProperties: false,
-          required: ["start", "end"],
+          required: ["start", "end", "reason"],
           properties: {
             start: { type: "string" },
             end: { type: "string" },
@@ -3644,14 +3710,20 @@ Rules:
 
     try {
       if (depth === "fast") {
-        const completion = await this.openai.chat.completions.create({
-          messages,
+        const response = await this.openai.responses.create({
           model: this.model,
+          input: this._serializeMessagesForResponses(messages),
           temperature: this.temperature,
-          max_tokens: 8000,
-          response_format: { type: "json_object" },
+          text: {
+            format: {
+              type: "json_schema",
+              name: "trip_research_brief_response",
+              strict: true,
+              schema: RESEARCH_RESPONSE_JSON_SCHEMA,
+            },
+          },
         });
-        const parsed = this._parseJsonResponse(completion);
+        const parsed = this._parseResearchResponseJson(response);
         const normalizedBrief = this._normalizeTripResearchBrief(parsed.tripResearchBrief);
 
         return {
