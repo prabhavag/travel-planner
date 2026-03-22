@@ -4,19 +4,35 @@ import { useState, useRef, useEffect, useCallback, useMemo, type DragEvent, type
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { MapPin, ListChecks, Home, AlertTriangle, Utensils } from "lucide-react";
 import { computeRoutes } from "@/lib/api-client";
 import type { GroupedDay, SuggestedActivity, TripInfo } from "@/lib/api-client";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
-import { ActivityCard } from "@/components/ActivityCard";
-import { ResearchOptionCard } from "@/components/ResearchOptionCard";
+import { DayActivityItem } from "@/components/DayActivityItem";
+import {
+  type CommuteMode,
+  REGULAR_DAY_START_MINUTES,
+  REGULAR_DAY_END_MINUTES,
+  OFF_HOURS_ACTIVITY_DISCOUNT,
+  roundToQuarter,
+  parseEstimatedHours,
+  estimateCommuteMinutes,
+  estimateDriveMinutesNoFloor,
+  estimateRouteIntrinsicMinutes,
+  pickCommuteMode,
+  toTravelMode,
+  commuteModeLabel,
+  formatHourLabel,
+  toClockLabel,
+  toRangeLabel,
+  parseFixedStartTimeMinutes,
+  recommendedWindowMidpointMinutes,
+  activityLoadFactor,
+  formatRecommendedStartWindowLabel,
+} from "@/lib/utils/timeline-utils";
+
+/** The possible active tab key in the horizontal day carousel. */
+type DayTabKey = number | "unscheduled";
 
 interface DayGroupingViewProps {
   groupedDays: GroupedDay[];
@@ -49,8 +65,6 @@ export function DayGroupingView({
   headerActions = null,
 }: DayGroupingViewProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  type DayTabKey = number | "unscheduled";
-  type CommuteMode = "TRAIN" | "TRANSIT" | "WALK" | "DRIVE";
   const [movingActivity, setMovingActivity] = useState<{
     id: string;
     fromDay: number;
@@ -498,367 +512,9 @@ export function DayGroupingView({
     }));
   };
 
-  const ActivityItem = ({
-    activity,
-    dayNumber,
-    sourceDayNumber,
-    index,
-    timeSlotLabel,
-    affordLabel,
-  }: {
-    activity: SuggestedActivity;
-    dayNumber: number;
-    sourceDayNumber?: number;
-    index: number;
-    timeSlotLabel?: string;
-    affordLabel?: string;
-  }) => {
-    const isMoving = movingActivity?.id === activity.id;
-    const isCollapsed = collapsedActivityCards[activity.id] ?? true;
-    const sourceDay = sourceDayNumber ?? dayNumber;
-    const changeDayButton = (
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={(e) => {
-          e.stopPropagation();
-          handleMoveStart(activity.id, sourceDay);
-        }}
-        className="h-6 px-2 text-[10px] text-gray-500"
-      >
-        Change Day
-      </Button>
-    );
-    const debugAttributes = {
-      id: activity.id,
-      name: activity.name,
-      type: activity.type,
-      interestTags: activity.interestTags ?? [],
-      description: activity.description ?? null,
-      estimatedDuration: activity.estimatedDuration ?? null,
-      isDurationFlexible: activity.isDurationFlexible ?? true,
-      estimatedCost: activity.estimatedCost ?? null,
-      currency: activity.currency ?? null,
-      difficultyLevel: activity.difficultyLevel ?? null,
-      bestTimeOfDay: activity.bestTimeOfDay ?? null,
-      daylightPreference: activity.daylightPreference ?? null,
-      isFixedStartTime: activity.isFixedStartTime ?? null,
-      fixedStartTime: activity.fixedStartTime ?? null,
-      recommendedStartWindow: activity.recommendedStartWindow ?? null,
-      timeReason: activity.timeReason ?? null,
-      timeSourceLinks: activity.timeSourceLinks ?? [],
-      neighborhood: activity.neighborhood ?? null,
-      locationMode: activity.locationMode ?? null,
-      coordinates: activity.coordinates ?? null,
-      startCoordinates: activity.startCoordinates ?? null,
-      endCoordinates: activity.endCoordinates ?? null,
-      routeWaypoints: activity.routeWaypoints ?? [],
-      routePoints: activity.routePoints ?? [],
-      place_id: activity.place_id ?? null,
-      rating: activity.rating ?? null,
-      opening_hours: activity.opening_hours ?? null,
-      photo_url: activity.photo_url ?? null,
-      photo_urls: activity.photo_urls ?? [],
-      researchOptionId: activity.researchOption?.id ?? null,
-    };
-
-    const showMoveControls = Boolean(affordLabel) || isMoving || debugMode;
-    const moveControls = (
-      <div className="pt-3 mt-3 border-t border-gray-50">
-        {affordLabel ? <p className="mb-2 text-[11px] text-gray-500">{affordLabel}</p> : null}
-        {isMoving ? (
-          <div className="flex items-center gap-2">
-            <Select onValueChange={(val) => handleMoveConfirm(parseInt(val, 10))}>
-              <SelectTrigger className="flex-1 h-8 text-[10px]">
-                <SelectValue placeholder="Move to day..." />
-              </SelectTrigger>
-              <SelectContent>
-                {displayGroupedDays.map((day) => (
-                  <SelectItem key={day.dayNumber} value={day.dayNumber.toString()}>
-                    Day {day.dayNumber}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button variant="outline" size="sm" onClick={handleMoveCancel} className="h-8 px-2 text-[10px]">
-              Cancel
-            </Button>
-          </div>
-        ) : null}
-        {debugMode && !isCollapsed ? (
-          <div className="mt-3 space-y-2 rounded-md border border-slate-300 bg-slate-50 p-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">Debug Attributes</p>
-            <pre className="max-h-72 overflow-auto rounded border border-slate-200 bg-white p-2 text-[11px] leading-4 text-slate-800">
-              {JSON.stringify(debugAttributes, null, 2)}
-            </pre>
-          </div>
-        ) : null}
-      </div>
-    );
-
-    if (activity.researchOption) {
-      return (
-        <ResearchOptionCard
-          option={activity.researchOption}
-          isSelected={true}
-          readOnly={true}
-          activityDuration={activity.estimatedDuration}
-          timeSlotLabel={timeSlotLabel}
-          showDurationBadge={false}
-          collapsed={isCollapsed}
-          onToggleCollapse={() => toggleActivityCollapse(activity.id)}
-          headerActions={changeDayButton}
-          extraContent={showMoveControls ? moveControls : undefined}
-        />
-      );
-    }
-
-    return (
-      <ActivityCard
-        activity={activity}
-        index={index}
-        isSelected={true}
-        userPreferences={userPreferences}
-        timeSlotLabel={timeSlotLabel}
-        showDurationBadge={false}
-        collapsed={isCollapsed}
-        onToggleCollapse={() => toggleActivityCollapse(activity.id)}
-        headerActions={changeDayButton}
-        extraContent={showMoveControls ? moveControls : undefined}
-      />
-    );
-  };
-
-  function parseEstimatedHours(duration?: string | null): number {
-    if (!duration) return 2;
-    const text = duration.toLowerCase().trim();
-    if (!text) return 2;
-
-    const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
-    if (rangeMatch) {
-      const min = Number(rangeMatch[1]);
-      const max = Number(rangeMatch[2]);
-      if (Number.isFinite(min) && Number.isFinite(max) && max >= min) {
-        return (min + max) / 2;
-      }
-    }
-
-    const singleHourMatch = text.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)/);
-    if (singleHourMatch) {
-      const value = Number(singleHourMatch[1]);
-      if (Number.isFinite(value)) return value;
-    }
-
-    if (/half\s*day/.test(text)) return 4;
-    if (/full\s*day|all\s*day/.test(text)) return 7;
-    if (/30\s*min/.test(text)) return 0.5;
-    if (/45\s*min/.test(text)) return 0.75;
-    return 2;
-  }
-
-  function haversineKm(
-    from: { lat: number; lng: number } | null | undefined,
-    to: { lat: number; lng: number } | null | undefined,
-  ): number | null {
-    if (!from || !to) return null;
-    const toRad = (v: number) => (v * Math.PI) / 180;
-    const R = 6371;
-    const dLat = toRad(to.lat - from.lat);
-    const dLng = toRad(to.lng - from.lng);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  function estimateCommuteMinutes(
-    from: { lat: number; lng: number } | null | undefined,
-    to: { lat: number; lng: number } | null | undefined,
-  ): number {
-    const distanceKm = haversineKm(from, to);
-    if (distanceKm == null) return 25;
-    // Fallback only: inflate straight-line distance into road distance and use conservative speeds.
-    const roadDistanceKm =
-      distanceKm < 10
-        ? distanceKm * 1.35
-        : distanceKm < 30
-          ? distanceKm * 1.6
-          : distanceKm * 1.75;
-    const speedKph =
-      distanceKm < 10
-        ? 28
-        : distanceKm < 30
-          ? 20
-          : 40;
-    const minutes = Math.round((roadDistanceKm / speedKph) * 60);
-    return Math.max(10, minutes);
-  }
-
-  function estimateDriveMinutesNoFloor(
-    from: { lat: number; lng: number } | null | undefined,
-    to: { lat: number; lng: number } | null | undefined,
-  ): number {
-    const distanceKm = haversineKm(from, to);
-    if (distanceKm == null) return 0;
-    const roadDistanceKm =
-      distanceKm < 10
-        ? distanceKm * 1.35
-        : distanceKm < 30
-          ? distanceKm * 1.6
-          : distanceKm * 1.75;
-    const speedKph =
-      distanceKm < 10
-        ? 28
-        : distanceKm < 30
-          ? 20
-          : 40;
-    return Math.max(0, Math.round((roadDistanceKm / speedKph) * 60));
-  }
-
-  function estimateRouteIntrinsicMinutes(activity: SuggestedActivity): number | null {
-    if (activity.locationMode !== "route") return null;
-
-    const routePoints = activity.routePoints || [];
-    const startPoint = activity.startCoordinates || routePoints[0] || activity.coordinates || null;
-    const endPoint =
-      activity.endCoordinates || (routePoints.length > 1 ? routePoints[routePoints.length - 1] : null) || activity.coordinates || null;
-
-    if (!startPoint || !endPoint) return null;
-
-    const candidates: Array<{ lat: number; lng: number }> = [];
-    const addCandidate = (point?: { lat: number; lng: number } | null) => {
-      if (!point) return;
-      const nearExisting = candidates.some((existing) => {
-        const deltaKm = haversineKm(existing, point);
-        return deltaKm != null && deltaKm < 0.8;
-      });
-      if (!nearExisting) candidates.push(point);
-    };
-
-    (activity.routeWaypoints || []).forEach((waypoint) => addCandidate(waypoint.coordinates));
-    routePoints.slice(1, Math.max(1, routePoints.length - 1)).forEach((point) => addCandidate(point));
-
-    let farthestPoint = endPoint;
-    let farthestDriveFromStart = estimateDriveMinutesNoFloor(startPoint, endPoint);
-    candidates.forEach((candidate) => {
-      const driveFromStart = estimateDriveMinutesNoFloor(startPoint, candidate);
-      if (driveFromStart > farthestDriveFromStart) {
-        farthestDriveFromStart = driveFromStart;
-        farthestPoint = candidate;
-      }
-    });
-
-    const toFarthestMinutes = estimateDriveMinutesNoFloor(startPoint, farthestPoint);
-    const farthestToExitMinutes = estimateDriveMinutesNoFloor(farthestPoint, endPoint);
-    const baseRouteMinutes = toFarthestMinutes + farthestToExitMinutes;
-    if (baseRouteMinutes <= 0) return null;
-
-    const waypointBufferMinutes = Math.min(90, Math.max(20, (activity.routeWaypoints?.length ?? 0) * 15));
-    const scenicBufferMinutes = baseRouteMinutes >= 240 ? 60 : baseRouteMinutes >= 150 ? 45 : 30;
-    const intrinsicMinutes = baseRouteMinutes + waypointBufferMinutes + scenicBufferMinutes;
-    return Math.min(12 * 60, intrinsicMinutes);
-  }
-
-  function pickCommuteMode(
-    from: { lat: number; lng: number } | null | undefined,
-    to: { lat: number; lng: number } | null | undefined,
-    railFriendlyDestination: boolean
-  ): CommuteMode {
-    const distanceKm = haversineKm(from, to);
-    if (distanceKm == null) return railFriendlyDestination ? "TRAIN" : "DRIVE";
-    if (distanceKm <= 1.5) return "WALK";
-    if (railFriendlyDestination && distanceKm >= 3 && distanceKm <= 250) return "TRAIN";
-    // Default to driving for non-rail destinations; transit heuristics produce unrealistic legs.
-    return "DRIVE";
-  }
-
-  function toTravelMode(mode: CommuteMode): "DRIVE" | "WALK" | "TRANSIT" {
-    if (mode === "WALK") return "WALK";
-    if (mode === "TRAIN" || mode === "TRANSIT") return "TRANSIT";
-    return "DRIVE";
-  }
-
-  function commuteModeLabel(mode: CommuteMode): string {
-    if (mode === "TRAIN") return "Train";
-    if (mode === "TRANSIT") return "Transit";
-    if (mode === "WALK") return "Walk";
-    return "Drive";
-  }
-
-  const formatHourLabel = (hours: number): string => {
-    const rounded = Math.round(hours * 10) / 10;
-    if (Math.abs(rounded - 1) < 0.01) return "1 hr";
-    return `${rounded} hrs`;
-  };
-
-  const toClockLabel = (minutes: number): string => {
-    const clamped = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);
-    const h = Math.floor(clamped / 60);
-    const m = clamped % 60;
-    const suffix = h >= 12 ? "PM" : "AM";
-    const h12 = h % 12 === 0 ? 12 : h % 12;
-    return `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
-  };
-
-  const toRangeLabel = (startMinutes: number, endMinutes: number): string =>
-    `${toClockLabel(startMinutes)}-${toClockLabel(endMinutes)}`;
-
-  const formatRecommendedStartWindowLabel = (activity: SuggestedActivity): string | null => {
-    const window = activity.recommendedStartWindow;
-    if (!window?.start || !window?.end) return null;
-    const start = parseFixedStartTimeMinutes(window.start);
-    const end = parseFixedStartTimeMinutes(window.end);
-    if (start == null || end == null) return null;
-    return `${toClockLabel(start)}-${toClockLabel(end)}`;
-  };
-
-  const roundToQuarter = (value: number): number => Math.round(value / 15) * 15;
-  const REGULAR_DAY_START_MINUTES = 9 * 60 + 30; // 9:30 AM
-  const REGULAR_DAY_END_MINUTES = REGULAR_DAY_START_MINUTES + 8 * 60; // 5:30 PM
-  const OFF_HOURS_ACTIVITY_DISCOUNT = 0.3;
-
-  function parseFixedStartTimeMinutes(value?: string | null): number | null {
-    if (!value) return null;
-    const text = value.trim().toLowerCase();
-    if (!text) return null;
-    if (text === "sunrise") return 6 * 60;
-    if (text === "sunset") return 18 * 60;
-
-    const meridiemMatch = text.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
-    if (meridiemMatch) {
-      let hour = Number(meridiemMatch[1]) % 12;
-      const minute = Number(meridiemMatch[2] || "0");
-      if (meridiemMatch[3].toLowerCase() === "pm") hour += 12;
-      if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) return hour * 60 + minute;
-    }
-
-    const twentyFourMatch = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-    if (twentyFourMatch) {
-      const hour = Number(twentyFourMatch[1]);
-      const minute = Number(twentyFourMatch[2]);
-      return hour * 60 + minute;
-    }
-
-    return null;
-  }
-
-  function recommendedWindowMidpointMinutes(activity: SuggestedActivity): number | null {
-    const startMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.start);
-    const endMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end);
-    if (startMinutes == null || endMinutes == null || endMinutes < startMinutes) return null;
-    return Math.round((startMinutes + endMinutes) / 2);
-  }
-
-  function activityLoadFactor(activity: SuggestedActivity): number {
-    if (activity.isDurationFlexible === false) return 1;
-    if (!activity.isFixedStartTime) return 1;
-    const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
-    if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
-    if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") return 0.7;
-    if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") return 0.7;
-    return 1;
-  }
+  // ---------------------------------------------------------------------------
+  // Scheduling / timeline helpers (pure utilities imported from timeline-utils)
+  // ---------------------------------------------------------------------------
 
   const getDayStartContext = useCallback(
     (dayIndex: number, fallbackStayLabel?: string | null) => {
@@ -1140,16 +796,11 @@ export function DayGroupingView({
       parseClockMinutes,
       sortActivitiesForTimeline,
       commuteByLeg,
-      parseEstimatedHours,
-      estimateRouteIntrinsicMinutes,
-      activityLoadFactor,
-      recommendedWindowMidpointMinutes,
       getActivityStartPoint,
       getActivityEndPoint,
       getActivityTimingPolicy,
       nightOnlyStartFloorMinutes,
       daylightEndCapMinutes,
-      roundToQuarter,
     ]
   );
 
@@ -1306,25 +957,25 @@ export function DayGroupingView({
 
     type TimelineItem =
       | {
-          type: "stay";
-          id: string;
-          title: string;
-          detail: string;
-        }
+        type: "stay";
+        id: string;
+        title: string;
+        detail: string;
+      }
       | {
-          type: "activity";
-          id: string;
-          activity: SuggestedActivity;
-          timeRange: string;
-          affordLabel: string;
-        }
+        type: "activity";
+        id: string;
+        activity: SuggestedActivity;
+        timeRange: string;
+        affordLabel: string;
+      }
       | {
-          type: "lunch" | "commute" | "continue" | "free";
-          id: string;
-          title: string;
-          detail: string;
-          timeRange: string;
-        };
+        type: "lunch" | "commute" | "continue" | "free";
+        id: string;
+        title: string;
+        detail: string;
+        timeRange: string;
+      };
 
     const timelineItems: TimelineItem[] = [];
     const commuteTransitionBufferMinutes = 20;
@@ -1695,9 +1346,8 @@ export function DayGroupingView({
         id: `stay-end-${day.dayNumber}`,
         title: isFinalDepartureDay ? "Departure prep" : "End at night stay",
         detail: isFinalDepartureDay
-          ? `Checkout${
-              tripInfo?.transportMode === "car" ? ", return rental car," : ","
-            } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure. Target airport arrival by ${toClockLabel(airportArrivalDeadlineMinutes)}. Airport transfer shown above is an estimate.`
+          ? `Checkout${tripInfo?.transportMode === "car" ? ", return rental car," : ","
+          } then head to ${tripInfo?.departureAirport || "the airport"} for ${departureClock} departure. Target airport arrival by ${toClockLabel(airportArrivalDeadlineMinutes)}. Airport transfer shown above is an estimate.`
           : (endStayLabel || "End at night stay"),
       });
     }
@@ -1737,122 +1387,129 @@ export function DayGroupingView({
             {(() => {
               const seenTimelineIds = new Map<string, number>();
               return timelineItems.map((item, index) => {
-              const seenCount = seenTimelineIds.get(item.id) ?? 0;
-              seenTimelineIds.set(item.id, seenCount + 1);
-              const timelineKey = seenCount === 0 ? item.id : `${item.id}-${seenCount + 1}`;
-            const isLast = index === timelineItems.length - 1;
-            const dotClass =
-              item.type === "activity"
-                ? "bg-sky-500 border-sky-600"
-                : item.type === "lunch"
-                  ? "bg-amber-400 border-amber-500"
-                  : item.type === "free"
-                    ? "bg-emerald-300 border-emerald-400"
-                  : item.type === "continue"
-                    ? "bg-sky-300 border-sky-400"
-                    : item.type === "stay"
-                      ? "bg-emerald-400 border-emerald-500"
-                      : "bg-gray-300 border-gray-400";
+                const seenCount = seenTimelineIds.get(item.id) ?? 0;
+                seenTimelineIds.set(item.id, seenCount + 1);
+                const timelineKey = seenCount === 0 ? item.id : `${item.id}-${seenCount + 1}`;
+                const isLast = index === timelineItems.length - 1;
+                const dotClass =
+                  item.type === "activity"
+                    ? "bg-sky-500 border-sky-600"
+                    : item.type === "lunch"
+                      ? "bg-amber-400 border-amber-500"
+                      : item.type === "free"
+                        ? "bg-emerald-300 border-emerald-400"
+                        : item.type === "continue"
+                          ? "bg-sky-300 border-sky-400"
+                          : item.type === "stay"
+                            ? "bg-emerald-400 border-emerald-500"
+                            : "bg-gray-300 border-gray-400";
 
-              return (
-              <div key={timelineKey} className="flex gap-3">
-                <div className="w-10 shrink-0 relative flex flex-col items-center">
-                  <div className={`mt-2 h-3 w-3 rounded-full border-2 ${dotClass}`} />
-                  {!isLast ? <div className="w-px flex-1 bg-gray-200 my-1" /> : null}
-                </div>
-                <div className="flex-1 pb-2">
-                  {item.type === "activity" ? (
-                    (() => {
-                      const activityIndex = sortedActivities.findIndex((a) => a.id === item.activity.id);
-                      const safeActivityIndex = activityIndex >= 0 ? activityIndex : 0;
-                      const insertionBefore =
-                        dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === activityIndex;
-                      const isDragging =
-                        draggedActivity?.id === item.activity.id && draggedActivity.dayNumber === day.dayNumber;
-                      return (
+                return (
+                  <div key={timelineKey} className="flex gap-3">
+                    <div className="w-10 shrink-0 relative flex flex-col items-center">
+                      <div className={`mt-2 h-3 w-3 rounded-full border-2 ${dotClass}`} />
+                      {!isLast ? <div className="w-px flex-1 bg-gray-200 my-1" /> : null}
+                    </div>
+                    <div className="flex-1 pb-2">
+                      {item.type === "activity" ? (
+                        (() => {
+                          const activityIndex = sortedActivities.findIndex((a) => a.id === item.activity.id);
+                          const safeActivityIndex = activityIndex >= 0 ? activityIndex : 0;
+                          const insertionBefore =
+                            dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === activityIndex;
+                          const isDragging =
+                            draggedActivity?.id === item.activity.id && draggedActivity.dayNumber === day.dayNumber;
+                          return (
+                            <div
+                              draggable={activityIndex >= 0}
+                              onDragStart={(event) => handleActivityDragStart(event, item.activity.id, day.dayNumber, activityIndex)}
+                              onDragOver={(event) => handleActivityDragOver(event, day.dayNumber, activityIndex)}
+                              onDrop={(event) => handleActivityDrop(event, day.dayNumber, activityIndex)}
+                              onDragEnd={handleActivityDragEnd}
+                              className={`rounded-md ${activityIndex >= 0 ? "cursor-grab active:cursor-grabbing" : ""} ${isDragging ? "opacity-50" : ""}`}
+                            >
+                              {insertionBefore ? <div className="mb-1 h-0.5 rounded bg-primary/70" /> : null}
+                              <DayActivityItem
+                                activity={item.activity}
+                                dayNumber={day.dayNumber}
+                                sourceDayNumber={sourceDayByActivityId[item.activity.id]}
+                                index={safeActivityIndex}
+                                timeSlotLabel={item.timeRange}
+                                affordLabel={item.affordLabel}
+                                isMoving={movingActivity?.id === item.activity.id}
+                                isCollapsed={collapsedActivityCards[item.activity.id] ?? true}
+                                debugMode={debugMode}
+                                userPreferences={userPreferences}
+                                displayGroupedDays={displayGroupedDays}
+                                onToggleCollapse={toggleActivityCollapse}
+                                onMoveStart={handleMoveStart}
+                                onMoveConfirm={handleMoveConfirm}
+                                onMoveCancel={handleMoveCancel}
+                              />
+                            </div>
+                          );
+                        })()
+                      ) : item.type === "stay" ? (
+                        <div className="flex items-center justify-between gap-3 text-xs text-emerald-800">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Home className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                            <span className="font-medium text-emerald-900">{item.title}</span>
+                            <span className="text-emerald-700 truncate">· {item.detail}</span>
+                          </div>
+                        </div>
+                      ) : item.type === "commute" ? (
+                        <div className="flex items-center justify-between gap-3 text-xs text-gray-600">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-medium text-gray-700">{item.title}</span>
+                            <span className="text-gray-500 truncate">· {item.detail}</span>
+                          </div>
+                          <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-gray-50 text-gray-600 border-gray-200">
+                            {item.timeRange}
+                          </Badge>
+                        </div>
+                      ) : item.type === "lunch" ? (
+                        <div className="flex items-center justify-between gap-3 text-xs text-amber-800">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Utensils className="h-3.5 w-3.5 shrink-0 text-amber-700" />
+                            <span className="font-medium text-amber-900">{item.title}</span>
+                            <span className="text-amber-700 truncate">· {item.detail}</span>
+                          </div>
+                          <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-amber-50 text-amber-700 border-amber-200">
+                            {item.timeRange}
+                          </Badge>
+                        </div>
+                      ) : (
                         <div
-                          draggable={activityIndex >= 0}
-                          onDragStart={(event) => handleActivityDragStart(event, item.activity.id, day.dayNumber, activityIndex)}
-                          onDragOver={(event) => handleActivityDragOver(event, day.dayNumber, activityIndex)}
-                          onDrop={(event) => handleActivityDrop(event, day.dayNumber, activityIndex)}
-                          onDragEnd={handleActivityDragEnd}
-                          className={`rounded-md ${activityIndex >= 0 ? "cursor-grab active:cursor-grabbing" : ""} ${isDragging ? "opacity-50" : ""}`}
-                        >
-                          {insertionBefore ? <div className="mb-1 h-0.5 rounded bg-primary/70" /> : null}
-                          <ActivityItem
-                            activity={item.activity}
-                            dayNumber={day.dayNumber}
-                            sourceDayNumber={sourceDayByActivityId[item.activity.id]}
-                            index={safeActivityIndex}
-                            timeSlotLabel={item.timeRange}
-                            affordLabel={item.affordLabel}
-                          />
-                        </div>
-                      );
-                    })()
-                  ) : item.type === "stay" ? (
-                    <div className="flex items-center justify-between gap-3 text-xs text-emerald-800">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Home className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-                        <span className="font-medium text-emerald-900">{item.title}</span>
-                        <span className="text-emerald-700 truncate">· {item.detail}</span>
-                      </div>
-                    </div>
-                  ) : item.type === "commute" ? (
-                    <div className="flex items-center justify-between gap-3 text-xs text-gray-600">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-medium text-gray-700">{item.title}</span>
-                        <span className="text-gray-500 truncate">· {item.detail}</span>
-                      </div>
-                      <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-gray-50 text-gray-600 border-gray-200">
-                        {item.timeRange}
-                      </Badge>
-                    </div>
-                  ) : item.type === "lunch" ? (
-                    <div className="flex items-center justify-between gap-3 text-xs text-amber-800">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Utensils className="h-3.5 w-3.5 shrink-0 text-amber-700" />
-                        <span className="font-medium text-amber-900">{item.title}</span>
-                        <span className="text-amber-700 truncate">· {item.detail}</span>
-                      </div>
-                      <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-amber-50 text-amber-700 border-amber-200">
-                        {item.timeRange}
-                      </Badge>
-                    </div>
-                  ) : (
-                    <div
-                      className={`rounded-md border p-2 text-xs ${
-                        item.type === "free"
+                          className={`rounded-md border p-2 text-xs ${item.type === "free"
                             ? "border-emerald-200 bg-emerald-50/70"
-                          : item.type === "continue"
-                            ? "border-sky-200 bg-sky-50/60"
-                            : "border-gray-200 bg-gray-50"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="font-medium text-gray-800">{item.title}</p>
-                          <p className="text-gray-600">{item.detail}</p>
-                        </div>
-                        <Badge
-                          variant="outline"
-                          className={`h-5 shrink-0 whitespace-nowrap ${
-                            item.type === "free"
-                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                              : item.type === "continue"
-                                ? "bg-sky-50 text-sky-700 border-sky-200"
-                                : "bg-gray-50 text-gray-600 border-gray-200"
-                          }`}
+                            : item.type === "continue"
+                              ? "border-sky-200 bg-sky-50/60"
+                              : "border-gray-200 bg-gray-50"
+                            }`}
                         >
-                          {item.timeRange}
-                        </Badge>
-                      </div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="font-medium text-gray-800">{item.title}</p>
+                              <p className="text-gray-600">{item.detail}</p>
+                            </div>
+                            <Badge
+                              variant="outline"
+                              className={`h-5 shrink-0 whitespace-nowrap ${item.type === "free"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : item.type === "continue"
+                                  ? "bg-sky-50 text-sky-700 border-sky-200"
+                                  : "bg-gray-50 text-gray-600 border-gray-200"
+                                }`}
+                            >
+                              {item.timeRange}
+                            </Badge>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              </div>
-              );
-            });
+                  </div>
+                );
+              });
             })()}
             {dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === sortedActivities.length ? (
               <div className="h-0.5 rounded bg-primary/70" />
@@ -1959,67 +1616,67 @@ export function DayGroupingView({
           {displayGroupedDays.map((day, index) => {
             const isFinalDepartureDay = isDepartureDay(day, index);
             return (
-            <div key={day.dayNumber} className="w-full flex-shrink-0 snap-center px-2">
-              <Card className="h-full border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
-                <CardHeader className="pb-3 shrink-0">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Badge className={`${getDayBadgeColors(day.dayNumber)} h-6 px-2`}>
-                          Day {day.dayNumber}
-                        </Badge>
-                        <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">
-                          {day.activities.length} Activities
-                        </span>
-                      </div>
-                      <CardTitle className="text-xl">{day.theme}</CardTitle>
-                      {day.nightStay?.label && !isFinalDepartureDay && (
-                        <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                          <Home className="h-3.5 w-3.5" />
-                          Night stay: {day.nightStay.label}
+              <div key={day.dayNumber} className="w-full flex-shrink-0 snap-center px-2">
+                <Card className="h-full border-t-4 flex flex-col" style={{ borderTopColor: getDayColor(day.dayNumber) }}>
+                  <CardHeader className="pb-3 shrink-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <Badge className={`${getDayBadgeColors(day.dayNumber)} h-6 px-2`}>
+                            Day {day.dayNumber}
+                          </Badge>
+                          <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">
+                            {day.activities.length} Activities
+                          </span>
                         </div>
-                      )}
-                      {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && !isFinalDepartureDay && (
-                        <div className="mt-2 space-y-1 text-xs text-slate-600">
-                          {day.nightStay.candidates.slice(0, 3).map((candidate, candidateIndex) => (
-                            <div key={`${candidate.label}-${candidateIndex}`}>
-                              Alt: {candidate.label}
-                              {candidate.driveScoreKm != null ? ` · ~${candidate.driveScoreKm} km drive` : ""}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    {debugMode && day.debugCost ? (
-                      <div className="shrink-0 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-[10px] leading-4 text-slate-700">
-                        <p className="font-semibold uppercase tracking-wide text-slate-800">Day Cost</p>
-                        <p>Total {formatCostScore(day.debugCost.dayCost)}</p>
-                        <p>S {formatCostScore(day.debugCost.structuralCost)} · B {formatCostScore(day.debugCost.balancePenalty)}</p>
-                        <p>C {formatCostScore(day.debugCost.commuteProxy)} · H {formatCostScore(day.debugCost.totalHours)}</p>
+                        <CardTitle className="text-xl">{day.theme}</CardTitle>
+                        {day.nightStay?.label && !isFinalDepartureDay && (
+                          <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                            <Home className="h-3.5 w-3.5" />
+                            Night stay: {day.nightStay.label}
+                          </div>
+                        )}
+                        {day.nightStay?.candidates && day.nightStay.candidates.length > 0 && !isFinalDepartureDay && (
+                          <div className="mt-2 space-y-1 text-xs text-slate-600">
+                            {day.nightStay.candidates.slice(0, 3).map((candidate, candidateIndex) => (
+                              <div key={`${candidate.label}-${candidateIndex}`}>
+                                Alt: {candidate.label}
+                                {candidate.driveScoreKm != null ? ` · ~${candidate.driveScoreKm} km drive` : ""}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    ) : null}
-                  </div>
-                </CardHeader>
-                <CardContent className="flex-1 overflow-hidden p-0">
-                  <div
-                    className="h-full overflow-auto px-4 pb-6"
-                    onWheelCapture={handleDayPanelWheel}
-                  >
-                    <div className="space-y-3">
-                      <DayTimelineRows
-                        day={day}
-                        rawDay={rawDayByNumber.get(day.dayNumber)}
-                        dayIndex={index}
-                        startStayLabel={displayGroupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
-                        endStayLabel={isFinalDepartureDay ? null : day.nightStay?.label}
-                        startStayCoordinates={getStartStayCoordinates(displayGroupedDays, day, index)}
-                        endStayCoordinates={isFinalDepartureDay ? null : day.nightStay?.coordinates}
-                      />
+                      {debugMode && day.debugCost ? (
+                        <div className="shrink-0 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-[10px] leading-4 text-slate-700">
+                          <p className="font-semibold uppercase tracking-wide text-slate-800">Day Cost</p>
+                          <p>Total {formatCostScore(day.debugCost.dayCost)}</p>
+                          <p>S {formatCostScore(day.debugCost.structuralCost)} · B {formatCostScore(day.debugCost.balancePenalty)}</p>
+                          <p>C {formatCostScore(day.debugCost.commuteProxy)} · H {formatCostScore(day.debugCost.totalHours)}</p>
+                        </div>
+                      ) : null}
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+                  </CardHeader>
+                  <CardContent className="flex-1 overflow-hidden p-0">
+                    <div
+                      className="h-full overflow-auto px-4 pb-6"
+                      onWheelCapture={handleDayPanelWheel}
+                    >
+                      <div className="space-y-3">
+                        <DayTimelineRows
+                          day={day}
+                          rawDay={rawDayByNumber.get(day.dayNumber)}
+                          dayIndex={index}
+                          startStayLabel={displayGroupedDays[index - 1]?.nightStay?.label ?? day.nightStay?.label}
+                          endStayLabel={isFinalDepartureDay ? null : day.nightStay?.label}
+                          startStayCoordinates={getStartStayCoordinates(displayGroupedDays, day, index)}
+                          endStayCoordinates={isFinalDepartureDay ? null : day.nightStay?.coordinates}
+                        />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
             );
           })}
           {unscheduledActivities.length > 0 ? (
@@ -2040,13 +1697,22 @@ export function DayGroupingView({
                   <div className="h-full overflow-auto px-4 pb-6">
                     <div className="space-y-3">
                       {unscheduledActivities.map((activity, index) => (
-                        <ActivityItem
+                        <DayActivityItem
                           key={`unscheduled-${activity.id}-${index}`}
                           activity={activity}
                           dayNumber={sourceDayByActivityId[activity.id] ?? 1}
                           sourceDayNumber={sourceDayByActivityId[activity.id]}
                           index={index}
                           affordLabel="Auto-placement could not fit this activity."
+                          isMoving={movingActivity?.id === activity.id}
+                          isCollapsed={collapsedActivityCards[activity.id] ?? true}
+                          debugMode={debugMode}
+                          userPreferences={userPreferences}
+                          displayGroupedDays={displayGroupedDays}
+                          onToggleCollapse={toggleActivityCollapse}
+                          onMoveStart={handleMoveStart}
+                          onMoveConfirm={handleMoveConfirm}
+                          onMoveCancel={handleMoveCancel}
                         />
                       ))}
                     </div>
