@@ -516,6 +516,7 @@ const AdjustDayGroupsActionSchema = z.object({
     activityId: z.string(),
     fromDay: z.number(),
     toDay: z.number(),
+    targetIndex: z.number().int().nonnegative().optional(),
   }),
 });
 

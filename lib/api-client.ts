@@ -708,11 +708,12 @@ export async function adjustDayGroups(
   sessionId: string,
   activityId: string,
   fromDay: number,
-  toDay: number
+  toDay: number,
+  targetIndex?: number
 ): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/adjust-day-groups`, {
     method: "POST",
-    body: JSON.stringify({ sessionId, activityId, fromDay, toDay }),
+    body: JSON.stringify({ sessionId, activityId, fromDay, toDay, targetIndex }),
   });
 }
 

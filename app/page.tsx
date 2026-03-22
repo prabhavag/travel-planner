@@ -1470,12 +1470,12 @@ export default function PlannerPage() {
   };
 
   // Handle moving activity between days
-  const handleMoveActivity = async (activityId: string, fromDay: number, toDay: number) => {
+  const handleMoveActivity = async (activityId: string, fromDay: number, toDay: number, targetIndex?: number) => {
     if (!sessionId) return;
     setLoading(true);
 
     try {
-      const response = await adjustDayGroups(sessionId, activityId, fromDay, toDay);
+      const response = await adjustDayGroups(sessionId, activityId, fromDay, toDay, targetIndex);
       if (response.success) {
         setGroupedDays(response.groupedDays || []);
       }

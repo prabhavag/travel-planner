@@ -27,7 +27,7 @@ interface DayGroupingViewProps {
     TripInfo,
     "arrivalAirport" | "departureAirport" | "arrivalTimePreference" | "departureTimePreference" | "transportMode" | "endDate"
   >;
-  onMoveActivity: (activityId: string, fromDay: number, toDay: number) => void;
+  onMoveActivity: (activityId: string, fromDay: number, toDay: number, targetIndex?: number) => void;
   onConfirm: () => void;
   onDayChange?: (dayNumber: number) => void;
   isLoading?: boolean;
@@ -133,13 +133,6 @@ export function DayGroupingView({
     return { settleBufferMinutes };
   }, []);
 
-  const timingPriorityRank = useCallback((activity: SuggestedActivity): number => {
-    const preference = inferDaylightPreference(activity);
-    if (preference === "daylight_only") return 0;
-    if (preference === "flexible") return 1;
-    return 2;
-  }, [inferDaylightPreference]);
-
   const daylightEndCapMinutes = useCallback((activity: SuggestedActivity, dayCutoffMinutes: number): number | null => {
     const preference = inferDaylightPreference(activity);
     if (preference !== "daylight_only") return null;
@@ -176,35 +169,8 @@ export function DayGroupingView({
   }, []);
 
   const sortActivitiesForTimeline = useCallback((activities: SuggestedActivity[]) => {
-    const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
-      morning: 0,
-      afternoon: 1,
-      evening: 2,
-      any: 3,
-    };
-    const fixedRank = (activity: SuggestedActivity): number => (activity.isFixedStartTime ? 0 : 1);
-    const fixedMinutes = (activity: SuggestedActivity): number | null => parseFixedStartTimeMinutes(activity.fixedStartTime);
-
-    return [...activities].sort((a, b) => {
-      const fixedRankDelta = fixedRank(a) - fixedRank(b);
-      if (fixedRankDelta !== 0) return fixedRankDelta;
-
-      if (a.isFixedStartTime && b.isFixedStartTime) {
-        const aMinutes = fixedMinutes(a);
-        const bMinutes = fixedMinutes(b);
-        if (aMinutes != null && bMinutes != null && aMinutes !== bMinutes) {
-          return aMinutes - bMinutes;
-        }
-        if (aMinutes != null && bMinutes == null) return -1;
-        if (aMinutes == null && bMinutes != null) return 1;
-      }
-
-      const timingPriorityDelta = timingPriorityRank(a) - timingPriorityRank(b);
-      if (timingPriorityDelta !== 0) return timingPriorityDelta;
-
-      return score[a.bestTimeOfDay] - score[b.bestTimeOfDay];
-    });
-  }, [timingPriorityRank]);
+    return [...activities];
+  }, []);
 
   const getActivityStartPoint = useCallback((activity: SuggestedActivity) => {
     if (activity.locationMode === "route") {
@@ -423,6 +389,23 @@ export function DayGroupingView({
     setMovingActivity(null);
   };
 
+  const handleReorderWithinDay = (activityId: string, dayNumber: number, targetIndex: number) => {
+    onMoveActivity(activityId, dayNumber, dayNumber, targetIndex);
+    setMovingActivity(null);
+  };
+
+  const resolveActivityOrderContext = useCallback((activityId: string, fallbackDayNumber: number) => {
+    const day = displayGroupedDays.find((entry) => entry.dayNumber === fallbackDayNumber);
+    if (!day) return null;
+    const index = day.activities.findIndex((entry) => entry.id === activityId);
+    if (index < 0) return null;
+    return {
+      dayNumber: day.dayNumber,
+      index,
+      count: day.activities.length,
+    };
+  }, [displayGroupedDays]);
+
   const handleMoveCancel = () => {
     setMovingActivity(null);
   };
@@ -451,6 +434,7 @@ export function DayGroupingView({
   }) => {
     const isMoving = movingActivity?.id === activity.id;
     const isCollapsed = collapsedActivityCards[activity.id] ?? true;
+    const orderContext = resolveActivityOrderContext(activity.id, sourceDayNumber ?? dayNumber);
     const debugAttributes = {
       id: activity.id,
       name: activity.name,
@@ -487,6 +471,34 @@ export function DayGroupingView({
     const moveControls = (
       <div className="pt-3 mt-3 border-t border-gray-50">
         {affordLabel ? <p className="mb-2 text-[11px] text-gray-500">{affordLabel}</p> : null}
+        <div className="mb-2 grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              orderContext
+                ? handleReorderWithinDay(activity.id, orderContext.dayNumber, orderContext.index - 1)
+                : null
+            }
+            disabled={!orderContext || orderContext.index === 0}
+            className="h-8 text-[10px]"
+          >
+            Move Up
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              orderContext
+                ? handleReorderWithinDay(activity.id, orderContext.dayNumber, orderContext.index + 1)
+                : null
+            }
+            disabled={!orderContext || orderContext.index >= orderContext.count - 1}
+            className="h-8 text-[10px]"
+          >
+            Move Down
+          </Button>
+        </div>
         {isMoving ? (
           <div className="flex items-center gap-2">
             <Select onValueChange={(val) => handleMoveConfirm(parseInt(val, 10))}>

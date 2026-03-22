@@ -50,7 +50,7 @@ export function DayItineraryView({
   onDayChange,
 }: DayItineraryViewProps & {
   onActivityHover?: (id: string | null) => void;
-  onMoveActivity?: (activityId: string, fromDay: number, toDay: number) => void;
+  onMoveActivity?: (activityId: string, fromDay: number, toDay: number, targetIndex?: number) => void;
   onDayChange?: (dayNumber: number) => void;
 }) {
   const [movingActivity, setMovingActivity] = useState<{ id: string; fromDay: number } | null>(null);
@@ -65,34 +65,6 @@ export function DayItineraryView({
     `${dayNumber}:${fromId}->${toId}`;
   const buildStayStartLegId = (dayNumber: number, toId: string) => `${dayNumber}:stay-start->${toId}`;
   const buildStayEndLegId = (dayNumber: number, fromId: string) => `${dayNumber}:${fromId}->stay-end`;
-
-  const sortActivitiesForTimeline = useCallback((activities: SuggestedActivity[]) => {
-    const score: Record<SuggestedActivity["bestTimeOfDay"], number> = {
-      morning: 0,
-      afternoon: 1,
-      evening: 2,
-      any: 3,
-    };
-    const fixedRank = (activity: SuggestedActivity): number => (activity.isFixedStartTime ? 0 : 1);
-    const fixedMinutes = (activity: SuggestedActivity): number | null => parseFixedStartTimeMinutes(activity.fixedStartTime);
-
-    return [...activities].sort((a, b) => {
-      const fixedRankDelta = fixedRank(a) - fixedRank(b);
-      if (fixedRankDelta !== 0) return fixedRankDelta;
-
-      if (a.isFixedStartTime && b.isFixedStartTime) {
-        const aMinutes = fixedMinutes(a);
-        const bMinutes = fixedMinutes(b);
-        if (aMinutes != null && bMinutes != null && aMinutes !== bMinutes) {
-          return aMinutes - bMinutes;
-        }
-        if (aMinutes != null && bMinutes == null) return -1;
-        if (aMinutes == null && bMinutes != null) return 1;
-      }
-
-      return score[a.bestTimeOfDay] - score[b.bestTimeOfDay];
-    });
-  }, []);
 
   const getActivityStartPoint = useCallback((activity: SuggestedActivity) => {
     if (activity.locationMode === "route") {
@@ -125,9 +97,9 @@ export function DayItineraryView({
       travelMode: "DRIVE" | "WALK" | "TRANSIT";
     }> = [];
     groupedDays.forEach((day, dayIndex) => {
-      const sorted = sortActivitiesForTimeline(day.activities);
-      const first = sorted[0];
-      const last = sorted[sorted.length - 1];
+      const ordered = day.activities;
+      const first = ordered[0];
+      const last = ordered[ordered.length - 1];
       const startStayCoordinates = groupedDays[dayIndex - 1]?.nightStay?.coordinates ?? day.nightStay?.coordinates;
       const endStayCoordinates = day.nightStay?.coordinates;
 
@@ -145,8 +117,8 @@ export function DayItineraryView({
         }
       }
 
-      sorted.forEach((activity, index) => {
-        const next = sorted[index + 1];
+      ordered.forEach((activity, index) => {
+        const next = ordered[index + 1];
         if (!next) return;
         const fromPoint = getActivityEndPoint(activity);
         const toPoint = getActivityStartPoint(next);
@@ -176,7 +148,7 @@ export function DayItineraryView({
       }
     });
     return legs;
-  }, [groupedDays, sortActivitiesForTimeline, isRailFriendlyDestination, getActivityEndPoint, getActivityStartPoint]);
+  }, [groupedDays, isRailFriendlyDestination, getActivityEndPoint, getActivityStartPoint]);
 
   const commuteLegById = useMemo(() => {
     const next: Record<string, { mode: CommuteMode; origin: { lat: number; lng: number }; destination: { lat: number; lng: number } }> =
@@ -278,6 +250,12 @@ export function DayItineraryView({
     setMovingActivity(null);
   };
 
+  const handleReorderWithinDay = (activityId: string, dayNumber: number, targetIndex: number) => {
+    if (!onMoveActivity) return;
+    onMoveActivity(activityId, dayNumber, dayNumber, targetIndex);
+    setMovingActivity(null);
+  };
+
   const handleMoveCancel = () => {
     setMovingActivity(null);
   };
@@ -331,8 +309,29 @@ export function DayItineraryView({
   }) => {
     const isMoving = movingActivity?.id === activity.id;
     const isCollapsed = collapsedActivityCards[activity.id] || false;
+    const dayActivitiesCount = groupedDays.find((day) => day.dayNumber === dayNumber)?.activities.length ?? 0;
     const moveControls = (
       <div className="pt-3 mt-3 border-t border-gray-50" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-2 grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleReorderWithinDay(activity.id, dayNumber, index - 1)}
+            disabled={index === 0 || !onMoveActivity}
+            className="h-8 text-[10px]"
+          >
+            Move Up
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleReorderWithinDay(activity.id, dayNumber, index + 1)}
+            disabled={index >= dayActivitiesCount - 1 || !onMoveActivity}
+            className="h-8 text-[10px]"
+          >
+            Move Down
+          </Button>
+        </div>
         {isMoving ? (
           <div className="flex items-center gap-2">
             <Select onValueChange={(val) => handleMoveConfirm(parseInt(val, 10))}>
@@ -717,7 +716,7 @@ export function DayItineraryView({
     const availableVisitHours = startContext.availableVisitHours;
     const isFinalDepartureDay = isDepartureDay(day, dayIndex);
     const lunchHours = 1;
-    const sortedActivities = sortActivitiesForTimeline(day.activities);
+    const sortedActivities = day.activities;
     const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
       const next = sortedActivities[index + 1];
       if (!next) return sum;

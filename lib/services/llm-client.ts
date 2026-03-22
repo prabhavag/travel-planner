@@ -520,14 +520,15 @@ export const PLANNING_AND_REVIEW_TOOLS: Array<Record<string, unknown>> = [
   {
     type: "function",
     name: "adjust_day_groups",
-    description: "Move an activity from one day to another.",
+    description: "Move an activity between days or reorder it within the same day.",
     strict: false,
     parameters: {
       type: "object",
       properties: {
         activityId: { type: "string" },
         fromDay: { type: "integer" },
-        toDay: { type: "integer" }
+        toDay: { type: "integer" },
+        targetIndex: { type: "integer", minimum: 0 }
       },
       required: ["activityId", "fromDay", "toDay"],
     }

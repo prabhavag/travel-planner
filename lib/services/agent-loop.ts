@@ -77,6 +77,7 @@ const adjustDayGroupsInputSchema = z.object({
   activityId: z.string(),
   fromDay: z.number().int().positive(),
   toDay: z.number().int().positive(),
+  targetIndex: z.number().int().nonnegative().optional(),
 });
 
 const setMealPreferencesInputSchema = z.object({
@@ -452,7 +453,11 @@ async function executeAction({
     }
 
     sourceDay.activityIds.splice(activityIndex, 1);
-    targetDay.activityIds.push(parsed.activityId);
+    const insertionIndex =
+      typeof parsed.targetIndex === "number"
+        ? Math.min(Math.max(0, parsed.targetIndex), targetDay.activityIds.length)
+        : targetDay.activityIds.length;
+    targetDay.activityIds.splice(insertionIndex, 0, parsed.activityId);
 
     const selectedActivities = session.suggestedActivities.filter((activity) =>
       working.selectedActivityIds.includes(activity.id),
@@ -487,6 +492,9 @@ async function executeAction({
 
     working.dayGroups = nightStayResult.dayGroups;
     working.groupedDays = nightStayResult.groupedDays;
+    if (parsed.fromDay === parsed.toDay) {
+      return "Reordered activity within the day.";
+    }
     return `Moved activity to Day ${parsed.toDay}.`;
   }
 

@@ -224,6 +224,9 @@ export function ResearchOptionCard({
           </div>
         )}
       </CardHeader>
+      {collapsed ? (
+        extraContent ? <CardContent className="pt-0">{extraContent}</CardContent> : null
+      ) : null}
       {!collapsed ? (
         <CardContent className="space-y-3">
           <div>

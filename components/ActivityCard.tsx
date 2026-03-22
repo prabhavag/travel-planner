@@ -175,6 +175,9 @@ export function ActivityCard({
           })}
         </div>
       </CardHeader>
+      {collapsed ? (
+        extraContent ? <CardContent className="pt-0">{extraContent}</CardContent> : null
+      ) : null}
       {!collapsed && (
       <CardContent className="pt-0">
         <p className="text-sm text-gray-600 line-clamp-3 mb-3">{activity.description}</p>

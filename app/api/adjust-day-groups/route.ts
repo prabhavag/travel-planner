@@ -36,7 +36,7 @@ function buildGroupedDays(
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId, activityId, fromDay, toDay } = await request.json();
+    const { sessionId, activityId, fromDay, toDay, targetIndex } = await request.json();
 
     if (!sessionId) {
       return NextResponse.json(
@@ -48,6 +48,12 @@ export async function POST(request: NextRequest) {
     if (!activityId || typeof fromDay !== "number" || typeof toDay !== "number") {
       return NextResponse.json(
         { success: false, message: "Missing activityId, fromDay, or toDay" },
+        { status: 400 }
+      );
+    }
+    if (targetIndex != null && (!Number.isInteger(targetIndex) || targetIndex < 0)) {
+      return NextResponse.json(
+        { success: false, message: "targetIndex must be a non-negative integer" },
         { status: 400 }
       );
     }
@@ -106,9 +112,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Move activity from source to target
+    // Move activity from source to target while preserving explicit ordering when provided.
     sourceDay.activityIds.splice(activityIndex, 1);
-    targetDay.activityIds.push(activityId);
+    const insertionIndex =
+      typeof targetIndex === "number"
+        ? Math.min(Math.max(0, targetIndex), targetDay.activityIds.length)
+        : targetDay.activityIds.length;
+    targetDay.activityIds.splice(insertionIndex, 0, activityId);
 
     // Regenerate source and target day themes after the move.
     const selectedActivities = session.suggestedActivities.filter((a) =>
@@ -171,7 +181,7 @@ export async function POST(request: NextRequest) {
       success: true,
       sessionId,
       workflowState: WORKFLOW_STATES.GROUP_DAYS,
-      message: `Moved activity to Day ${toDay}`,
+      message: fromDay === toDay ? "Reordered activity within the day" : `Moved activity to Day ${toDay}`,
       dayGroups: finalizedDayGroups,
       groupedDays,
     });
