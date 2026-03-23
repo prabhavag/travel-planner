@@ -44,6 +44,7 @@ import {
   toClockLabel,
   toRangeLabel,
   parseFixedStartTimeMinutes,
+  hasHardFixedStart,
   recommendedWindowMidpointMinutes,
   activityLoadFactor,
   formatRecommendedStartWindowLabel,
@@ -300,7 +301,7 @@ export function DayGroupingView({
             : 1;
 
         const earliestFixedStartMinutes = currentActivities
-          .filter((activity) => activity.isFixedStartTime)
+          .filter((activity) => hasHardFixedStart(activity))
           .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
           .filter((minutes): minutes is number => minutes != null)
           .sort((a, b) => a - b)[0];
@@ -369,7 +370,7 @@ export function DayGroupingView({
             : roundToQuarter(allocatedHours * 60);
           const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
           const fixedAlignedStartMinutes =
-            activity.isFixedStartTime && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
+            hasHardFixedStart(activity) && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
           const nightStartFloorMinutes = nightOnlyStartFloorMinutes(activity, sunsetMinutes);
           const roundedCursorMinutes = roundToQuarter(cursorMinutes);
           if (fixedAlignedStartMinutes != null && roundedCursorMinutes > fixedAlignedStartMinutes) {
@@ -527,11 +528,15 @@ export function DayGroupingView({
   const unscheduledActivityIds = useMemo(() => new Set(unscheduledActivities.map((activity) => activity.id)), [unscheduledActivities]);
 
   const displayGroupedDays = useMemo(() => {
-    return groupedDays.map((day) => ({
-      ...day,
-      activities: day.activities.filter((activity) => !unscheduledActivityIds.has(activity.id)),
-    }));
-  }, [groupedDays, unscheduledActivityIds]);
+    return groupedDays.map((day) => {
+      const recomputed = regroupedActivitiesByDay[day.dayNumber];
+      const scheduledActivities = recomputed?.scheduledActivities ?? day.activities;
+      return {
+        ...day,
+        activities: scheduledActivities.filter((activity) => !manuallyUnscheduledActivityIdMap[activity.id]),
+      };
+    });
+  }, [groupedDays, regroupedActivitiesByDay, manuallyUnscheduledActivityIdMap]);
 
   const recomputedDebugCostByDay = useMemo(() => {
     if (!debugMode) return null;

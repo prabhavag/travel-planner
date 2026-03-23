@@ -23,6 +23,7 @@ import {
   estimateRouteIntrinsicMinutes,
   activityLoadFactor,
   parseFixedStartTimeMinutes,
+  hasHardFixedStart,
   recommendedWindowMidpointMinutes,
   nightOnlyStartFloorMinutes,
   getActivityTimingPolicy,
@@ -128,9 +129,9 @@ export function DayTimelineRows({
   const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = DEPARTURE_TRANSFER_MINUTES;
   const availableVisitHours = startContext.availableVisitHours;
   const lunchHours = 1;
-  // Render from the day payload passed by DayGroupingView (already excludes unscheduled ids).
-  // This keeps timeline rows in sync with manual unschedule actions.
-  const sortedActivities = day.activities;
+  // Render from the recomputed scheduled set so each drag/move/add/remove starts from
+  // a fresh day plan rather than incremental timeline artifacts.
+  const sortedActivities = forceScheduleDay ? day.activities : regroupedActivities.scheduledActivities;
 
   const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
     const next = sortedActivities[index + 1];
@@ -180,7 +181,7 @@ export function DayTimelineRows({
   }, 0);
   const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
   const earliestFixedStartMinutes = sortedActivities
-    .filter((activity) => activity.isFixedStartTime)
+    .filter((activity) => hasHardFixedStart(activity))
     .map((activity) => parseFixedStartTimeMinutes(activity.fixedStartTime))
     .filter((minutes): minutes is number => minutes != null)
     .sort((a, b) => a - b)[0];
@@ -201,6 +202,32 @@ export function DayTimelineRows({
   let scheduledActivityMinutes = 0;
   let effectiveActivityMinutesForOverload = 0;
   let scheduledCommuteMinutes = 0;
+  const formatMinutesLabel = (minutes: number): string => {
+    const rounded = Math.max(0, Math.round(minutes));
+    if (rounded % 60 === 0) return `${rounded / 60} hr`;
+    if (rounded > 60) return `${Math.floor(rounded / 60)} hr ${rounded % 60} min`;
+    return `${rounded} min`;
+  };
+  const buildCommuteDetail = ({
+    mode,
+    travelMinutes,
+    slotMinutes,
+    estimated = false,
+    note,
+  }: {
+    mode: CommuteMode;
+    travelMinutes: number;
+    slotMinutes: number;
+    estimated?: boolean;
+    note?: string;
+  }): string => {
+    const estimateSuffix = estimated ? " (estimated)" : "";
+    const bufferMinutes = Math.max(0, slotMinutes - travelMinutes);
+    const base = `${commuteModeLabel(mode)} · Travel ~${Math.max(0, Math.round(travelMinutes))} min${estimateSuffix} · Scheduled ${formatMinutesLabel(slotMinutes)}`;
+    return bufferMinutes > 0
+      ? `${base} (${formatMinutesLabel(bufferMinutes)} buffer)${note ? ` · ${note}` : ""}`
+      : `${base}${note ? ` · ${note}` : ""}`;
+  };
   const trackActivityMinutes = (startMinutes: number, endMinutes: number) => {
     const rawMinutes = Math.max(0, endMinutes - startMinutes);
     const inWindowStart = Math.max(startMinutes, REGULAR_DAY_START_MINUTES);
@@ -287,12 +314,18 @@ export function DayTimelineRows({
     if (dayIndex === 0) {
       const airportTransferStart = roundToQuarter(cursorMinutes);
       const airportTransferEnd = airportTransferStart + roundToQuarter(arrivalTransferMinutes + commuteTransitionBufferMinutes);
+      const airportTransferSlotMinutes = Math.max(0, airportTransferEnd - airportTransferStart);
       scheduledCommuteMinutes += Math.max(0, airportTransferEnd - airportTransferStart);
       timelineItems.push({
         type: "commute",
         id: `commute-airport-stay-${day.dayNumber}`,
         title: "Airport transfer",
-        detail: `Drive · Approx ${arrivalTransferMinutes} min (estimated)`,
+        detail: buildCommuteDetail({
+          mode: "DRIVE",
+          travelMinutes: arrivalTransferMinutes,
+          slotMinutes: airportTransferSlotMinutes,
+          estimated: true,
+        }),
         timeRange: toRangeLabel(airportTransferStart, airportTransferEnd),
       });
       cursorMinutes = airportTransferEnd;
@@ -313,7 +346,7 @@ export function DayTimelineRows({
           type: "lunch",
           id: `lunch-${day.dayNumber}`,
           title: "Lunch break",
-          detail: "About 1 hr",
+          detail: `About ${formatMinutesLabel(lunchBlockMinutes)}`,
           timeRange: toRangeLabel(lunchStart, lunchEnd),
         });
         cursorMinutes = lunchEnd;
@@ -321,12 +354,17 @@ export function DayTimelineRows({
       const bufferedCommuteMinutes = roundToQuarter(stayStartCommuteMinutes + commuteTransitionBufferMinutes);
       const commuteStart = roundToQuarter(cursorMinutes);
       const commuteEnd = commuteStart + bufferedCommuteMinutes;
+      const stayStartSlotMinutes = Math.max(0, commuteEnd - commuteStart);
       scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
       timelineItems.push({
         type: "commute",
         id: `commute-stay-start-${day.dayNumber}`,
         title: "Commute",
-        detail: `${commuteModeLabel(stayStartCommuteMode)} · Approx ${stayStartCommuteMinutes} min`,
+        detail: buildCommuteDetail({
+          mode: stayStartCommuteMode,
+          travelMinutes: stayStartCommuteMinutes,
+          slotMinutes: stayStartSlotMinutes,
+        }),
         timeRange: toRangeLabel(commuteStart, commuteEnd),
       });
       cursorMinutes = commuteEnd;
@@ -360,7 +398,7 @@ export function DayTimelineRows({
       : roundToQuarter(allocatedHours * 60);
     const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
     const fixedAlignedStartMinutes =
-      activity.isFixedStartTime && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
+      hasHardFixedStart(activity) && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
     const arrivalConflictWarning =
       dayIndex === 0 && fixedStartMinutes != null && fixedStartMinutes < startContext.dayStartMinutes
         ? `Arrival conflict: fixed start ${toClockLabel(fixedStartMinutes)} is before feasible start ${toClockLabel(startContext.dayStartMinutes)}.`
@@ -449,7 +487,7 @@ export function DayTimelineRows({
         type: "lunch",
         id: `lunch-${day.dayNumber}`,
         title: "Lunch break",
-        detail: "About 1 hr",
+        detail: `About ${formatMinutesLabel(lunchMinutes)}`,
         timeRange: toRangeLabel(lunchStart, lunchEnd),
       });
       timelineItems.push({
@@ -475,7 +513,7 @@ export function DayTimelineRows({
           type: "lunch",
           id: `lunch-${day.dayNumber}`,
           title: "Lunch break",
-          detail: "About 1 hr",
+          detail: `About ${formatMinutesLabel(lunchMinutes)}`,
           timeRange: toRangeLabel(lunchStart, lunchEnd),
         });
         cursorMinutes = lunchEnd;
@@ -522,15 +560,22 @@ export function DayTimelineRows({
       const projectedArrivalAfterCommute = roundToQuarter(cursorMinutes) + bufferedCommuteMinutes;
       const commuteStart = roundToQuarter(cursorMinutes);
       const commuteEnd = commuteStart + bufferedCommuteMinutes;
+      const interActivitySlotMinutes = Math.max(0, commuteEnd - commuteStart);
       scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
+      const cutoffNote =
+        nextDaylightCapMinutes != null && projectedArrivalAfterCommute >= nextDaylightCapMinutes
+          ? "Arrives near/after daylight cutoff"
+          : undefined;
       timelineItems.push({
         type: "commute",
         id: `commute-${activity.id}-${next.id}`,
         title: "Commute",
-        detail:
-          nextDaylightCapMinutes != null && projectedArrivalAfterCommute >= nextDaylightCapMinutes
-            ? `${commuteModeLabel(commuteMode)} · Approx ${commuteMinutes} min · Arrives near/after daylight cutoff`
-            : `${commuteModeLabel(commuteMode)} · Approx ${commuteMinutes} min`,
+        detail: buildCommuteDetail({
+          mode: commuteMode,
+          travelMinutes: commuteMinutes,
+          slotMinutes: interActivitySlotMinutes,
+          note: cutoffNote,
+        }),
         timeRange: toRangeLabel(commuteStart, commuteEnd),
       });
       cursorMinutes = commuteEnd;
@@ -558,7 +603,7 @@ export function DayTimelineRows({
       type: "lunch",
       id: `lunch-${day.dayNumber}`,
       title: "Lunch break",
-      detail: "About 1 hr",
+      detail: `About ${formatMinutesLabel(lunchMinutes)}`,
       timeRange: toRangeLabel(lunchStart, lunchEnd),
     });
     cursorMinutes = lunchEnd;
@@ -600,14 +645,18 @@ export function DayTimelineRows({
       const bufferedCommuteMinutes = roundToQuarter(endOfDayCommuteMinutes + commuteTransitionBufferMinutes);
       const commuteStart = roundToQuarter(cursorMinutes);
       const commuteEnd = commuteStart + bufferedCommuteMinutes;
+      const endOfDaySlotMinutes = Math.max(0, commuteEnd - commuteStart);
       scheduledCommuteMinutes += Math.max(0, commuteEnd - commuteStart);
       timelineItems.push({
         type: "commute",
         id: `commute-stay-end-${day.dayNumber}`,
         title: isFinalDepartureDay ? "Airport transfer" : "Commute",
-        detail: isFinalDepartureDay
-          ? `${commuteModeLabel(endOfDayCommuteMode)} · Approx ${endOfDayCommuteMinutes} min (estimated)`
-          : `${commuteModeLabel(endOfDayCommuteMode)} · Approx ${endOfDayCommuteMinutes} min`,
+        detail: buildCommuteDetail({
+          mode: endOfDayCommuteMode,
+          travelMinutes: endOfDayCommuteMinutes,
+          slotMinutes: endOfDaySlotMinutes,
+          estimated: isFinalDepartureDay,
+        }),
         timeRange: toRangeLabel(commuteStart, commuteEnd),
       });
       cursorMinutes = commuteEnd;
