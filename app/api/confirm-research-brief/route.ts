@@ -24,7 +24,7 @@ function inferFixedStartFromText(option: ResearchOption): string | null {
 function fallbackFixedStartFromBestTime(bestTimeOfDay: ResearchOption["bestTimeOfDay"]): string {
   if (bestTimeOfDay === "morning") return "09:00";
   if (bestTimeOfDay === "afternoon") return "13:00";
-  if (bestTimeOfDay === "evening") return "18:00";
+  if (bestTimeOfDay === "evening") return "17:00";
   return "09:00";
 }
 
