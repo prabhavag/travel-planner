@@ -12,6 +12,14 @@ import type { SuggestedActivity } from "@/lib/api-client";
 /** Default day window used for "effective overload" calculations. */
 export const REGULAR_DAY_START_MINUTES = 9 * 60 + 30; // 9:30 AM
 export const REGULAR_DAY_END_MINUTES = REGULAR_DAY_START_MINUTES + 8 * 60; // 5:30 PM
+export const DEFAULT_SUNSET_MINUTES = 18 * 60;          // 6:00 PM
+export const AIRPORT_ARRIVAL_LEAD_MINUTES = 120;        // 2 hr before departure
+export const COMMUTE_TRANSITION_BUFFER_MINUTES = 20;    // buffer after each commute leg
+export const DEPARTURE_TRANSFER_MINUTES = 90;           // airport shuttle/rental return estimate
+export const LUNCH_MIN_START_MINUTES = 12 * 60;         // earliest lunch (noon)
+export const LUNCH_TARGET_START_MINUTES = 12 * 60 + 30; // preferred lunch start
+export const LUNCH_BLOCK_MINUTES = 75;                  // 1 hr 15 min (rounded to quarter)
+export const PRE_DAY_BUFFER_MINUTES = 15;               // buffer before first activity
 
 /**
  * Weight applied to off-peak activity minutes when computing overload.
@@ -321,3 +329,60 @@ export function formatRecommendedStartWindowLabel(activity: SuggestedActivity): 
     if (start == null || end == null) return null;
     return `${toClockLabel(start)}-${toClockLabel(end)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Additional Helpers (Extracted from DayGroupingView)
+// ---------------------------------------------------------------------------
+
+export const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
+    `${dayNumber}:${fromId}->${toId}`;
+export const buildStayStartLegId = (dayNumber: number, toId: string) => `${dayNumber}:stay-start->${toId}`;
+export const buildStayEndLegId = (dayNumber: number, fromId: string) => `${dayNumber}:${fromId}->stay-end`;
+
+export const inferDaylightPreference = (activity: SuggestedActivity): "daylight_only" | "night_only" | "flexible" => {
+    if (activity.daylightPreference) return activity.daylightPreference as "daylight_only" | "night_only" | "flexible";
+    const tags = (activity.interestTags || []).join(" ");
+    const category = activity.researchOption?.category || "";
+    const text = `${activity.name} ${activity.type} ${tags} ${category}`.toLowerCase();
+    if (/(night snorkel|night snorkeling|night dive|moonlight|stargaz|astronomy|night tour|after dark|biolumines|sunset cruise)/i.test(text)) {
+        return "night_only";
+    }
+    if (/(snorkel|snorkeling|scuba|dive|surf|kayak|paddle|canoe|boat tour|hike|trail|outdoor|national park|waterfall|beach)/i.test(text)) {
+        return "daylight_only";
+    }
+    return "flexible";
+};
+
+export const getActivityTimingPolicy = (activity: SuggestedActivity): { settleBufferMinutes: number } => {
+    const tags = (activity.interestTags || []).join(" ");
+    const category = activity.researchOption?.category || "";
+    const text = `${activity.name} ${activity.type} ${tags} ${category}`.toLowerCase();
+    const settleBufferMinutes = /(snorkel|snorkeling|scuba|dive|surf|kayak|paddle|canoe|hike|hiking|trail)/i.test(text) ? 15 : 10;
+    return { settleBufferMinutes };
+};
+
+export const daylightEndCapMinutes = (activity: SuggestedActivity, dayCutoffMinutes: number, sunsetMinutes: number): number | null => {
+    const preference = inferDaylightPreference(activity);
+    if (preference !== "daylight_only") return null;
+    return Math.min(dayCutoffMinutes, sunsetMinutes);
+};
+
+export const nightOnlyStartFloorMinutes = (activity: SuggestedActivity, sunsetMinutes: number): number | null => {
+    return inferDaylightPreference(activity) === "night_only" ? sunsetMinutes : null;
+};
+
+export const getActivityStartPoint = (activity: SuggestedActivity) => {
+    if (activity.locationMode === "route") return activity.startCoordinates || activity.coordinates || activity.endCoordinates || null;
+    return activity.coordinates || activity.startCoordinates || activity.endCoordinates || null;
+};
+
+export const getActivityEndPoint = (activity: SuggestedActivity) => {
+    if (activity.locationMode === "route") return activity.endCoordinates || activity.coordinates || activity.startCoordinates || null;
+    return activity.coordinates || activity.endCoordinates || activity.startCoordinates || null;
+};
+
+export const checkRailFriendlyDestination = (destination?: string | null) => {
+    const normalized = destination?.toLowerCase().trim();
+    if (!normalized) return false;
+    return /(switzerland|swiss|europe|europa|austria|germany|france|italy|spain|netherlands|belgium|portugal|czech|hungary|poland|denmark|norway|sweden|finland)/.test(normalized);
+};
