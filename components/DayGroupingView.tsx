@@ -41,7 +41,7 @@ import {
   formatRecommendedStartWindowLabel,
   checkRailFriendlyDestination,
   getActivityStartPoint,
-  getActivityEndPoint,
+  getActivityExitPointToward,
   buildStayStartLegId,
   buildStayEndLegId,
   buildLegId,
@@ -259,7 +259,7 @@ export function DayGroupingView({
             ? DEPARTURE_TRANSFER_MINUTES_ESTIMATE
             : endStayLabel && lastActivity && endStayCoordinates
               ? (commuteByLeg[buildStayEndLegId(day.dayNumber, lastActivity.id)]?.minutes ??
-                estimateCommuteMinutes(getActivityEndPoint(lastActivity), endStayCoordinates))
+                estimateCommuteMinutes(getActivityExitPointToward(lastActivity, endStayCoordinates), endStayCoordinates))
               : 0;
         const bufferedEndOfDayCommuteMinutes =
           endOfDayCommuteMinutes > 0 ? roundToQuarter(endOfDayCommuteMinutes + commuteTransitionBufferMinutes) : 0;
@@ -271,7 +271,10 @@ export function DayGroupingView({
           const next = currentActivities[index + 1];
           if (!next) return sum;
           const legId = buildLegId(day.dayNumber, activity.id, next.id);
-          const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
+          const fallbackMinutes = estimateCommuteMinutes(
+            getActivityExitPointToward(activity, getActivityStartPoint(next)),
+            getActivityStartPoint(next)
+          );
           const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
           return sum + commuteMinutes;
         }, 0);
@@ -432,7 +435,10 @@ export function DayGroupingView({
           const next = currentActivities[index + 1];
           if (next) {
             const legId = buildLegId(day.dayNumber, activity.id, next.id);
-            const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
+            const fallbackMinutes = estimateCommuteMinutes(
+              getActivityExitPointToward(activity, getActivityStartPoint(next)),
+              getActivityStartPoint(next)
+            );
             const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
             const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + commuteTransitionBufferMinutes);
             cursorMinutes = roundToQuarter(cursorMinutes) + bufferedCommuteMinutes;
@@ -464,7 +470,7 @@ export function DayGroupingView({
       tripInfo?.departureTimePreference,
       commuteByLeg,
       getActivityStartPoint,
-      getActivityEndPoint,
+      getActivityExitPointToward,
       getActivityTimingPolicy,
       nightOnlyStartFloorMinutes,
       daylightEndCapMinutes,
@@ -574,7 +580,7 @@ export function DayGroupingView({
       sorted.forEach((activity, index) => {
         const next = sorted[index + 1];
         if (!next) return;
-        const fromPoint = getActivityEndPoint(activity);
+        const fromPoint = getActivityExitPointToward(activity, getActivityStartPoint(next));
         const toPoint = getActivityStartPoint(next);
         if (!fromPoint || !toPoint) return;
         const mode = pickCommuteMode(fromPoint, toPoint, isRailFriendlyDestination);
@@ -588,7 +594,7 @@ export function DayGroupingView({
       });
 
       if (last && endStayCoordinates) {
-        const lastPoint = getActivityEndPoint(last);
+        const lastPoint = getActivityExitPointToward(last, endStayCoordinates);
         if (lastPoint) {
           const mode = pickCommuteMode(lastPoint, endStayCoordinates, isRailFriendlyDestination);
           legs.push({
@@ -602,7 +608,7 @@ export function DayGroupingView({
       }
     });
     return legs;
-  }, [displayGroupedDays, isRailFriendlyDestination, getActivityEndPoint, getActivityStartPoint, getStartStayCoordinates]);
+  }, [displayGroupedDays, isRailFriendlyDestination, getActivityStartPoint, getStartStayCoordinates]);
 
 
 

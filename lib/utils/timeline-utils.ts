@@ -382,6 +382,53 @@ export const getActivityEndPoint = (activity: SuggestedActivity) => {
     return activity.coordinates || activity.endCoordinates || activity.startCoordinates || null;
 };
 
+function listActivityExitCandidates(activity: SuggestedActivity): Array<{ lat: number; lng: number }> {
+    if (activity.locationMode !== "route") {
+        const point = getActivityEndPoint(activity);
+        return point ? [point] : [];
+    }
+
+    const points: Array<{ lat: number; lng: number }> = [];
+    const seen = new Set<string>();
+    const addPoint = (point: { lat: number; lng: number } | null | undefined) => {
+        if (!point) return;
+        const key = `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        points.push(point);
+    };
+
+    for (const point of activity.routePoints || []) addPoint(point);
+    for (const waypoint of activity.routeWaypoints || []) addPoint(waypoint.coordinates);
+    addPoint(activity.endCoordinates);
+    addPoint(activity.startCoordinates);
+    addPoint(activity.coordinates);
+
+    return points;
+}
+
+export const getActivityExitPointToward = (
+    activity: SuggestedActivity,
+    destination: { lat: number; lng: number } | null | undefined
+) => {
+    const fallback = getActivityEndPoint(activity);
+    if (!destination) return fallback;
+
+    const candidates = listActivityExitCandidates(activity);
+    if (candidates.length === 0) return fallback;
+
+    let best = candidates[0];
+    let bestMinutes = Number.POSITIVE_INFINITY;
+    for (const candidate of candidates) {
+        const minutes = estimateDriveMinutesNoFloor(candidate, destination);
+        if (minutes < bestMinutes) {
+            bestMinutes = minutes;
+            best = candidate;
+        }
+    }
+    return best;
+};
+
 export const checkRailFriendlyDestination = (destination?: string | null) => {
     const normalized = destination?.toLowerCase().trim();
     if (!normalized) return false;

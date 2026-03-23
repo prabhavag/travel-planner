@@ -98,6 +98,23 @@ function isReversibleRoadActivity(activity: SuggestedActivity): boolean {
     return type === "road" || type.includes("road");
 }
 
+function listRouteCoverageExitPoints(activity: SuggestedActivity): Coordinate[] {
+    const points: Coordinate[] = [];
+    const seen = new Set<string>();
+
+    for (const point of activity.routePoints ?? []) {
+        pushUniquePoint(points, seen, point);
+    }
+    for (const waypoint of activity.routeWaypoints ?? []) {
+        pushUniquePoint(points, seen, waypoint.coordinates);
+    }
+    pushUniquePoint(points, seen, activity.endCoordinates || null);
+    pushUniquePoint(points, seen, activity.startCoordinates || null);
+    pushUniquePoint(points, seen, activity.coordinates || null);
+
+    return points;
+}
+
 function coordinateKey(point: Coordinate): string {
     return `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`;
 }
@@ -116,11 +133,15 @@ function getActivityRoutingVariants(activity: SuggestedActivity): {
 } {
     const entryPoint = getActivityRouteEntryPoint(activity);
     const exitPoint = getActivityRouteExitPoint(activity);
+    const routeCoverageExitPoints =
+        activity.locationMode === "route"
+            ? listRouteCoverageExitPoints(activity)
+            : (exitPoint ? [exitPoint] : []);
 
     if (!isReversibleRoadActivity(activity)) {
         return {
             entryPoints: entryPoint ? [entryPoint] : [],
-            exitPoints: exitPoint ? [exitPoint] : [],
+            exitPoints: routeCoverageExitPoints,
         };
     }
 
@@ -131,6 +152,9 @@ function getActivityRoutingVariants(activity: SuggestedActivity): {
 
     pushUniquePoint(entryPoints, seenEntry, entryPoint);
     pushUniquePoint(entryPoints, seenEntry, exitPoint);
+    for (const point of routeCoverageExitPoints) {
+        pushUniquePoint(exitPoints, seenExit, point);
+    }
     pushUniquePoint(exitPoints, seenExit, exitPoint);
     pushUniquePoint(exitPoints, seenExit, entryPoint);
 

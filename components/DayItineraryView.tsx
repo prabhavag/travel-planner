@@ -84,6 +84,43 @@ export function DayItineraryView({
     return activity.coordinates || activity.endCoordinates || activity.startCoordinates || null;
   }, []);
 
+  const getActivityExitPointToward = useCallback(
+    (activity: SuggestedActivity, destination: { lat: number; lng: number } | null | undefined) => {
+      const fallback = getActivityEndPoint(activity);
+      if (!destination || activity.locationMode !== "route") return fallback;
+
+      const points: Array<{ lat: number; lng: number }> = [];
+      const seen = new Set<string>();
+      const addPoint = (point: { lat: number; lng: number } | null | undefined) => {
+        if (!point) return;
+        const key = `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        points.push(point);
+      };
+
+      for (const point of activity.routePoints || []) addPoint(point);
+      for (const waypoint of activity.routeWaypoints || []) addPoint(waypoint.coordinates);
+      addPoint(activity.endCoordinates);
+      addPoint(activity.startCoordinates);
+      addPoint(activity.coordinates);
+
+      if (points.length === 0) return fallback;
+
+      let best = points[0];
+      let bestMinutes = Number.POSITIVE_INFINITY;
+      for (const point of points) {
+        const minutes = estimateDriveMinutesNoFloor(point, destination);
+        if (minutes < bestMinutes) {
+          bestMinutes = minutes;
+          best = point;
+        }
+      }
+      return best;
+    },
+    [getActivityEndPoint]
+  );
+
   const isRailFriendlyDestination = useMemo(() => {
     const destination = tripInfo?.destination?.toLowerCase().trim();
     if (!destination) return false;
@@ -124,7 +161,7 @@ export function DayItineraryView({
       ordered.forEach((activity, index) => {
         const next = ordered[index + 1];
         if (!next) return;
-        const fromPoint = getActivityEndPoint(activity);
+        const fromPoint = getActivityExitPointToward(activity, getActivityStartPoint(next));
         const toPoint = getActivityStartPoint(next);
         if (!fromPoint || !toPoint) return;
         const mode = pickCommuteMode(fromPoint, toPoint, isRailFriendlyDestination);
@@ -138,7 +175,7 @@ export function DayItineraryView({
       });
 
       if (last && endStayCoordinates) {
-        const lastPoint = getActivityEndPoint(last);
+        const lastPoint = getActivityExitPointToward(last, endStayCoordinates);
         if (lastPoint) {
           const mode = pickCommuteMode(lastPoint, endStayCoordinates, isRailFriendlyDestination);
           legs.push({
@@ -152,7 +189,7 @@ export function DayItineraryView({
       }
     });
     return legs;
-  }, [groupedDays, isRailFriendlyDestination, getActivityEndPoint, getActivityStartPoint]);
+  }, [groupedDays, isRailFriendlyDestination, getActivityExitPointToward, getActivityStartPoint]);
 
   const commuteLegById = useMemo(() => {
     const next: Record<string, { mode: CommuteMode; origin: { lat: number; lng: number }; destination: { lat: number; lng: number } }> =
@@ -660,6 +697,18 @@ export function DayItineraryView({
     return Math.max(10, minutes);
   }
 
+  function estimateDriveMinutesNoFloor(
+    from: { lat: number; lng: number } | null | undefined,
+    to: { lat: number; lng: number } | null | undefined,
+  ): number {
+    const distanceKm = haversineKm(from, to);
+    if (distanceKm == null) return 0;
+    const isLongDrive = distanceKm >= 20;
+    const speedKph = isLongDrive ? 28 : 32;
+    const terrainFactor = isLongDrive ? 1.2 : 1;
+    return Math.max(0, Math.round(((distanceKm / speedKph) * 60) * terrainFactor));
+  }
+
   function pickCommuteMode(
     from: { lat: number; lng: number } | null | undefined,
     to: { lat: number; lng: number } | null | undefined,
@@ -790,7 +839,10 @@ export function DayItineraryView({
       const next = sortedActivities[index + 1];
       if (!next) return sum;
       const legId = buildLegId(day.dayNumber, activity.id, next.id);
-      const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
+      const fallbackMinutes = estimateCommuteMinutes(
+        getActivityExitPointToward(activity, getActivityStartPoint(next)),
+        getActivityStartPoint(next)
+      );
       const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
       return sum + commuteMinutes;
     }, 0);
@@ -814,11 +866,11 @@ export function DayItineraryView({
     const stayEndCommuteMinutes =
       endStayLabel && lastActivity && endStayCoordinates
         ? (commuteByLeg[buildStayEndLegId(day.dayNumber, lastActivity.id)]?.minutes ??
-          estimateCommuteMinutes(getActivityEndPoint(lastActivity), endStayCoordinates))
+          estimateCommuteMinutes(getActivityExitPointToward(lastActivity, endStayCoordinates), endStayCoordinates))
         : 0;
     const stayEndCommuteMode: CommuteMode =
       endStayLabel && lastActivity && endStayCoordinates
-        ? pickCommuteMode(getActivityEndPoint(lastActivity), endStayCoordinates, isRailFriendlyDestination)
+        ? pickCommuteMode(getActivityExitPointToward(lastActivity, endStayCoordinates), endStayCoordinates, isRailFriendlyDestination)
         : isRailFriendlyDestination
           ? "TRAIN"
           : "DRIVE";
@@ -952,8 +1004,9 @@ export function DayItineraryView({
       const next = sortedActivities[index + 1];
       if (next) {
         const legId = buildLegId(day.dayNumber, activity.id, next.id);
-        const fallbackMode = pickCommuteMode(getActivityEndPoint(activity), getActivityStartPoint(next), isRailFriendlyDestination);
-        const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
+        const fallbackOrigin = getActivityExitPointToward(activity, getActivityStartPoint(next));
+        const fallbackMode = pickCommuteMode(fallbackOrigin, getActivityStartPoint(next), isRailFriendlyDestination);
+        const fallbackMinutes = estimateCommuteMinutes(fallbackOrigin, getActivityStartPoint(next));
         const commuteMode = commuteByLeg[legId]?.mode ?? fallbackMode;
         const commuteMin = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
         timelineRows.push({

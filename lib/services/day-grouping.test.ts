@@ -442,6 +442,33 @@ describe('day-grouping road route direction swaps', () => {
         const ordered = buildOptimalDayRoute(activities, preparedMap, new Map());
         expect(ordered[1]?.id).toBe('road');
     });
+
+    it('allows route activities to exit from covered interior waypoints', () => {
+        const road = {
+            ...mockActivity('road-mid-exit'),
+            type: 'road',
+            locationMode: 'route' as const,
+            startCoordinates: { lat: 0, lng: 0 },
+            endCoordinates: { lat: 0, lng: 10 },
+            routeWaypoints: [
+                { name: 'Scenic midpoint', coordinates: { lat: 0, lng: 5 } },
+            ],
+            routePoints: [
+                { lat: 0, lng: 0 },
+                { lat: 0, lng: 5 },
+                { lat: 0, lng: 10 },
+            ],
+            coordinates: null,
+        };
+        const point = {
+            ...mockActivity('point-near-mid'),
+            coordinates: { lat: 0, lng: 5.05 },
+            locationMode: 'point' as const,
+        };
+
+        const minutes = activityCommuteMinutes(road, point, new Map());
+        expect(minutes).toBeLessThan(30);
+    });
 });
 
 describe('day-grouping flight timing constraints', () => {

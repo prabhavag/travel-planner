@@ -12,7 +12,7 @@ import {
   toRangeLabel,
   buildLegId,
   pickCommuteMode,
-  getActivityEndPoint,
+  getActivityExitPointToward,
   getActivityStartPoint,
   estimateCommuteMinutes,
   daylightEndCapMinutes,
@@ -135,7 +135,7 @@ export function DayTimelineRows({
     if (!next) return sum;
     const legId = buildLegId(day.dayNumber, activity.id, next.id);
     const fallbackMinutes =
-      estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
+      estimateCommuteMinutes(getActivityExitPointToward(activity, getActivityStartPoint(next)), getActivityStartPoint(next));
     const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
     return sum + commuteMinutes;
   }, 0);
@@ -159,11 +159,11 @@ export function DayTimelineRows({
   const stayEndCommuteMinutes =
     endStayLabel && lastActivity && endStayCoordinates
       ? (commuteByLeg[buildStayEndLegId(day.dayNumber, lastActivity.id)]?.minutes ??
-        estimateCommuteMinutes(getActivityEndPoint(lastActivity), endStayCoordinates))
+        estimateCommuteMinutes(getActivityExitPointToward(lastActivity, endStayCoordinates), endStayCoordinates))
       : 0;
   const stayEndCommuteMode: CommuteMode =
     endStayLabel && lastActivity && endStayCoordinates
-      ? pickCommuteMode(getActivityEndPoint(lastActivity), endStayCoordinates, isRailFriendlyDestination)
+      ? pickCommuteMode(getActivityExitPointToward(lastActivity, endStayCoordinates), endStayCoordinates, isRailFriendlyDestination)
       : isRailFriendlyDestination
         ? "TRAIN"
         : "DRIVE";
@@ -510,8 +510,9 @@ export function DayTimelineRows({
     const next = sortedActivities[index + 1];
     if (next) {
       const legId = buildLegId(day.dayNumber, activity.id, next.id);
-      const fallbackMode = pickCommuteMode(getActivityEndPoint(activity), getActivityStartPoint(next), isRailFriendlyDestination);
-      const fallbackMinutes = estimateCommuteMinutes(getActivityEndPoint(activity), getActivityStartPoint(next));
+      const fallbackOrigin = getActivityExitPointToward(activity, getActivityStartPoint(next));
+      const fallbackMode = pickCommuteMode(fallbackOrigin, getActivityStartPoint(next), isRailFriendlyDestination);
+      const fallbackMinutes = estimateCommuteMinutes(fallbackOrigin, getActivityStartPoint(next));
       const commuteMode = commuteByLeg[legId]?.mode ?? fallbackMode;
       const commuteMinutes = commuteByLeg[legId]?.minutes ?? fallbackMinutes;
       const bufferedCommuteMinutes = roundToQuarter(commuteMinutes + commuteTransitionBufferMinutes);
