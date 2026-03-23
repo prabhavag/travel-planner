@@ -83,7 +83,7 @@ export function buildOptimalDayRoute(
                 }
 
                 const loadDuration = getLoadDurationHours(preparedMap, activity.id);
-                const midHour = currentHour + loadDuration / 2;
+                const midHour = SOFT_DAY_START_MINUTES / 60 + currentHour + loadDuration / 2;
                 const assignedSlot = slotForHour(midHour);
                 if (activity.bestTimeOfDay !== "any") {
                     cost += slotDistance(activity.bestTimeOfDay, assignedSlot) * loadDuration * COST_WEIGHTS.slotMismatch;
@@ -246,30 +246,43 @@ export function getDayStructuralStats(
             timelineCursorMinutes = activityEndMinutes;
         }
     }
-    let currentHour = 0;
-    for (const activity of activities) {
-        const prepared = preparedMap.get(activity.id);
+    let timingCursorMinutes = softDayStartMinutes;
+    for (let i = 0; i < activities.length; i += 1) {
+        const activity = activities[i];
         const duration = getLoadDurationHours(preparedMap, activity.id);
-        const midHour = currentHour + duration / 2;
-        const assignedSlot = slotForHour(midHour);
+        const durationMinutes = Math.round(duration * 60);
+        const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+        const effectiveStartMinutes =
+            fixedStartMinutes != null
+                ? Math.max(timingCursorMinutes, fixedStartMinutes)
+                : timingCursorMinutes;
+        const activityEndMinutes = effectiveStartMinutes + durationMinutes;
+        const activityMidpointHour = (effectiveStartMinutes + durationMinutes / 2) / 60;
+        const assignedSlot = slotForHour(activityMidpointHour);
+
         assignedSlotHours[assignedSlot] += duration;
         if (activity.bestTimeOfDay !== "any") {
             slotMismatchPenalty += slotDistance(activity.bestTimeOfDay, assignedSlot) * duration;
         }
-        const latestRecommendedStartMinutes = recommendedWindowLatestStartMinutes(activity);
-        const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
-        const effectiveStartMinutes =
-            fixedStartMinutes != null
-                ? fixedStartMinutes
-                : softDayStartMinutes + Math.round(currentHour * 60);
-        if (latestRecommendedStartMinutes != null && effectiveStartMinutes > latestRecommendedStartMinutes) {
-            recommendedStartMissPenalty += (effectiveStartMinutes - latestRecommendedStartMinutes) / 60;
+
+        const recommendedWindowStartMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.start || null);
+        const recommendedWindowEndMinutes = recommendedWindowLatestStartMinutes(activity);
+        if (recommendedWindowStartMinutes != null && effectiveStartMinutes < recommendedWindowStartMinutes) {
+            recommendedStartMissPenalty += (recommendedWindowStartMinutes - effectiveStartMinutes) / 60;
+        } else if (recommendedWindowEndMinutes != null && effectiveStartMinutes > recommendedWindowEndMinutes) {
+            recommendedStartMissPenalty += (effectiveStartMinutes - recommendedWindowEndMinutes) / 60;
         }
+
         if (activity.daylightPreference === "daylight_only") {
-            const activityEndMinutes = effectiveStartMinutes + Math.round(duration * 60);
             daylightViolationHours += Math.max(0, (activityEndMinutes - DEFAULT_DAYLIGHT_END_MINUTES) / 60);
         }
-        currentHour += duration;
+
+        if (i < activities.length - 1) {
+            const commuteMinutes = activityCommuteMinutes(activity, activities[i + 1], commuteMinutesByPair);
+            timingCursorMinutes = activityEndMinutes + commuteMinutes;
+        } else {
+            timingCursorMinutes = activityEndMinutes;
+        }
     }
 
     const emptySlotHours = (Object.keys(dayCapacity.slotCapacity) as Array<keyof typeof dayCapacity.slotCapacity>).reduce(

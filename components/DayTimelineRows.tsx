@@ -30,6 +30,7 @@ import {
   COMMUTE_TRANSITION_BUFFER_MINUTES,
   AIRPORT_ARRIVAL_LEAD_MINUTES,
   PRE_DAY_BUFFER_MINUTES,
+  MIN_SCHEDULED_DURATION_RATIO,
   DEFAULT_SUNSET_MINUTES,
   LUNCH_MIN_START_MINUTES,
   LUNCH_TARGET_START_MINUTES,
@@ -54,6 +55,7 @@ export interface DayTimelineRowsProps {
   isFinalDepartureDay: boolean;
   startContext: any; // we'll type this as any to avoid exporting the type
   regroupedActivities: { scheduledActivities: SuggestedActivity[], prunedActivities: SuggestedActivity[] };
+  forceScheduleDay?: boolean;
 
   // Contextual state from parent
   commuteByLeg: Record<string, { minutes: number; mode: CommuteMode }>;
@@ -79,7 +81,7 @@ export interface DayTimelineRowsProps {
   onActivityDragEnd: () => void;
   onToggleCollapse: (activityId: string) => void;
   onMoveStart: (activityId: string, fromDay: number) => void;
-  onMoveConfirm: (toDay: number) => void;
+  onMoveConfirm: (toDay: number | "unscheduled") => void;
   onMoveCancel: () => void;
   onMoveWithinDay: (activityId: string, dayNumber: number, targetIndex: number) => void;
 }
@@ -96,6 +98,7 @@ export function DayTimelineRows({
   isFinalDepartureDay,
   startContext,
   regroupedActivities,
+  forceScheduleDay = false,
 
   commuteByLeg,
   isRailFriendlyDestination,
@@ -334,7 +337,7 @@ export function DayTimelineRows({
   let departureCutoffReached = false;
 
   sortedActivities.forEach((activity, index) => {
-    if (departureCutoffReached) {
+    if (departureCutoffReached && !forceScheduleDay) {
       droppedForDepartureBuffer.push(activity.name);
       return;
     }
@@ -343,7 +346,9 @@ export function DayTimelineRows({
     const recommendedHours = Math.max(estimatedHours, routeFloorHours);
     const requestedHours = recommendedHours * activityLoadFactor(activity);
     const durationIsFlexible = activity.isDurationFlexible !== false;
-    const minimumScheduledHours = durationIsFlexible ? Math.max(0.75, recommendedHours * 0.5) : requestedHours;
+    const minimumScheduledHours = durationIsFlexible
+      ? Math.max(0.75, recommendedHours * MIN_SCHEDULED_DURATION_RATIO)
+      : requestedHours;
     const allocatedHours = durationIsFlexible
       ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
       : requestedHours;
@@ -360,14 +365,14 @@ export function DayTimelineRows({
         : null;
     const nightStartFloorMinutes = nightOnlyStartFloorMinutes(activity, sunsetMinutes);
     const roundedCursorMinutes = roundToQuarter(cursorMinutes);
-    if (fixedAlignedStartMinutes != null && roundedCursorMinutes > fixedAlignedStartMinutes) {
+    if (!forceScheduleDay && fixedAlignedStartMinutes != null && roundedCursorMinutes > fixedAlignedStartMinutes) {
       droppedForDepartureBuffer.push(activity.name);
       return;
     }
     const activityStart = fixedAlignedStartMinutes != null
       ? Math.max(fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
       : Math.max(roundedCursorMinutes, nightStartFloorMinutes ?? 0);
-    if (isFinalDepartureDay && activityStart >= eveningCutoffMinutes) {
+    if (!forceScheduleDay && isFinalDepartureDay && activityStart >= eveningCutoffMinutes) {
       droppedForDepartureBuffer.push(activity.name);
       departureCutoffReached = true;
       return;
@@ -375,14 +380,21 @@ export function DayTimelineRows({
     const uncappedActivityEnd = activityStart + activityMinutes;
     const daylightCapMinutes = daylightEndCapMinutes(activity, eveningCutoffMinutes, sunsetMinutes);
     const departureHardCapMinutes = isFinalDepartureDay ? eveningCutoffMinutes : null;
-    const effectiveCapMinutes =
-      departureHardCapMinutes != null && daylightCapMinutes != null
+    const effectiveCapMinutes = forceScheduleDay
+      ? null
+      : departureHardCapMinutes != null && daylightCapMinutes != null
         ? Math.min(departureHardCapMinutes, daylightCapMinutes)
         : (departureHardCapMinutes ?? daylightCapMinutes);
     const hasHardActivityCap = effectiveCapMinutes != null;
     const canApplyDaylightCap = hasHardActivityCap && (effectiveCapMinutes as number) > activityStart;
     const activityEnd =
       hasHardActivityCap ? Math.min(uncappedActivityEnd, effectiveCapMinutes as number) : uncappedActivityEnd;
+    const effectiveScheduledHours = Math.max(0, (activityEnd - activityStart) / 60);
+    const minimumRequiredHours = recommendedHours * MIN_SCHEDULED_DURATION_RATIO;
+    if (!forceScheduleDay && effectiveScheduledHours + 1e-6 < minimumRequiredHours) {
+      droppedForDepartureBuffer.push(activity.name);
+      return;
+    }
     const recommendedWindowEndMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.end);
     const recommendedWindowLabel = formatRecommendedStartWindowLabel(activity);
     const lateStartWarning =
@@ -709,6 +721,7 @@ export function DayTimelineRows({
                               onMoveStart={handleMoveStart}
                               onMoveConfirm={handleMoveConfirm}
                               onMoveCancel={handleMoveCancel}
+                              allowUnscheduledTarget={true}
                               onMoveUp={() => handleMoveWithinDay(item.activity.id, day.dayNumber, activityIndex - 1)}
                               onMoveDown={() => handleMoveWithinDay(item.activity.id, day.dayNumber, activityIndex + 1)}
                             />

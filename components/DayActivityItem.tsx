@@ -32,10 +32,11 @@ interface DayActivityItemProps {
     // Callbacks
     onToggleCollapse: (activityId: string) => void;
     onMoveStart: (activityId: string, fromDay: number) => void;
-    onMoveConfirm: (toDay: number) => void;
+    onMoveConfirm: (toDay: number | "unscheduled") => void;
     onMoveCancel: () => void;
     onMoveUp?: (activityId: string) => void;
     onMoveDown?: (activityId: string) => void;
+    allowUnscheduledTarget?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +69,7 @@ export function DayActivityItem({
     onMoveConfirm,
     onMoveUp,
     onMoveDown,
+    allowUnscheduledTarget = false,
 }: DayActivityItemProps) {
     const sourceDay = sourceDayNumber ?? dayNumber;
 
@@ -160,11 +162,20 @@ export function DayActivityItem({
 
             {isMoving ? (
                 <div className="flex items-center gap-2">
-                    <Select onValueChange={(val) => onMoveConfirm(parseInt(val, 10))}>
+                    <Select
+                        onValueChange={(val) =>
+                            onMoveConfirm(val === "unscheduled" ? "unscheduled" : parseInt(val, 10))
+                        }
+                    >
                         <SelectTrigger className="flex-1 h-8 text-[10px]">
                             <SelectValue placeholder="Move to day..." />
                         </SelectTrigger>
                         <SelectContent>
+                            {allowUnscheduledTarget ? (
+                                <SelectItem value="unscheduled">
+                                    unschedule
+                                </SelectItem>
+                            ) : null}
                             {displayGroupedDays.map((day) => (
                                 <SelectItem key={day.dayNumber} value={day.dayNumber.toString()}>
                                     Day {day.dayNumber}

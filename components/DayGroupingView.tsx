@@ -22,6 +22,7 @@ import {
   LUNCH_TARGET_START_MINUTES,
   LUNCH_BLOCK_MINUTES,
   PRE_DAY_BUFFER_MINUTES,
+  MIN_SCHEDULED_DURATION_RATIO,
   OFF_HOURS_ACTIVITY_DISCOUNT,
   roundToQuarter,
   parseEstimatedHours,
@@ -94,6 +95,8 @@ export function DayGroupingView({
   const [routingError, setRoutingError] = useState<string | null>(null);
   const [draggedActivity, setDraggedActivity] = useState<{ id: string; dayNumber: number; index: number } | null>(null);
   const [dragInsertion, setDragInsertion] = useState<{ dayNumber: number; index: number } | null>(null);
+  const [forcedScheduledDayMap, setForcedScheduledDayMap] = useState<Record<number, true>>({});
+  const [manuallyUnscheduledActivityIdMap, setManuallyUnscheduledActivityIdMap] = useState<Record<string, true>>({});
   const draggedActivityRef = useRef<{ id: string; dayNumber: number; index: number } | null>(null);
 
   const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
@@ -151,6 +154,23 @@ export function DayGroupingView({
     return sourceDayById;
   }, [groupedDays]);
 
+  useEffect(() => {
+    const validActivityIds = new Set(groupedDays.flatMap((day) => day.activities.map((activity) => activity.id)));
+    setManuallyUnscheduledActivityIdMap((prev) => {
+      const next = Object.fromEntries(
+        Object.keys(prev)
+          .filter((id) => validActivityIds.has(id))
+          .map((id) => [id, true] as const)
+      );
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      if (prevKeys.length === nextKeys.length && prevKeys.every((id) => next[id])) {
+        return prev;
+      }
+      return next;
+    });
+  }, [groupedDays]);
+
   const getDayStartContext = useCallback(
     (dayIndex: number, fallbackStayLabel?: string | null) => {
       if (dayIndex !== 0) {
@@ -202,6 +222,12 @@ export function DayGroupingView({
       endStayCoordinates?: { lat: number; lng: number } | null;
     }): { scheduledActivities: SuggestedActivity[]; prunedActivities: SuggestedActivity[] } => {
       const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = DEPARTURE_TRANSFER_MINUTES;
+      if (forcedScheduledDayMap[day.dayNumber]) {
+        return {
+          scheduledActivities: [...day.activities],
+          prunedActivities: [],
+        };
+      }
       const startContext = getDayStartContext(dayIndex, startStayLabel);
       const availableVisitHours = startContext.availableVisitHours;
       const isFinalDepartureDay = isDepartureDay(day, dayIndex);
@@ -320,7 +346,9 @@ export function DayGroupingView({
           const recommendedHours = Math.max(estimatedHours, routeFloorHours);
           const requestedHours = recommendedHours * activityLoadFactor(activity);
           const durationIsFlexible = activity.isDurationFlexible !== false;
-          const minimumScheduledHours = durationIsFlexible ? Math.max(0.75, recommendedHours * 0.5) : requestedHours;
+          const minimumScheduledHours = durationIsFlexible
+            ? Math.max(0.75, recommendedHours * MIN_SCHEDULED_DURATION_RATIO)
+            : requestedHours;
           const allocatedHours = durationIsFlexible
             ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
             : requestedHours;
@@ -356,6 +384,12 @@ export function DayGroupingView({
           const activityEnd =
             effectiveCapMinutes != null ? Math.min(uncappedActivityEnd, effectiveCapMinutes) : uncappedActivityEnd;
           if (activityEnd <= activityStart) {
+            droppedThisAttempt.add(activity.id);
+            return;
+          }
+          const effectiveScheduledHours = Math.max(0, (activityEnd - activityStart) / 60);
+          const minimumRequiredHours = recommendedHours * MIN_SCHEDULED_DURATION_RATIO;
+          if (effectiveScheduledHours + 1e-6 < minimumRequiredHours) {
             droppedThisAttempt.add(activity.id);
             return;
           }
@@ -434,6 +468,7 @@ export function DayGroupingView({
       getActivityTimingPolicy,
       nightOnlyStartFloorMinutes,
       daylightEndCapMinutes,
+      forcedScheduledDayMap,
     ]
   );
 
@@ -458,6 +493,13 @@ export function DayGroupingView({
 
   const unscheduledActivities = useMemo(() => {
     const deduped = new Map<string, SuggestedActivity>();
+    groupedDays.forEach((day) => {
+      day.activities.forEach((activity) => {
+        if (manuallyUnscheduledActivityIdMap[activity.id]) {
+          deduped.set(activity.id, activity);
+        }
+      });
+    });
     Object.values(regroupedActivitiesByDay).forEach((regrouped) => {
       regrouped.prunedActivities.forEach((activity) => {
         if (!deduped.has(activity.id)) {
@@ -466,7 +508,7 @@ export function DayGroupingView({
       });
     });
     return [...deduped.values()];
-  }, [regroupedActivitiesByDay]);
+  }, [groupedDays, regroupedActivitiesByDay, manuallyUnscheduledActivityIdMap]);
 
   const unscheduledActivityIds = useMemo(() => new Set(unscheduledActivities.map((activity) => activity.id)), [unscheduledActivities]);
 
@@ -689,9 +731,24 @@ export function DayGroupingView({
     setMovingActivity({ id: activityId, fromDay });
   };
 
-  const handleMoveConfirm = (toDay: number) => {
-    if (movingActivity && movingActivity.fromDay !== toDay) {
-      onMoveActivity(movingActivity.id, movingActivity.fromDay, toDay);
+  const handleMoveConfirm = (toDay: number | "unscheduled") => {
+    if (movingActivity) {
+      if (toDay === "unscheduled") {
+        setManuallyUnscheduledActivityIdMap((prev) => ({ ...prev, [movingActivity.id]: true }));
+        setMovingActivity(null);
+        return;
+      }
+      setManuallyUnscheduledActivityIdMap((prev) => {
+        if (!prev[movingActivity.id]) return prev;
+        const next = { ...prev };
+        delete next[movingActivity.id];
+        return next;
+      });
+      setForcedScheduledDayMap((prev) => ({ ...prev, [toDay]: true }));
+      const isCurrentlyUnscheduled = unscheduledActivityIds.has(movingActivity.id);
+      if (movingActivity.fromDay !== toDay || isCurrentlyUnscheduled) {
+        onMoveActivity(movingActivity.id, movingActivity.fromDay, toDay);
+      }
     }
     setMovingActivity(null);
   };
@@ -955,6 +1012,7 @@ export function DayGroupingView({
                           startStayCoordinates={getStartStayCoordinates(displayGroupedDays, day, index)}
                           endStayCoordinates={day.nightStay?.coordinates}
                           regroupedActivities={regroupedActivitiesByDay[day.dayNumber]}
+                          forceScheduleDay={forcedScheduledDayMap[day.dayNumber] === true}
                           startContext={getDayStartContext(index, index > 0 ? displayGroupedDays[index - 1]?.nightStay?.label : null)}
                           isFinalDepartureDay={isDepartureDay(day, index)}
                           commuteByLeg={commuteByLeg}
@@ -1021,6 +1079,7 @@ export function DayGroupingView({
                           onMoveStart={handleMoveStart}
                           onMoveConfirm={handleMoveConfirm}
                           onMoveCancel={handleMoveCancel}
+                          allowUnscheduledTarget={true}
                         />
                       ))}
                     </div>

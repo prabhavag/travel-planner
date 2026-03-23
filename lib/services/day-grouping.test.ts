@@ -153,6 +153,86 @@ describe('day-grouping structural stats', () => {
         expect(daylightStats.structuralCost).toBeGreaterThan(flexibleStats.structuralCost);
     });
 
+    it('penalizes starts outside recommended windows on both early and late sides', () => {
+        const commuteMatrix = new Map();
+        const capacity = {
+            maxHours: 8,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1
+        };
+
+        const onWindow = {
+            ...mockActivity('on-window'),
+            bestTimeOfDay: 'any' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '11:30 AM',
+            recommendedStartWindow: { start: '11:00 AM', end: '1:00 PM', reason: 'Calmest waters' },
+        };
+        const earlyWindowMiss = {
+            ...mockActivity('early-window-miss'),
+            bestTimeOfDay: 'any' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '10:00 AM',
+            recommendedStartWindow: { start: '11:00 AM', end: '1:00 PM', reason: 'Calmest waters' },
+        };
+        const lateWindowMiss = {
+            ...mockActivity('late-window-miss'),
+            bestTimeOfDay: 'any' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '2:30 PM',
+            recommendedStartWindow: { start: '11:00 AM', end: '1:00 PM', reason: 'Calmest waters' },
+        };
+
+        const onWindowMap = new Map();
+        onWindowMap.set('on-window', { activity: onWindow, durationHours: 2, loadDurationHours: 2, isFullDay: false });
+        const earlyMissMap = new Map();
+        earlyMissMap.set('early-window-miss', { activity: earlyWindowMiss, durationHours: 2, loadDurationHours: 2, isFullDay: false });
+        const lateMissMap = new Map();
+        lateMissMap.set('late-window-miss', { activity: lateWindowMiss, durationHours: 2, loadDurationHours: 2, isFullDay: false });
+
+        const onWindowStats = getDayStructuralStats(['on-window'], onWindowMap, commuteMatrix, capacity);
+        structuralStatsCache.clear();
+        const earlyMissStats = getDayStructuralStats(['early-window-miss'], earlyMissMap, commuteMatrix, capacity);
+        structuralStatsCache.clear();
+        const lateMissStats = getDayStructuralStats(['late-window-miss'], lateMissMap, commuteMatrix, capacity);
+
+        expect(earlyMissStats.structuralCost).toBeGreaterThan(onWindowStats.structuralCost);
+        expect(lateMissStats.structuralCost).toBeGreaterThan(onWindowStats.structuralCost);
+    });
+
+    it('penalizes evening placement for morning-preferred activities', () => {
+        const commuteMatrix = new Map();
+        const capacity = {
+            maxHours: 8,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1
+        };
+
+        const morningAligned = {
+            ...mockActivity('morning-aligned'),
+            bestTimeOfDay: 'morning' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '9:00 AM',
+        };
+        const eveningPlaced = {
+            ...mockActivity('evening-placed'),
+            bestTimeOfDay: 'morning' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '5:30 PM',
+        };
+
+        const alignedMap = new Map();
+        alignedMap.set('morning-aligned', { activity: morningAligned, durationHours: 2, loadDurationHours: 2, isFullDay: false });
+        const eveningMap = new Map();
+        eveningMap.set('evening-placed', { activity: eveningPlaced, durationHours: 2, loadDurationHours: 2, isFullDay: false });
+
+        const alignedStats = getDayStructuralStats(['morning-aligned'], alignedMap, commuteMatrix, capacity);
+        structuralStatsCache.clear();
+        const eveningStats = getDayStructuralStats(['evening-placed'], eveningMap, commuteMatrix, capacity);
+
+        expect(eveningStats.structuralCost).toBeGreaterThan(alignedStats.structuralCost);
+    });
+
     it('adds a small penalty when slot capacity remains unfilled', () => {
         const commuteMatrix = new Map();
         const activity = {

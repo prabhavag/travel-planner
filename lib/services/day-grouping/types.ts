@@ -48,8 +48,8 @@ export const COST_WEIGHTS = {
     spread: 0.8, // Penalizes high average distance between consecutive stops.
     variety: 3, // Penalizes repeating the same activity type within a day.
     slotOverflow: 8, // Penalizes overfilling morning/afternoon/evening slot capacities.
-    slotMismatch: 5, // Penalizes assigning activities outside preferred time-of-day slots.
-    recommendedStartMiss: 7, // Penalizes starts later than recommended start-window end.
+    slotMismatch: 8, // Penalizes assigning activities outside preferred time-of-day slots.
+    recommendedStartMiss: 12, // Penalizes starts outside the recommended start window.
     underDurationShortfall: 2.5, // Penalizes mismatch between recommended and scheduled duration for each activity.
     daylightViolation: 40, // Strongly penalizes daylight-only activity hours scheduled past daylight end.
     emptySlot: 2.0, // Lightly penalizes unfilled capacity across time-of-day slots.

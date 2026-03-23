@@ -20,6 +20,7 @@ export const LUNCH_MIN_START_MINUTES = 12 * 60;         // earliest lunch (noon)
 export const LUNCH_TARGET_START_MINUTES = 12 * 60 + 30; // preferred lunch start
 export const LUNCH_BLOCK_MINUTES = 75;                  // 1 hr 15 min (rounded to quarter)
 export const PRE_DAY_BUFFER_MINUTES = 15;               // buffer before first activity
+export const MIN_SCHEDULED_DURATION_RATIO = 0.6;        // never schedule below 60% of recommended
 
 /**
  * Weight applied to off-peak activity minutes when computing overload.

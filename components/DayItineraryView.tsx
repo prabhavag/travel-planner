@@ -580,6 +580,7 @@ export function DayItineraryView({
     if (/meal|restaurant|lunch|dinner|breakfast/.test(text)) return 1.25;
     return 2;
   };
+  const MIN_SCHEDULED_DURATION_RATIO = 0.6;
 
   function parseFixedStartTimeMinutes(value?: string | null): number | null {
     if (!value) return null;
@@ -917,7 +918,9 @@ export function DayItineraryView({
       const recommendedHours = parseEstimatedHours(activity.estimatedDuration);
       const requestedHours = recommendedHours * activityLoadFactor(activity);
       const durationIsFlexible = activity.isDurationFlexible !== false;
-      const minimumScheduledHours = durationIsFlexible ? Math.max(0.75, recommendedHours * 0.5) : requestedHours;
+      const minimumScheduledHours = durationIsFlexible
+        ? Math.max(0.75, recommendedHours * MIN_SCHEDULED_DURATION_RATIO)
+        : requestedHours;
       const allocatedHours = durationIsFlexible
         ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
         : requestedHours;
