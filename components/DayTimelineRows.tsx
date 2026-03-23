@@ -81,6 +81,7 @@ export interface DayTimelineRowsProps {
   onMoveStart: (activityId: string, fromDay: number) => void;
   onMoveConfirm: (toDay: number) => void;
   onMoveCancel: () => void;
+  onMoveWithinDay: (activityId: string, dayNumber: number, targetIndex: number) => void;
 }
 
 export function DayTimelineRows({
@@ -119,6 +120,7 @@ export function DayTimelineRows({
   onMoveStart: handleMoveStart,
   onMoveConfirm: handleMoveConfirm,
   onMoveCancel: handleMoveCancel,
+  onMoveWithinDay: handleMoveWithinDay,
 }: DayTimelineRowsProps) {
   const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = DEPARTURE_TRANSFER_MINUTES;
   const availableVisitHours = startContext.availableVisitHours;
@@ -685,12 +687,8 @@ export function DayTimelineRows({
                           draggedActivity?.id === item.activity.id && draggedActivity.dayNumber === day.dayNumber;
                         return (
                           <div
-                            draggable={activityIndex >= 0}
-                            onDragStart={(event) => handleActivityDragStart(event, item.activity.id, day.dayNumber, activityIndex)}
-                            onDragOver={(event) => handleActivityDragOver(event, day.dayNumber, activityIndex)}
-                            onDrop={(event) => handleActivityDrop(event, day.dayNumber, activityIndex)}
-                            onDragEnd={handleActivityDragEnd}
-                            className={`rounded-md ${activityIndex >= 0 ? "cursor-grab active:cursor-grabbing" : ""} ${isDragging ? "opacity-50" : ""}`}
+                            draggable={false}
+                            className={`rounded-md select-none ${isDragging ? "opacity-50" : ""}`}
                           >
                             {insertionBefore ? <div className="mb-1 h-0.5 rounded bg-primary/70" /> : null}
                             <DayActivityItem
@@ -705,10 +703,14 @@ export function DayTimelineRows({
                               debugMode={debugMode ?? false}
                               userPreferences={userPreferences ?? []}
                               displayGroupedDays={displayGroupedDays}
+                              canMoveUp={activityIndex > 0}
+                              canMoveDown={activityIndex >= 0 && activityIndex < sortedActivities.length - 1}
                               onToggleCollapse={toggleActivityCollapse}
                               onMoveStart={handleMoveStart}
                               onMoveConfirm={handleMoveConfirm}
                               onMoveCancel={handleMoveCancel}
+                              onMoveUp={() => handleMoveWithinDay(item.activity.id, day.dayNumber, activityIndex - 1)}
+                              onMoveDown={() => handleMoveWithinDay(item.activity.id, day.dayNumber, activityIndex + 1)}
                             />
                           </div>
                         );

@@ -26,12 +26,16 @@ interface DayActivityItemProps {
     debugMode: boolean;
     userPreferences: string[];
     displayGroupedDays: GroupedDay[];
+    canMoveUp?: boolean;
+    canMoveDown?: boolean;
 
     // Callbacks
     onToggleCollapse: (activityId: string) => void;
     onMoveStart: (activityId: string, fromDay: number) => void;
     onMoveConfirm: (toDay: number) => void;
     onMoveCancel: () => void;
+    onMoveUp?: (activityId: string) => void;
+    onMoveDown?: (activityId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,26 +60,62 @@ export function DayActivityItem({
     debugMode,
     userPreferences,
     displayGroupedDays,
+    canMoveUp = false,
+    canMoveDown = false,
     onToggleCollapse,
     onMoveStart,
     onMoveCancel,
     onMoveConfirm,
+    onMoveUp,
+    onMoveDown,
 }: DayActivityItemProps) {
     const sourceDay = sourceDayNumber ?? dayNumber;
 
     // ── "Change Day" button shown in the card header ────────────────────────
-    const changeDayButton = (
-        <Button
-            variant="outline"
-            size="sm"
-            onClick={(e) => {
-                e.stopPropagation();
-                onMoveStart(activity.id, sourceDay);
-            }}
-            className="h-6 px-2 text-[10px] text-gray-500"
-        >
-            Change Day
-        </Button>
+    const cardHeaderActions = (
+        <div className="flex items-center gap-1">
+            {onMoveUp && onMoveDown ? (
+                <>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onMoveUp(activity.id);
+                        }}
+                        disabled={!canMoveUp}
+                        className="h-6 px-2 text-[10px] text-gray-500 disabled:opacity-40"
+                        title="Move up"
+                    >
+                        Up
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onMoveDown(activity.id);
+                        }}
+                        disabled={!canMoveDown}
+                        className="h-6 px-2 text-[10px] text-gray-500 disabled:opacity-40"
+                        title="Move down"
+                    >
+                        Down
+                    </Button>
+                </>
+            ) : null}
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onMoveStart(activity.id, sourceDay);
+                }}
+                className="h-6 px-2 text-[10px] text-gray-500"
+            >
+                Change Day
+            </Button>
+        </div>
     );
 
     // ── Debug attribute dump ─────────────────────────────────────────────────
@@ -161,7 +201,7 @@ export function DayActivityItem({
                 showDurationBadge={false}
                 collapsed={isCollapsed}
                 onToggleCollapse={() => onToggleCollapse(activity.id)}
-                headerActions={changeDayButton}
+                headerActions={cardHeaderActions}
                 extraContent={showMoveControls ? moveControls : undefined}
             />
         );
@@ -177,7 +217,7 @@ export function DayActivityItem({
             showDurationBadge={false}
             collapsed={isCollapsed}
             onToggleCollapse={() => onToggleCollapse(activity.id)}
-            headerActions={changeDayButton}
+            headerActions={cardHeaderActions}
             extraContent={showMoveControls ? moveControls : undefined}
         />
     );

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, type DragEvent } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, type DragEvent } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,7 @@ export function DayItineraryView({
   onMoveActivity?: (activityId: string, fromDay: number, toDay: number, targetIndex?: number) => void;
   onDayChange?: (dayNumber: number) => void;
 }) {
+  const ACTIVITY_DRAG_TYPE = "application/x-travel-planner-activity";
   const [movingActivity, setMovingActivity] = useState<{ id: string; fromDay: number } | null>(null);
   const [collapsedActivityCards, setCollapsedActivityCards] = useState<Record<string, boolean>>({});
   const [collapsedRestaurantCards, setCollapsedRestaurantCards] = useState<Record<string, boolean>>({});
@@ -60,6 +61,7 @@ export function DayItineraryView({
   const [routingError, setRoutingError] = useState<string | null>(null);
   const [draggedActivity, setDraggedActivity] = useState<{ id: string; dayNumber: number; index: number } | null>(null);
   const [dragInsertion, setDragInsertion] = useState<{ dayNumber: number; index: number } | null>(null);
+  const draggedActivityRef = useRef<{ id: string; dayNumber: number; index: number } | null>(null);
 
   type CommuteMode = "TRAIN" | "TRANSIT" | "WALK" | "DRIVE";
 
@@ -263,8 +265,32 @@ export function DayItineraryView({
     index: number
   ) => {
     event.dataTransfer.effectAllowed = "move";
-    setDraggedActivity({ id: activityId, dayNumber, index });
+    const nextDraggedActivity = { id: activityId, dayNumber, index };
+    draggedActivityRef.current = nextDraggedActivity;
+    setDraggedActivity(nextDraggedActivity);
+    try {
+      const payload = JSON.stringify(nextDraggedActivity);
+      event.dataTransfer.setData(ACTIVITY_DRAG_TYPE, payload);
+      event.dataTransfer.setData("text/plain", activityId);
+    } catch {
+      // Some browsers may restrict dataTransfer for custom types; in-memory fallback is enough.
+    }
     setDragInsertion({ dayNumber, index });
+  };
+
+  const readDraggedActivityFromEvent = (event: DragEvent<HTMLDivElement>) => {
+    if (draggedActivityRef.current) return draggedActivityRef.current;
+    try {
+      const payload = event.dataTransfer.getData(ACTIVITY_DRAG_TYPE);
+      if (!payload) return null;
+      const parsed = JSON.parse(payload) as { id: string; dayNumber: number; index: number };
+      if (parsed && typeof parsed.id === "string" && typeof parsed.dayNumber === "number" && typeof parsed.index === "number") {
+        return parsed;
+      }
+    } catch {
+      return null;
+    }
+    return null;
   };
 
   const handleActivityDragOver = (
@@ -272,8 +298,10 @@ export function DayItineraryView({
     dayNumber: number,
     hoverIndex: number
   ) => {
-    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    const activeDrag = readDraggedActivityFromEvent(event);
+    if (!activeDrag || activeDrag.dayNumber !== dayNumber) return;
     event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
     const rect = event.currentTarget.getBoundingClientRect();
     const insertAfter = event.clientY > rect.top + rect.height / 2;
     setDragInsertion({ dayNumber, index: insertAfter ? hoverIndex + 1 : hoverIndex });
@@ -284,8 +312,10 @@ export function DayItineraryView({
     dayNumber: number,
     activitiesLength: number
   ) => {
-    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    const activeDrag = readDraggedActivityFromEvent(event);
+    if (!activeDrag || activeDrag.dayNumber !== dayNumber) return;
     event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
     setDragInsertion({ dayNumber, index: activitiesLength });
   };
 
@@ -294,18 +324,21 @@ export function DayItineraryView({
     dayNumber: number,
     fallbackIndex: number
   ) => {
-    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber || !onMoveActivity) return;
+    const activeDrag = readDraggedActivityFromEvent(event);
+    if (!activeDrag || activeDrag.dayNumber !== dayNumber || !onMoveActivity) return;
     event.preventDefault();
     const targetIndexRaw = dragInsertion?.dayNumber === dayNumber ? dragInsertion.index : fallbackIndex;
-    const targetIndex = draggedActivity.index < targetIndexRaw ? targetIndexRaw - 1 : targetIndexRaw;
-    if (targetIndex !== draggedActivity.index) {
-      onMoveActivity(draggedActivity.id, dayNumber, dayNumber, targetIndex);
+    const targetIndex = activeDrag.index < targetIndexRaw ? targetIndexRaw - 1 : targetIndexRaw;
+    if (targetIndex !== activeDrag.index) {
+      onMoveActivity(activeDrag.id, dayNumber, dayNumber, targetIndex);
     }
+    draggedActivityRef.current = null;
     setDraggedActivity(null);
     setDragInsertion(null);
   };
 
   const handleActivityDragEnd = () => {
+    draggedActivityRef.current = null;
     setDraggedActivity(null);
     setDragInsertion(null);
   };
@@ -1180,7 +1213,7 @@ export function DayItineraryView({
                               onDragOver={(event) => handleActivityDragOver(event, day.dayNumber, index)}
                               onDrop={(event) => handleActivityDrop(event, day.dayNumber, index)}
                               onDragEnd={handleActivityDragEnd}
-                              className={`rounded-md ${onMoveActivity ? "cursor-grab active:cursor-grabbing" : ""} ${isDragging ? "opacity-50" : ""}`}
+                              className={`rounded-md select-none ${onMoveActivity ? "cursor-grab active:cursor-grabbing" : ""} ${isDragging ? "opacity-50" : ""}`}
                             >
                               {insertionBefore ? <div className="mb-1 h-0.5 rounded bg-primary/70" /> : null}
                               <ActivityItem

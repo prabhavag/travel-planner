@@ -82,6 +82,7 @@ export function DayGroupingView({
   isLoading = false,
   headerActions = null,
 }: DayGroupingViewProps) {
+  const ACTIVITY_DRAG_TYPE = "application/x-travel-planner-activity";
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [movingActivity, setMovingActivity] = useState<{
     id: string;
@@ -93,6 +94,7 @@ export function DayGroupingView({
   const [routingError, setRoutingError] = useState<string | null>(null);
   const [draggedActivity, setDraggedActivity] = useState<{ id: string; dayNumber: number; index: number } | null>(null);
   const [dragInsertion, setDragInsertion] = useState<{ dayNumber: number; index: number } | null>(null);
+  const draggedActivityRef = useRef<{ id: string; dayNumber: number; index: number } | null>(null);
 
   const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
     `${dayNumber}:${fromId}->${toId}`;
@@ -698,6 +700,11 @@ export function DayGroupingView({
     setMovingActivity(null);
   };
 
+  const handleMoveWithinDay = (activityId: string, dayNumber: number, targetIndex: number) => {
+    if (targetIndex < 0) return;
+    onMoveActivity(activityId, dayNumber, dayNumber, targetIndex);
+  };
+
   const handleActivityDragStart = (
     event: DragEvent<HTMLDivElement>,
     activityId: string,
@@ -705,8 +712,32 @@ export function DayGroupingView({
     index: number
   ) => {
     event.dataTransfer.effectAllowed = "move";
-    setDraggedActivity({ id: activityId, dayNumber, index });
+    const nextDraggedActivity = { id: activityId, dayNumber, index };
+    draggedActivityRef.current = nextDraggedActivity;
+    setDraggedActivity(nextDraggedActivity);
+    try {
+      const payload = JSON.stringify(nextDraggedActivity);
+      event.dataTransfer.setData(ACTIVITY_DRAG_TYPE, payload);
+      event.dataTransfer.setData("text/plain", activityId);
+    } catch {
+      // Some browsers may restrict dataTransfer for custom types; in-memory fallback is enough.
+    }
     setDragInsertion({ dayNumber, index });
+  };
+
+  const readDraggedActivityFromEvent = (event: DragEvent<HTMLDivElement>) => {
+    if (draggedActivityRef.current) return draggedActivityRef.current;
+    try {
+      const payload = event.dataTransfer.getData(ACTIVITY_DRAG_TYPE);
+      if (!payload) return null;
+      const parsed = JSON.parse(payload) as { id: string; dayNumber: number; index: number };
+      if (parsed && typeof parsed.id === "string" && typeof parsed.dayNumber === "number" && typeof parsed.index === "number") {
+        return parsed;
+      }
+    } catch {
+      return null;
+    }
+    return null;
   };
 
   const handleActivityDragOver = (
@@ -714,8 +745,10 @@ export function DayGroupingView({
     dayNumber: number,
     hoverIndex: number
   ) => {
-    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    const activeDrag = readDraggedActivityFromEvent(event);
+    if (!activeDrag || activeDrag.dayNumber !== dayNumber) return;
     event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
     const rect = event.currentTarget.getBoundingClientRect();
     const insertAfter = event.clientY > rect.top + rect.height / 2;
     setDragInsertion({ dayNumber, index: insertAfter ? hoverIndex + 1 : hoverIndex });
@@ -726,8 +759,10 @@ export function DayGroupingView({
     dayNumber: number,
     activitiesLength: number
   ) => {
-    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    const activeDrag = readDraggedActivityFromEvent(event);
+    if (!activeDrag || activeDrag.dayNumber !== dayNumber) return;
     event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
     setDragInsertion({ dayNumber, index: activitiesLength });
   };
 
@@ -736,18 +771,21 @@ export function DayGroupingView({
     dayNumber: number,
     fallbackIndex: number
   ) => {
-    if (!draggedActivity || draggedActivity.dayNumber !== dayNumber) return;
+    const activeDrag = readDraggedActivityFromEvent(event);
+    if (!activeDrag || activeDrag.dayNumber !== dayNumber) return;
     event.preventDefault();
     const targetIndexRaw = dragInsertion?.dayNumber === dayNumber ? dragInsertion.index : fallbackIndex;
-    const targetIndex = draggedActivity.index < targetIndexRaw ? targetIndexRaw - 1 : targetIndexRaw;
-    if (targetIndex !== draggedActivity.index) {
-      onMoveActivity(draggedActivity.id, dayNumber, dayNumber, targetIndex);
+    const targetIndex = activeDrag.index < targetIndexRaw ? targetIndexRaw - 1 : targetIndexRaw;
+    if (targetIndex !== activeDrag.index) {
+      onMoveActivity(activeDrag.id, dayNumber, dayNumber, targetIndex);
     }
+    draggedActivityRef.current = null;
     setDraggedActivity(null);
     setDragInsertion(null);
   };
 
   const handleActivityDragEnd = () => {
+    draggedActivityRef.current = null;
     setDraggedActivity(null);
     setDragInsertion(null);
   };
@@ -940,6 +978,7 @@ export function DayGroupingView({
                           onMoveStart={handleMoveStart}
                           onMoveConfirm={handleMoveConfirm}
                           onMoveCancel={handleMoveCancel}
+                          onMoveWithinDay={handleMoveWithinDay}
                         />
                       </div>
                     </div>
