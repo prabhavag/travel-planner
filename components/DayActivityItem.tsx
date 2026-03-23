@@ -163,9 +163,15 @@ export function DayActivityItem({
             {isMoving ? (
                 <div className="flex items-center gap-2">
                     <Select
-                        onValueChange={(val) =>
-                            onMoveConfirm(val === "unscheduled" ? "unscheduled" : parseInt(val, 10))
-                        }
+                        onValueChange={(val) => {
+                            if (val === "unscheduled" || val === "unschedule") {
+                                onMoveConfirm("unscheduled");
+                                return;
+                            }
+                            const parsedDay = parseInt(val, 10);
+                            if (Number.isNaN(parsedDay)) return;
+                            onMoveConfirm(parsedDay);
+                        }}
                     >
                         <SelectTrigger className="flex-1 h-8 text-[10px]">
                             <SelectValue placeholder="Move to day..." />

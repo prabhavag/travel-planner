@@ -6,7 +6,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MapPin, ListChecks, Home, AlertTriangle, Utensils } from "lucide-react";
 import { computeRoutes } from "@/lib/api-client";
-import type { GroupedDay, SuggestedActivity, TripInfo } from "@/lib/api-client";
+import type { DayCostDebug, DayGroup, GroupedDay, SuggestedActivity, TripInfo } from "@/lib/api-client";
+import { annotateDayGroupsWithCostDebug } from "@/lib/services/day-grouping";
+import {
+  activityLoadFactor as scoringActivityLoadFactor,
+  activityPairKey,
+  buildDayCapacityProfiles,
+  isFullDayDuration,
+  parseDurationHours,
+} from "@/lib/services/day-grouping/utils";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
 import { DayActivityItem } from "@/components/DayActivityItem";
 import { DayTimelineRows } from "@/components/DayTimelineRows";
@@ -60,7 +68,7 @@ interface DayGroupingViewProps {
   destination?: string | null;
   tripInfo?: Pick<
     TripInfo,
-    "arrivalAirport" | "departureAirport" | "arrivalTimePreference" | "departureTimePreference" | "transportMode" | "endDate"
+    "arrivalAirport" | "departureAirport" | "arrivalTimePreference" | "departureTimePreference" | "transportMode" | "startDate" | "endDate" | "durationDays"
   >;
   onMoveActivity: (activityId: string, fromDay: number, toDay: number, targetIndex?: number) => void;
   onConfirm: () => void;
@@ -524,6 +532,89 @@ export function DayGroupingView({
       activities: day.activities.filter((activity) => !unscheduledActivityIds.has(activity.id)),
     }));
   }, [groupedDays, unscheduledActivityIds]);
+
+  const recomputedDebugCostByDay = useMemo(() => {
+    if (!debugMode) return null;
+    if (displayGroupedDays.length === 0) return null;
+    if (!tripInfo) return null;
+
+    const allActivitiesById = new Map<string, SuggestedActivity>();
+    groupedDays.forEach((day) => {
+      day.activities.forEach((activity) => {
+        if (!allActivitiesById.has(activity.id)) {
+          allActivitiesById.set(activity.id, activity);
+        }
+      });
+    });
+    const allActivities = [...allActivitiesById.values()];
+    if (allActivities.length === 0) return null;
+
+    const preparedMap = new Map<string, unknown>();
+    allActivities.forEach((activity) => {
+      const durationHours = parseDurationHours(activity.estimatedDuration);
+      preparedMap.set(activity.id, {
+        activity,
+        durationHours,
+        loadDurationHours: Math.min(durationHours, durationHours * scoringActivityLoadFactor(activity as any)),
+        isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
+      });
+    });
+
+    const dayGroupsForDebug: DayGroup[] = displayGroupedDays.map((day) => ({
+      dayNumber: day.dayNumber,
+      date: day.date,
+      theme: day.theme,
+      activityIds: day.activities.map((activity) => activity.id),
+      nightStay: day.nightStay ?? null,
+      debugCost: day.debugCost ?? null,
+    }));
+
+    const commuteMinutesByPair = new Map<string, number>();
+    Object.entries(commuteByLeg).forEach(([legId, leg]) => {
+      const colonIndex = legId.indexOf(":");
+      if (colonIndex < 0) return;
+      const pair = legId.slice(colonIndex + 1);
+      const [fromId, toId] = pair.split("->");
+      if (!fromId || !toId) return;
+      if (fromId.startsWith("stay-") || toId.startsWith("stay-")) return;
+      commuteMinutesByPair.set(activityPairKey(fromId, toId), leg.minutes);
+    });
+
+    const dayCapacities = buildDayCapacityProfiles(
+      {
+        source: null,
+        destination: null,
+        startDate: tripInfo.startDate ?? null,
+        endDate: tripInfo.endDate ?? null,
+        durationDays: tripInfo.durationDays ?? null,
+        preferences: [],
+        foodPreferences: [],
+        visitedDestinations: [],
+        activityLevel: "",
+        travelers: 1,
+        budget: null,
+        transportMode: tripInfo.transportMode ?? "flight",
+        arrivalAirport: tripInfo.arrivalAirport ?? null,
+        departureAirport: tripInfo.departureAirport ?? null,
+        arrivalTimePreference: tripInfo.arrivalTimePreference ?? null,
+        departureTimePreference: tripInfo.departureTimePreference ?? null,
+      },
+      dayGroupsForDebug.length
+    );
+
+    const debugDayGroups = annotateDayGroupsWithCostDebug({
+      dayGroups: dayGroupsForDebug as any,
+      dayCapacities,
+      preparedMap: preparedMap as any,
+      commuteMinutesByPair,
+    });
+
+    const byDay: Record<number, DayCostDebug | null> = {};
+    debugDayGroups.forEach((day) => {
+      byDay[day.dayNumber] = day.debugCost ?? null;
+    });
+    return byDay;
+  }, [debugMode, displayGroupedDays, tripInfo, groupedDays, commuteByLeg]);
   const rawDayByNumber = useMemo(
     () => new Map(groupedDays.map((day) => [day.dayNumber, day])),
     [groupedDays]
@@ -538,7 +629,13 @@ export function DayGroupingView({
     });
   }, [displayGroupedDays, onSchedulingPlanChange, unscheduledActivities]);
 
-  const overallDebugCost = displayGroupedDays[0]?.debugCost?.overallTripCost ?? null;
+  const overallDebugCost = useMemo(() => {
+    const firstDayNumber = displayGroupedDays[0]?.dayNumber;
+    if (firstDayNumber == null) return null;
+    return recomputedDebugCostByDay?.[firstDayNumber]?.overallTripCost
+      ?? displayGroupedDays[0]?.debugCost?.overallTripCost
+      ?? null;
+  }, [displayGroupedDays, recomputedDebugCostByDay]);
 
   const formatCostScore = useCallback((value: number): string => {
     return Number.isFinite(value) ? value.toFixed(2) : "N/A";
@@ -993,14 +1090,18 @@ export function DayGroupingView({
                           </div>
                         )}
                       </div>
-                      {debugMode && day.debugCost ? (
+                      {(() => {
+                        const dayDebugCost = recomputedDebugCostByDay?.[day.dayNumber] ?? day.debugCost;
+                        if (!debugMode || !dayDebugCost) return null;
+                        return (
                         <div className="shrink-0 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 text-[10px] leading-4 text-slate-700">
                           <p className="font-semibold uppercase tracking-wide text-slate-800">Day Cost</p>
-                          <p>Total {formatCostScore(day.debugCost.dayCost)}</p>
-                          <p>S {formatCostScore(day.debugCost.structuralCost)} · B {formatCostScore(day.debugCost.balancePenalty)}</p>
-                          <p>C {formatCostScore(day.debugCost.commuteProxy)} · H {formatCostScore(day.debugCost.totalHours)}</p>
+                          <p>Total {formatCostScore(dayDebugCost.dayCost)}</p>
+                          <p>S {formatCostScore(dayDebugCost.structuralCost)} · B {formatCostScore(dayDebugCost.balancePenalty)}</p>
+                          <p>C {formatCostScore(dayDebugCost.commuteProxy)} · H {formatCostScore(dayDebugCost.totalHours)}</p>
                         </div>
-                      ) : null}
+                        );
+                      })()}
                     </div>
                   </CardHeader>
                   <CardContent className="flex-1 overflow-hidden p-0">

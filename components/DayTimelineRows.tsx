@@ -128,7 +128,9 @@ export function DayTimelineRows({
   const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = DEPARTURE_TRANSFER_MINUTES;
   const availableVisitHours = startContext.availableVisitHours;
   const lunchHours = 1;
-  const sortedActivities = regroupedActivities.scheduledActivities;
+  // Render from the day payload passed by DayGroupingView (already excludes unscheduled ids).
+  // This keeps timeline rows in sync with manual unschedule actions.
+  const sortedActivities = day.activities;
 
   const totalCommuteMinutesEstimate = sortedActivities.reduce((sum, activity, index) => {
     const next = sortedActivities[index + 1];
