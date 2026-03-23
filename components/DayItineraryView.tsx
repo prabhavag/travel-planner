@@ -19,6 +19,7 @@ import type {
   AccommodationOption,
   FlightOption,
 } from "@/lib/api-client";
+import { MIN_SCHEDULED_DURATION_RATIO } from "@/lib/utils/timeline-utils";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
 import { ActivityCard } from "@/components/ActivityCard";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
@@ -617,8 +618,6 @@ export function DayItineraryView({
     if (/meal|restaurant|lunch|dinner|breakfast/.test(text)) return 1.25;
     return 2;
   };
-  const MIN_SCHEDULED_DURATION_RATIO = 0.6;
-
   function parseFixedStartTimeMinutes(value?: string | null): number | null {
     if (!value) return null;
     const text = value.trim().toLowerCase();
