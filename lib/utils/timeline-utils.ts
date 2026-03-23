@@ -83,14 +83,13 @@ export function parseFixedStartTimeMinutes(value?: string | null): number | null
 }
 
 /**
- * Treat only explicit clock times as strict fixed starts. Soft hints like
- * "sunrise"/"sunset" should not block pull-forward scheduling after moves.
+ * Any parseable fixed-start label should anchor scheduling, including
+ * symbolic anchors like "sunrise"/"sunset".
  */
 export function hasHardFixedStart(activity: SuggestedActivity): boolean {
     if (!activity.isFixedStartTime) return false;
     const value = activity.fixedStartTime?.trim().toLowerCase();
     if (!value) return false;
-    if (value === "sunrise" || value === "sunset") return false;
     return parseFixedStartTimeMinutes(value) != null;
 }
 
