@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
     parseDurationHours,
-    activityLoadFactor,
     buildDayCapacityProfiles,
     getDayStructuralStats,
     structuralStatsCache,
@@ -317,27 +316,7 @@ describe('day-grouping structural stats', () => {
     });
 });
 
-describe('day-grouping load factor', () => {
-    it('does not reduce fixed-duration activities below estimated duration', () => {
-        const nonFlexible = {
-            ...mockActivity('nf'),
-            isDurationFlexible: false,
-            isFixedStartTime: true,
-            fixedStartTime: '6:00 AM',
-            bestTimeOfDay: 'morning' as const,
-        };
-        const flexible = {
-            ...mockActivity('f'),
-            isDurationFlexible: true,
-            isFixedStartTime: true,
-            fixedStartTime: '6:00 AM',
-            bestTimeOfDay: 'morning' as const,
-        };
-
-        expect(activityLoadFactor(nonFlexible)).toBe(1);
-        expect(activityLoadFactor(flexible)).toBe(0.7);
-    });
-
+describe('day-grouping load duration', () => {
     it('caps scheduled load duration at recommended duration', () => {
         const activity = mockActivity('capped');
         const preparedMap = new Map();

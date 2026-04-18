@@ -17,7 +17,6 @@ import {
     parseDurationHours,
     isFullDayDuration,
     getLoadDurationHours,
-    activityLoadFactor,
     buildDayCapacityProfiles,
     computeDayCount,
     buildTripDates,
@@ -266,11 +265,13 @@ export function annotateDayGroupsWithCostDebug({
     dayCapacities,
     preparedMap,
     commuteMinutesByPair,
+    scheduledHoursByActivityOverride,
 }: {
     dayGroups: DayGroup[];
     dayCapacities: DayCapacityProfile[];
     preparedMap: Map<string, PreparedActivity>;
     commuteMinutesByPair: ActivityCommuteMatrix;
+    scheduledHoursByActivityOverride?: Map<string, number>;
 }): DayGroup[] {
     if (dayGroups.length === 0) return dayGroups.map((dayGroup) => ({ ...dayGroup, debugCost: null }));
 
@@ -278,7 +279,14 @@ export function annotateDayGroupsWithCostDebug({
         activityIds: [...group.activityIds],
     }));
     const dayStats = computeAllDayStats(days, preparedMap, commuteMinutesByPair, dayCapacities);
-    const costBreakdown = computeTotalCostBreakdown(days, preparedMap, commuteMinutesByPair, dayCapacities, dayStats);
+    const costBreakdown = computeTotalCostBreakdown(
+        days,
+        preparedMap,
+        commuteMinutesByPair,
+        dayCapacities,
+        dayStats,
+        scheduledHoursByActivityOverride
+    );
 
     return dayGroups.map((group, index) => {
         const dayBreakdown = costBreakdown.dayBreakdowns[index];
@@ -324,7 +332,7 @@ export async function groupActivitiesByDay(
         preparedMap.set(activity.id, {
             activity,
             durationHours,
-            loadDurationHours: Math.min(durationHours, durationHours * activityLoadFactor(activity)),
+            loadDurationHours: durationHours,
             isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
         });
     }

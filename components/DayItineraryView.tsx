@@ -656,16 +656,6 @@ export function DayItineraryView({
     return `${window.start}-${window.end}`;
   };
 
-  function activityLoadFactor(activity: SuggestedActivity): number {
-    if (activity.isDurationFlexible === false) return 1;
-    if (!activity.isFixedStartTime) return 1;
-    const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
-    if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
-    if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") return 0.7;
-    if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") return 0.7;
-    return 1;
-  }
-
   function haversineKm(
     from: { lat: number; lng: number } | null | undefined,
     to: { lat: number; lng: number } | null | undefined,
@@ -879,7 +869,7 @@ export function DayItineraryView({
       (totalCommuteMinutesEstimate + stayStartCommuteMinutes + endOfDayCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
     const totalRequestedHours = day.activities.reduce(
-      (sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration) * activityLoadFactor(activity),
+      (sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration),
       0
     );
     const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
@@ -967,7 +957,7 @@ export function DayItineraryView({
 
     sortedActivities.forEach((activity, index) => {
       const recommendedHours = parseEstimatedHours(activity.estimatedDuration);
-      const requestedHours = recommendedHours * activityLoadFactor(activity);
+      const requestedHours = recommendedHours;
       const durationIsFlexible = activity.isDurationFlexible !== false;
       const minimumScheduledHours = durationIsFlexible
         ? Math.max(0.75, recommendedHours * MIN_SCHEDULED_DURATION_RATIO)

@@ -2,7 +2,7 @@ import { useMemo, useEffect, type DragEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Home, AlertTriangle, Utensils } from "lucide-react";
 import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
-import { DayActivityItem } from "@/components/DayActivityItem";
+import { DayActivityItem, type ActivityGroupingCostBreakdown } from "@/components/DayActivityItem";
 import {
   type CommuteMode,
   formatHourLabel,
@@ -21,7 +21,6 @@ import {
   buildStayEndLegId,
   parseEstimatedHours,
   estimateRouteIntrinsicMinutes,
-  activityLoadFactor,
   parseFixedStartTimeMinutes,
   hasHardFixedStart,
   recommendedWindowMidpointMinutes,
@@ -73,6 +72,9 @@ export interface DayTimelineRowsProps {
   dragInsertion: { dayNumber: number; index: number } | null;
   draggedActivity: { id: string; dayNumber: number; index: number } | null;
   sourceDayByActivityId: Record<string, number>;
+  activityGroupingCostById?: Record<string, number>;
+  activityGroupingCostBreakdownById?: Record<string, ActivityGroupingCostBreakdown>;
+  onAllocatedHoursChange?: (dayNumber: number, allocatedHoursByActivityId: Record<string, number>) => void;
 
   // Handlers
   onDayDragOver: (event: DragEvent<HTMLDivElement>, dayNumber: number, activitiesLength: number) => void;
@@ -114,6 +116,9 @@ export function DayTimelineRows({
   dragInsertion,
   draggedActivity,
   sourceDayByActivityId,
+  activityGroupingCostById = {},
+  activityGroupingCostBreakdownById = {},
+  onAllocatedHoursChange,
 
   onDayDragOver: handleDayDragOver,
   onActivityDrop: handleActivityDrop,
@@ -177,7 +182,7 @@ export function DayTimelineRows({
   const totalRequestedHours = sortedActivities.reduce((sum, activity) => {
     const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
     const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
-    return sum + Math.max(estimatedHours, routeFloorHours) * activityLoadFactor(activity);
+    return sum + Math.max(estimatedHours, routeFloorHours);
   }, 0);
   const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
   const earliestFixedStartMinutes = sortedActivities
@@ -202,6 +207,7 @@ export function DayTimelineRows({
   let scheduledActivityMinutes = 0;
   let effectiveActivityMinutesForOverload = 0;
   let scheduledCommuteMinutes = 0;
+  const allocatedMinutesByActivityId: Record<string, number> = {};
   const formatMinutesLabel = (minutes: number): string => {
     const rounded = Math.max(0, Math.round(minutes));
     if (rounded % 60 === 0) return `${rounded / 60} hr`;
@@ -228,7 +234,7 @@ export function DayTimelineRows({
       ? `${base} (${formatMinutesLabel(bufferMinutes)} buffer)${note ? ` · ${note}` : ""}`
       : `${base}${note ? ` · ${note}` : ""}`;
   };
-  const trackActivityMinutes = (startMinutes: number, endMinutes: number) => {
+  const trackActivityMinutes = (activityId: string, startMinutes: number, endMinutes: number) => {
     const rawMinutes = Math.max(0, endMinutes - startMinutes);
     const inWindowStart = Math.max(startMinutes, REGULAR_DAY_START_MINUTES);
     const inWindowEnd = Math.min(endMinutes, REGULAR_DAY_END_MINUTES);
@@ -236,6 +242,7 @@ export function DayTimelineRows({
     const offWindowMinutes = Math.max(0, rawMinutes - inWindowMinutes);
     scheduledActivityMinutes += rawMinutes;
     effectiveActivityMinutesForOverload += inWindowMinutes + offWindowMinutes * OFF_HOURS_ACTIVITY_DISCOUNT;
+    allocatedMinutesByActivityId[activityId] = (allocatedMinutesByActivityId[activityId] ?? 0) + rawMinutes;
   };
 
   if (sortedActivities.length === 0) {
@@ -384,7 +391,7 @@ export function DayTimelineRows({
     const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
     const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
     const recommendedHours = Math.max(estimatedHours, routeFloorHours);
-    const requestedHours = recommendedHours * activityLoadFactor(activity);
+    const requestedHours = recommendedHours;
     const durationIsFlexible = activity.isDurationFlexible !== false;
     const minimumScheduledHours = durationIsFlexible
       ? Math.max(0.75, recommendedHours * MIN_SCHEDULED_DURATION_RATIO)
@@ -473,8 +480,8 @@ export function DayTimelineRows({
       const beforeLunchEnd = Math.max(activityStart + 30, lunchStart);
       const afterLunchStart = lunchEnd;
       const afterLunchEnd = afterLunchStart + Math.max(30, effectiveActivityEnd - beforeLunchEnd);
-      trackActivityMinutes(activityStart, beforeLunchEnd);
-      trackActivityMinutes(afterLunchStart, afterLunchEnd);
+      trackActivityMinutes(activity.id, activityStart, beforeLunchEnd);
+      trackActivityMinutes(activity.id, afterLunchStart, afterLunchEnd);
 
       timelineItems.push({
         type: "activity",
@@ -531,7 +538,7 @@ export function DayTimelineRows({
           : uncappedNextActivityEnd;
       const nextActivityEnd = nextActivityEndCapped;
       if (nextActivityEnd <= nextActivityStart) return;
-      trackActivityMinutes(nextActivityStart, nextActivityEnd);
+      trackActivityMinutes(activity.id, nextActivityStart, nextActivityEnd);
       timelineItems.push({
         type: "activity",
         id: `activity-${activity.id}`,
@@ -687,6 +694,14 @@ export function DayTimelineRows({
     (effectiveActivityMinutesForOverload + scheduledCommuteMinutes) / 60;
   const isOverloaded = !showFreeSlotNotice && effectivePlannedHoursForOverload > availableVisitHours;
 
+  useEffect(() => {
+    if (!onAllocatedHoursChange) return;
+    const allocatedHoursByActivityId = Object.fromEntries(
+      Object.entries(allocatedMinutesByActivityId).map(([activityId, minutes]) => [activityId, Math.max(0, minutes / 60)])
+    );
+    onAllocatedHoursChange(day.dayNumber, allocatedHoursByActivityId);
+  }, [onAllocatedHoursChange, day.dayNumber, sortedActivities, commuteByLeg]);
+
   return (
     <>
       {showFreeSlotNotice ? (
@@ -762,6 +777,8 @@ export function DayTimelineRows({
                               index={safeActivityIndex}
                               timeSlotLabel={item.timeRange}
                               affordLabel={item.affordLabel}
+                              groupingCostScore={activityGroupingCostById[item.activity.id] ?? null}
+                              groupingCostBreakdown={activityGroupingCostBreakdownById[item.activity.id] ?? null}
                               isMoving={movingActivity?.id === item.activity.id}
                               isCollapsed={collapsedActivityCards[item.activity.id] ?? true}
                               debugMode={debugMode ?? false}

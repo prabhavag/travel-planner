@@ -355,14 +355,16 @@ export function computeTotalCost(
     preparedMap: Map<string, PreparedActivity>,
     commuteMinutesByPair: ActivityCommuteMatrix,
     dayCapacities: DayCapacityProfile[],
-    existingDayStats?: DayStructuralStats[]
+    existingDayStats?: DayStructuralStats[],
+    scheduledHoursByActivityOverride?: Map<string, number>
 ): number {
     return computeTotalCostBreakdown(
         days,
         preparedMap,
         commuteMinutesByPair,
         dayCapacities,
-        existingDayStats
+        existingDayStats,
+        scheduledHoursByActivityOverride
     ).overallCost;
 }
 
@@ -371,7 +373,8 @@ export function computeTotalCostBreakdown(
     preparedMap: Map<string, PreparedActivity>,
     commuteMinutesByPair: ActivityCommuteMatrix,
     dayCapacities: DayCapacityProfile[],
-    existingDayStats?: DayStructuralStats[]
+    existingDayStats?: DayStructuralStats[],
+    scheduledHoursByActivityOverride?: Map<string, number>
 ): TripCostBreakdown {
     const dayStats =
         existingDayStats ?? computeAllDayStats(days, preparedMap, commuteMinutesByPair, dayCapacities);
@@ -412,7 +415,10 @@ export function computeTotalCostBreakdown(
             activityDayIndex.set(id, dayIndex);
             const prepared = preparedMap.get(id);
             if (!prepared) return;
-            const scheduledHours = Math.min(prepared.loadDurationHours, prepared.durationHours);
+            const overrideHours = scheduledHoursByActivityOverride?.get(id);
+            const scheduledHours = overrideHours != null
+                ? Math.max(0, Math.min(overrideHours, prepared.durationHours))
+                : Math.min(prepared.loadDurationHours, prepared.durationHours);
             scheduledHoursByActivity.set(id, (scheduledHoursByActivity.get(id) ?? 0) + scheduledHours);
         });
     });
@@ -421,8 +427,10 @@ export function computeTotalCostBreakdown(
     for (const [activityId, prepared] of preparedMap.entries()) {
         const recommendedHours = Math.max(0, prepared.durationHours);
         const scheduledHours = Math.max(0, scheduledHoursByActivity.get(activityId) ?? 0);
-        const durationDeltaHours = Math.abs(scheduledHours - recommendedHours);
-        durationMismatchPenalty += durationDeltaHours * durationDeltaHours;
+        const underscheduledHours = Math.max(0, recommendedHours - scheduledHours);
+        durationMismatchPenalty +=
+            underscheduledHours * COST_WEIGHTS.underDurationShortfallLinear +
+            underscheduledHours * underscheduledHours * COST_WEIGHTS.underDurationShortfallQuadratic;
     }
 
     const prepared = Array.from(preparedMap.values());
@@ -460,11 +468,11 @@ export function computeTotalCostBreakdown(
         baseCost +
         commuteImbalancePenalty +
         nearbySplitPenalty * COST_WEIGHTS.nearbySplit +
-        durationMismatchPenalty * COST_WEIGHTS.underDurationShortfall,
+        durationMismatchPenalty,
         baseCost,
         commuteImbalancePenalty,
         nearbySplitPenalty: nearbySplitPenalty * COST_WEIGHTS.nearbySplit,
-        durationMismatchPenalty: durationMismatchPenalty * COST_WEIGHTS.underDurationShortfall,
+        durationMismatchPenalty,
         dayBreakdowns,
     };
 }

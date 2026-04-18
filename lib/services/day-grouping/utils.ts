@@ -8,8 +8,6 @@ import {
     MAX_DAY_HOURS,
     SOFT_DAY_START_MINUTES,
     SLOT_CAPACITY_HOURS,
-    EARLY_FIXED_ACTIVITY_CUTOFF_MINUTES,
-    EARLY_FIXED_ACTIVITY_LOAD_FACTOR,
     DayCapacityProfile,
     PreparedActivity,
 } from "./types";
@@ -263,22 +261,6 @@ export function recommendedWindowMidpointMinutes(activity: SuggestedActivity): n
     if (startMinutes == null || endMinutes == null) return null;
     if (endMinutes < startMinutes) return null;
     return Math.round((startMinutes + endMinutes) / 2);
-}
-
-export function activityLoadFactor(activity: SuggestedActivity): number {
-    if (activity.isDurationFlexible === false) return 1;
-    if (!activity.isFixedStartTime) return 1;
-    const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
-    if (fixedStartMinutes != null && fixedStartMinutes <= EARLY_FIXED_ACTIVITY_CUTOFF_MINUTES) {
-        return EARLY_FIXED_ACTIVITY_LOAD_FACTOR;
-    }
-    if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") {
-        return EARLY_FIXED_ACTIVITY_LOAD_FACTOR;
-    }
-    if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") {
-        return EARLY_FIXED_ACTIVITY_LOAD_FACTOR;
-    }
-    return 1;
 }
 
 export function isFullDayDuration(estimatedDuration: string | null | undefined, durationHours: number): boolean {

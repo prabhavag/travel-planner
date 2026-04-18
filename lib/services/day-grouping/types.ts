@@ -26,8 +26,6 @@ export const TYPE_THEME_MAP: Record<string, string> = {
 
 export const MAX_DAY_HOURS = 8;
 export const MAX_OPTIMIZATION_PASSES = 4;
-export const EARLY_FIXED_ACTIVITY_LOAD_FACTOR = 0.7;
-export const EARLY_FIXED_ACTIVITY_CUTOFF_MINUTES = 7 * 60;
 export const SLOT_CAPACITY_HOURS: Record<Exclude<SuggestedActivity["bestTimeOfDay"], "any">, number> = {
     morning: 4,
     afternoon: 4,
@@ -40,7 +38,7 @@ export const NIGHT_AFTER_HOURS_START_MINUTES = 20 * 60;
 export const AFTER_HOURS_DRIVE_MULTIPLIER = 2;
 
 export const COST_WEIGHTS = {
-    overflow: 30, // Penalizes total scheduled hours exceeding daily capacity.
+    overflow: 20, // Penalizes total scheduled hours exceeding daily capacity.
     overflowQuadratic: 8, // Escalates cost nonlinearly for heavy overbooking.
     commute: 1.2, // Penalizes total intra-day travel time.
     commuteImbalance: 0.25, // Penalizes uneven commute burden across days.
@@ -50,7 +48,8 @@ export const COST_WEIGHTS = {
     slotOverflow: 8, // Penalizes overfilling morning/afternoon/evening slot capacities.
     slotMismatch: 8, // Penalizes assigning activities outside preferred time-of-day slots.
     recommendedStartMiss: 12, // Penalizes starts outside the recommended start window.
-    underDurationShortfall: 10, // Penalizes mismatch between recommended and scheduled duration for each activity.
+    underDurationShortfallLinear: 10, // Penalizes underscheduled hours linearly.
+    underDurationShortfallQuadratic: 5, // Escalates underscheduled hours nonlinearly.
     daylightViolation: 40, // Strongly penalizes daylight-only activity hours scheduled past daylight end.
     emptySlot: 2.0, // Lightly penalizes unfilled capacity across time-of-day slots.
     balance: 0.7, // Penalizes per-day load variance from weighted target distribution.

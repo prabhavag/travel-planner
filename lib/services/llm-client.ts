@@ -3136,16 +3136,6 @@ class LLMClient {
     return null;
   }
 
-  private _activityLoadFactorForAiCheck(activity: SuggestedActivity): number {
-    if (activity.isDurationFlexible === false) return 1;
-    if (!activity.isFixedStartTime) return 1;
-    const fixedStartMinutes = this._parseFixedStartTimeMinutesForAiCheck(activity.fixedStartTime);
-    if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
-    if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") return 0.7;
-    if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") return 0.7;
-    return 1;
-  }
-
   private _slotAnchorMinutesForAiCheck(activity: SuggestedActivity): number {
     const fixedStart = this._parseFixedStartTimeMinutesForAiCheck(activity.fixedStartTime);
     if (fixedStart != null) return fixedStart;
@@ -3230,7 +3220,6 @@ class LLMClient {
             anchorMinutes >= REGULAR_DAY_START_MINUTES && anchorMinutes <= REGULAR_DAY_END_MINUTES;
           const effectiveHours = this._roundToSingleDecimal(
             estimatedHours *
-              this._activityLoadFactorForAiCheck(activity) *
               (inRegularWindow ? 1 : OFF_HOURS_ACTIVITY_DISCOUNT)
           );
           return {

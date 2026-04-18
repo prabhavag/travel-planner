@@ -265,7 +265,8 @@ export default function MapComponent({
           .filter(([, stay]) => stay?.coordinates)
       );
 
-      groupedDays.forEach((day) => {
+      groupedDays.forEach((day, dayIndex) => {
+        const isFinalDepartureDay = dayIndex === groupedDays.length - 1;
         const startStay = stayByDay.get(day.dayNumber - 1) ?? day.nightStay;
         if (hasValidCoordinates(startStay?.coordinates)) {
           locs.push({
@@ -318,7 +319,7 @@ export default function MapComponent({
         });
 
         const endStay = day.nightStay;
-        if (hasValidCoordinates(endStay?.coordinates)) {
+        if (!isFinalDepartureDay && hasValidCoordinates(endStay?.coordinates)) {
           locs.push({
             name: `End stay: ${endStay.label}`,
             lat: getValidCoordinate(endStay.coordinates.lat),

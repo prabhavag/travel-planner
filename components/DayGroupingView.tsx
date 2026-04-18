@@ -8,15 +8,30 @@ import { MapPin, ListChecks, Home, AlertTriangle, Utensils } from "lucide-react"
 import { computeRoutes } from "@/lib/api-client";
 import type { DayCostDebug, DayGroup, GroupedDay, SuggestedActivity, TripInfo } from "@/lib/api-client";
 import { annotateDayGroupsWithCostDebug } from "@/lib/services/day-grouping";
+import { buildOptimalDayRoute, computeTotalCostBreakdown } from "@/lib/services/day-grouping/scoring";
 import {
-  activityLoadFactor as scoringActivityLoadFactor,
   activityPairKey,
   buildDayCapacityProfiles,
+  getLoadDurationHours,
   isFullDayDuration,
+  recommendedWindowLatestStartMinutes as scoringRecommendedWindowLatestStartMinutes,
+  slotDistance as scoringSlotDistance,
+  slotForHour as scoringSlotForHour,
   parseDurationHours,
 } from "@/lib/services/day-grouping/utils";
+import {
+  AFTER_HOURS_DRIVE_MULTIPLIER,
+  COST_WEIGHTS,
+  DEFAULT_DAYLIGHT_END_MINUTES,
+  EARLY_MORNING_AFTER_HOURS_END_MINUTES,
+  NEARBY_CLUSTER_MAX_COMMUTE_MINUTES,
+  NEARBY_CLUSTER_SQUEEZE_HOURS,
+  SOFT_DAY_START_MINUTES,
+  NIGHT_AFTER_HOURS_START_MINUTES,
+} from "@/lib/services/day-grouping/types";
+import { activityCommuteMinutes, activityDistanceProxy } from "@/lib/services/day-grouping/routing";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
-import { DayActivityItem } from "@/components/DayActivityItem";
+import { DayActivityItem, type ActivityGroupingCostBreakdown } from "@/components/DayActivityItem";
 import { DayTimelineRows } from "@/components/DayTimelineRows";
 import {
   type CommuteMode,
@@ -46,7 +61,6 @@ import {
   parseFixedStartTimeMinutes,
   hasHardFixedStart,
   recommendedWindowMidpointMinutes,
-  activityLoadFactor,
   formatRecommendedStartWindowLabel,
   checkRailFriendlyDestination,
   getActivityStartPoint,
@@ -106,6 +120,7 @@ export function DayGroupingView({
   const [dragInsertion, setDragInsertion] = useState<{ dayNumber: number; index: number } | null>(null);
   const [forcedScheduledDayMap, setForcedScheduledDayMap] = useState<Record<number, true>>({});
   const [manuallyUnscheduledActivityIdMap, setManuallyUnscheduledActivityIdMap] = useState<Record<string, true>>({});
+  const [allocatedHoursByDay, setAllocatedHoursByDay] = useState<Record<number, Record<string, number>>>({});
   const draggedActivityRef = useRef<{ id: string; dayNumber: number; index: number } | null>(null);
 
   const buildLegId = (dayNumber: number, fromId: string, toId: string) =>
@@ -180,6 +195,29 @@ export function DayGroupingView({
     });
   }, [groupedDays]);
 
+  const handleAllocatedHoursChange = useCallback((dayNumber: number, allocatedHoursByActivityId: Record<string, number>) => {
+    setAllocatedHoursByDay((prev) => {
+      const current = prev[dayNumber];
+      const currentSerialized = JSON.stringify(current ?? {});
+      const nextSerialized = JSON.stringify(allocatedHoursByActivityId);
+      if (currentSerialized === nextSerialized) return prev;
+      return {
+        ...prev,
+        [dayNumber]: allocatedHoursByActivityId,
+      };
+    });
+  }, []);
+
+  const allocatedHoursByActivityId = useMemo(() => {
+    const merged: Record<string, number> = {};
+    Object.values(allocatedHoursByDay).forEach((perDay) => {
+      Object.entries(perDay).forEach(([activityId, hours]) => {
+        merged[activityId] = Math.max(0, hours);
+      });
+    });
+    return merged;
+  }, [allocatedHoursByDay]);
+
   const getDayStartContext = useCallback(
     (dayIndex: number, fallbackStayLabel?: string | null) => {
       if (dayIndex !== 0) {
@@ -214,6 +252,17 @@ export function DayGroupingView({
     [tripInfo?.arrivalAirport, tripInfo?.arrivalTimePreference]
   );
 
+  const dedupeActivitiesById = useCallback((activities: SuggestedActivity[]): SuggestedActivity[] => {
+    const seen = new Set<string>();
+    const deduped: SuggestedActivity[] = [];
+    activities.forEach((activity) => {
+      if (seen.has(activity.id)) return;
+      seen.add(activity.id);
+      deduped.push(activity);
+    });
+    return deduped;
+  }, []);
+
   const regroupSchedulableActivitiesForDay = useCallback(
     ({
       day,
@@ -233,7 +282,7 @@ export function DayGroupingView({
       const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = DEPARTURE_TRANSFER_MINUTES;
       if (forcedScheduledDayMap[day.dayNumber]) {
         return {
-          scheduledActivities: [...day.activities],
+          scheduledActivities: dedupeActivitiesById(day.activities),
           prunedActivities: [],
         };
       }
@@ -249,7 +298,7 @@ export function DayGroupingView({
       const departureMinutes = parseFixedStartTimeMinutes(departureClock) ?? DEFAULT_SUNSET_MINUTES;
       const airportArrivalDeadlineMinutes = Math.max(10 * 60, departureMinutes - airportArrivalLeadMinutes);
       const preDayBufferMinutes = PRE_DAY_BUFFER_MINUTES;
-      const initialSortedActivities = [...day.activities];
+      const initialSortedActivities = dedupeActivitiesById(day.activities);
       let currentActivities = [...initialSortedActivities];
       const prunedById = new Map<string, SuggestedActivity>();
 
@@ -293,7 +342,7 @@ export function DayGroupingView({
         const totalRequestedHours = currentActivities.reduce((sum, activity) => {
           const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
           const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
-          return sum + Math.max(estimatedHours, routeFloorHours) * activityLoadFactor(activity);
+          return sum + Math.max(estimatedHours, routeFloorHours);
         }, 0);
         const scaleFactor =
           totalRequestedHours > 0 && totalRequestedHours > remainingForActivities && remainingForActivities > 0
@@ -356,7 +405,7 @@ export function DayGroupingView({
           const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
           const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
           const recommendedHours = Math.max(estimatedHours, routeFloorHours);
-          const requestedHours = recommendedHours * activityLoadFactor(activity);
+          const requestedHours = recommendedHours;
           const durationIsFlexible = activity.isDurationFlexible !== false;
           const minimumScheduledHours = durationIsFlexible
             ? Math.max(0.75, recommendedHours * MIN_SCHEDULED_DURATION_RATIO)
@@ -484,6 +533,7 @@ export function DayGroupingView({
       nightOnlyStartFloorMinutes,
       daylightEndCapMinutes,
       forcedScheduledDayMap,
+      dedupeActivitiesById,
     ]
   );
 
@@ -531,12 +581,24 @@ export function DayGroupingView({
     return groupedDays.map((day) => {
       const recomputed = regroupedActivitiesByDay[day.dayNumber];
       const scheduledActivities = recomputed?.scheduledActivities ?? day.activities;
+      const dedupedScheduledActivities = dedupeActivitiesById(scheduledActivities);
       return {
         ...day,
-        activities: scheduledActivities.filter((activity) => !manuallyUnscheduledActivityIdMap[activity.id]),
+        activities: dedupedScheduledActivities.filter((activity) => !manuallyUnscheduledActivityIdMap[activity.id]),
       };
     });
-  }, [groupedDays, regroupedActivitiesByDay, manuallyUnscheduledActivityIdMap]);
+  }, [groupedDays, regroupedActivitiesByDay, manuallyUnscheduledActivityIdMap, dedupeActivitiesById]);
+
+  useEffect(() => {
+    const validDays = new Set(displayGroupedDays.map((day) => day.dayNumber));
+    setAllocatedHoursByDay((prev) => {
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([dayNumber]) => validDays.has(Number(dayNumber)))
+      );
+      if (Object.keys(next).length === Object.keys(prev).length) return prev;
+      return next;
+    });
+  }, [displayGroupedDays]);
 
   const recomputedDebugCostByDay = useMemo(() => {
     if (!debugMode) return null;
@@ -560,7 +622,7 @@ export function DayGroupingView({
       preparedMap.set(activity.id, {
         activity,
         durationHours,
-        loadDurationHours: Math.min(durationHours, durationHours * scoringActivityLoadFactor(activity as any)),
+        loadDurationHours: durationHours,
         isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
       });
     });
@@ -612,6 +674,7 @@ export function DayGroupingView({
       dayCapacities,
       preparedMap: preparedMap as any,
       commuteMinutesByPair,
+      scheduledHoursByActivityOverride: new Map(Object.entries(allocatedHoursByActivityId)),
     });
 
     const byDay: Record<number, DayCostDebug | null> = {};
@@ -619,7 +682,512 @@ export function DayGroupingView({
       byDay[day.dayNumber] = day.debugCost ?? null;
     });
     return byDay;
-  }, [debugMode, displayGroupedDays, tripInfo, groupedDays, commuteByLeg]);
+  }, [debugMode, displayGroupedDays, tripInfo, groupedDays, commuteByLeg, allocatedHoursByActivityId]);
+
+  const activityGroupingCostDebugById = useMemo(() => {
+    if (!debugMode) return {};
+    if (displayGroupedDays.length === 0) return {};
+    const allActivitiesById = new Map<string, SuggestedActivity>();
+    groupedDays.forEach((day) => {
+      day.activities.forEach((activity) => {
+        if (!allActivitiesById.has(activity.id)) {
+          allActivitiesById.set(activity.id, activity);
+        }
+      });
+    });
+    const allActivities = [...allActivitiesById.values()];
+    if (allActivities.length === 0) return {};
+
+    const baseDays = displayGroupedDays.map((day) => ({
+      activityIds: day.activities.map((activity) => activity.id),
+    }));
+    const scheduledActivityIds = new Set(baseDays.flatMap((day) => day.activityIds));
+
+    const commuteMinutesByPair = new Map<string, number>();
+    Object.entries(commuteByLeg).forEach(([legId, leg]) => {
+      const colonIndex = legId.indexOf(":");
+      if (colonIndex < 0) return;
+      const pair = legId.slice(colonIndex + 1);
+      const [fromId, toId] = pair.split("->");
+      if (!fromId || !toId) return;
+      if (fromId.startsWith("stay-") || toId.startsWith("stay-")) return;
+      commuteMinutesByPair.set(activityPairKey(fromId, toId), leg.minutes);
+    });
+
+    const dayCapacities = buildDayCapacityProfiles(
+      {
+        source: null,
+        destination: null,
+        startDate: tripInfo?.startDate ?? null,
+        endDate: tripInfo?.endDate ?? null,
+        durationDays: tripInfo?.durationDays ?? null,
+        preferences: [],
+        foodPreferences: [],
+        visitedDestinations: [],
+        activityLevel: "",
+        travelers: 1,
+        budget: null,
+        transportMode: tripInfo?.transportMode ?? "flight",
+        arrivalAirport: tripInfo?.arrivalAirport ?? null,
+        departureAirport: tripInfo?.departureAirport ?? null,
+        arrivalTimePreference: tripInfo?.arrivalTimePreference ?? null,
+        departureTimePreference: tripInfo?.departureTimePreference ?? null,
+      },
+      displayGroupedDays.length
+    );
+
+    const basePreparedMap = new Map<string, unknown>();
+    allActivities.forEach((activity) => {
+      const durationHours = parseDurationHours(activity.estimatedDuration);
+      basePreparedMap.set(activity.id, {
+        activity,
+        durationHours,
+        loadDurationHours: durationHours,
+        isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
+      });
+    });
+
+    const computeAfterHoursMinutes = (startMinutes: number, endMinutes: number): number => {
+      if (endMinutes <= startMinutes) return 0;
+      const earlyMinutes = Math.max(
+        0,
+        Math.min(endMinutes, EARLY_MORNING_AFTER_HOURS_END_MINUTES) - startMinutes
+      );
+      const nightMinutes = Math.max(0, endMinutes - Math.max(startMinutes, NIGHT_AFTER_HOURS_START_MINUTES));
+      return earlyMinutes + nightMinutes;
+    };
+
+    const makeZeroComponents = () => ({
+      overflow: 0,
+      commute: 0,
+      afterHoursCommute: 0,
+      longLeg: 0,
+      spread: 0,
+      variety: 0,
+      slotOverflow: 0,
+      slotMismatch: 0,
+      recommendedStartMiss: 0,
+      daylightViolation: 0,
+      emptySlot: 0,
+    });
+
+    const computeDayStructuralDetails = (activityIds: string[], dayCapacity: typeof dayCapacities[number]) => {
+      const route = buildOptimalDayRoute(
+        activityIds
+          .map((id) => (basePreparedMap as Map<string, any>).get(id)?.activity)
+          .filter((activity): activity is SuggestedActivity => activity != null) as any,
+        basePreparedMap as any,
+        commuteMinutesByPair
+      );
+
+      const byActivity = new Map<string, ReturnType<typeof makeZeroComponents>>();
+      route.forEach((activity) => {
+        byActivity.set(activity.id, makeZeroComponents());
+      });
+      const addToActivity = (activityId: string, key: keyof ReturnType<typeof makeZeroComponents>, value: number) => {
+        if (!Number.isFinite(value) || value === 0) return;
+        const current = byActivity.get(activityId);
+        if (!current) return;
+        current[key] += value;
+      };
+
+      const loadById = new Map<string, number>();
+      let totalLoad = 0;
+      route.forEach((activity) => {
+        const load = Math.max(0.01, getLoadDurationHours(basePreparedMap as any, activity.id));
+        loadById.set(activity.id, load);
+        totalLoad += load;
+      });
+      const totalLoadSafe = totalLoad > 0 ? totalLoad : Math.max(1, route.length);
+      const loadShare = (activityId: string) => (loadById.get(activityId) ?? 1) / totalLoadSafe;
+
+      const totals = makeZeroComponents();
+      if (route.length === 0) {
+        return { route, totals, byActivity, loadById, totalLoad: 0, totalHours: 0 };
+      }
+
+      const totalHours = route.reduce((sum, activity) => sum + getLoadDurationHours(basePreparedMap as any, activity.id), 0);
+
+      const legMinutes: Array<{ from: string; to: string; minutes: number }> = [];
+      for (let i = 1; i < route.length; i += 1) {
+        const from = route[i - 1];
+        const to = route[i];
+        const minutes = activityCommuteMinutes(from as any, to as any, commuteMinutesByPair);
+        legMinutes.push({ from: from.id, to: to.id, minutes });
+        const weighted = minutes * COST_WEIGHTS.commute;
+        totals.commute += weighted;
+        addToActivity(from.id, "commute", weighted / 2);
+        addToActivity(to.id, "commute", weighted / 2);
+      }
+
+      const longestLeg = legMinutes.length > 0 ? Math.max(...legMinutes.map((leg) => leg.minutes)) : 0;
+      const averageLeg =
+        legMinutes.length > 0
+          ? legMinutes.reduce((sum, leg) => sum + leg.minutes, 0) / legMinutes.length
+          : 0;
+
+      const longLegWeighted = Math.max(0, longestLeg - 75) * COST_WEIGHTS.longLeg;
+      totals.longLeg = longLegWeighted;
+      if (longLegWeighted > 0 && legMinutes.length > 0) {
+        const longestLegs = legMinutes.filter((leg) => leg.minutes === longestLeg);
+        const eachLegShare = longLegWeighted / longestLegs.length;
+        longestLegs.forEach((leg) => {
+          addToActivity(leg.from, "longLeg", eachLegShare / 2);
+          addToActivity(leg.to, "longLeg", eachLegShare / 2);
+        });
+      }
+
+      const spreadWeighted = Math.max(0, averageLeg - 45) * COST_WEIGHTS.spread;
+      totals.spread = spreadWeighted;
+      const totalLegMinutes = legMinutes.reduce((sum, leg) => sum + leg.minutes, 0);
+      if (spreadWeighted > 0 && legMinutes.length > 0) {
+        legMinutes.forEach((leg) => {
+          const legShare = totalLegMinutes > 0 ? leg.minutes / totalLegMinutes : 1 / legMinutes.length;
+          const weighted = spreadWeighted * legShare;
+          addToActivity(leg.from, "spread", weighted / 2);
+          addToActivity(leg.to, "spread", weighted / 2);
+        });
+      }
+
+      const uniqueTypes = new Set(route.map((activity) => activity.type.trim().toLowerCase())).size;
+      const varietyRaw = route.length > 1 ? (route.length - uniqueTypes) / route.length : 0;
+      const varietyWeighted = varietyRaw * COST_WEIGHTS.variety;
+      totals.variety = varietyWeighted;
+      const typeCounts = route.reduce((acc, activity) => {
+        const type = activity.type.trim().toLowerCase();
+        acc[type] = (acc[type] ?? 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+      const repeatedIds = route
+        .filter((activity) => (typeCounts[activity.type.trim().toLowerCase()] ?? 0) > 1)
+        .map((activity) => activity.id);
+      if (varietyWeighted > 0) {
+        const ids = repeatedIds.length > 0 ? repeatedIds : route.map((activity) => activity.id);
+        const each = varietyWeighted / ids.length;
+        ids.forEach((id) => addToActivity(id, "variety", each));
+      }
+
+      const slotHours: Record<"morning" | "afternoon" | "evening", number> = {
+        morning: 0,
+        afternoon: 0,
+        evening: 0,
+      };
+      route.forEach((activity) => {
+        if (activity.bestTimeOfDay === "any") return;
+        slotHours[activity.bestTimeOfDay] += getLoadDurationHours(basePreparedMap as any, activity.id);
+      });
+      const slotOverflowBySlot: Record<"morning" | "afternoon" | "evening", number> = {
+        morning: Math.max(0, slotHours.morning - dayCapacity.slotCapacity.morning),
+        afternoon: Math.max(0, slotHours.afternoon - dayCapacity.slotCapacity.afternoon),
+        evening: Math.max(0, slotHours.evening - dayCapacity.slotCapacity.evening),
+      };
+      totals.slotOverflow =
+        (slotOverflowBySlot.morning + slotOverflowBySlot.afternoon + slotOverflowBySlot.evening) * COST_WEIGHTS.slotOverflow;
+      (["morning", "afternoon", "evening"] as const).forEach((slot) => {
+        const weighted = slotOverflowBySlot[slot] * COST_WEIGHTS.slotOverflow;
+        if (weighted <= 0) return;
+        const activitiesInSlot = route.filter((activity) => activity.bestTimeOfDay === slot);
+        const slotLoad = activitiesInSlot.reduce((sum, activity) => sum + (loadById.get(activity.id) ?? 1), 0);
+        activitiesInSlot.forEach((activity) => {
+          const share = slotLoad > 0 ? (loadById.get(activity.id) ?? 1) / slotLoad : 1 / activitiesInSlot.length;
+          addToActivity(activity.id, "slotOverflow", weighted * share);
+        });
+      });
+
+      const earliestRecommendedMidpointMinutes = route.reduce<number | null>((earliest, activity) => {
+        const midpoint = recommendedWindowMidpointMinutes(activity);
+        if (midpoint == null) return earliest;
+        return earliest == null ? midpoint : Math.min(earliest, midpoint);
+      }, null);
+      const softStartMinutes =
+        earliestRecommendedMidpointMinutes != null
+          ? Math.min(SOFT_DAY_START_MINUTES, earliestRecommendedMidpointMinutes)
+          : SOFT_DAY_START_MINUTES;
+
+      let afterHoursMinutes = 0;
+      let cursor = softStartMinutes;
+      for (let i = 0; i < route.length; i += 1) {
+        const activity = route[i];
+        const durationMinutes = Math.round(getLoadDurationHours(basePreparedMap as any, activity.id) * 60);
+        const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+        const startMinutes = fixedStartMinutes != null ? Math.max(cursor, fixedStartMinutes) : cursor;
+        const endMinutes = startMinutes + durationMinutes;
+        if (i < route.length - 1) {
+          const next = route[i + 1];
+          const commuteMinutes = activityCommuteMinutes(activity as any, next as any, commuteMinutesByPair);
+          const commuteAfterHours = computeAfterHoursMinutes(endMinutes, endMinutes + commuteMinutes);
+          afterHoursMinutes += commuteAfterHours;
+          const weighted = commuteAfterHours * COST_WEIGHTS.commute * Math.max(0, AFTER_HOURS_DRIVE_MULTIPLIER - 1);
+          totals.afterHoursCommute += weighted;
+          addToActivity(activity.id, "afterHoursCommute", weighted / 2);
+          addToActivity(next.id, "afterHoursCommute", weighted / 2);
+          cursor = endMinutes + commuteMinutes;
+        } else {
+          cursor = endMinutes;
+        }
+      }
+
+      const assignedSlotHours: Record<"morning" | "afternoon" | "evening", number> = {
+        morning: 0,
+        afternoon: 0,
+        evening: 0,
+      };
+      let timingCursorMinutes = softStartMinutes;
+      for (let i = 0; i < route.length; i += 1) {
+        const activity = route[i];
+        const durationHours = getLoadDurationHours(basePreparedMap as any, activity.id);
+        const durationMinutes = Math.round(durationHours * 60);
+        const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+        const startMinutes = fixedStartMinutes != null ? Math.max(timingCursorMinutes, fixedStartMinutes) : timingCursorMinutes;
+        const endMinutes = startMinutes + durationMinutes;
+        const midpointHour = (startMinutes + durationMinutes / 2) / 60;
+        const assignedSlot = scoringSlotForHour(midpointHour);
+        assignedSlotHours[assignedSlot] += durationHours;
+
+        if (activity.bestTimeOfDay !== "any") {
+          const mismatch = scoringSlotDistance(activity.bestTimeOfDay, assignedSlot) * durationHours * COST_WEIGHTS.slotMismatch;
+          totals.slotMismatch += mismatch;
+          addToActivity(activity.id, "slotMismatch", mismatch);
+        }
+
+        const recommendedWindowStartMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.start || null);
+        const recommendedWindowEndMinutes = scoringRecommendedWindowLatestStartMinutes(activity as any);
+        let startMissHours = 0;
+        if (recommendedWindowStartMinutes != null && startMinutes < recommendedWindowStartMinutes) {
+          startMissHours = (recommendedWindowStartMinutes - startMinutes) / 60;
+        } else if (recommendedWindowEndMinutes != null && startMinutes > recommendedWindowEndMinutes) {
+          startMissHours = (startMinutes - recommendedWindowEndMinutes) / 60;
+        }
+        const startMissWeighted = startMissHours * COST_WEIGHTS.recommendedStartMiss;
+        totals.recommendedStartMiss += startMissWeighted;
+        addToActivity(activity.id, "recommendedStartMiss", startMissWeighted);
+
+        const daylightHours =
+          activity.daylightPreference === "daylight_only"
+            ? Math.max(0, (endMinutes - DEFAULT_DAYLIGHT_END_MINUTES) / 60)
+            : 0;
+        const daylightWeighted = daylightHours * COST_WEIGHTS.daylightViolation;
+        totals.daylightViolation += daylightWeighted;
+        addToActivity(activity.id, "daylightViolation", daylightWeighted);
+
+        if (i < route.length - 1) {
+          const next = route[i + 1];
+          timingCursorMinutes = endMinutes + activityCommuteMinutes(activity as any, next as any, commuteMinutesByPair);
+        } else {
+          timingCursorMinutes = endMinutes;
+        }
+      }
+
+      const emptySlotHours =
+        Math.max(0, dayCapacity.slotCapacity.morning - assignedSlotHours.morning) +
+        Math.max(0, dayCapacity.slotCapacity.afternoon - assignedSlotHours.afternoon) +
+        Math.max(0, dayCapacity.slotCapacity.evening - assignedSlotHours.evening);
+      totals.emptySlot = emptySlotHours * COST_WEIGHTS.emptySlot;
+      route.forEach((activity) => {
+        addToActivity(activity.id, "emptySlot", totals.emptySlot * loadShare(activity.id));
+      });
+
+      const overflow = Math.max(0, totalHours - dayCapacity.maxHours);
+      let overflowPenalty =
+        (overflow * COST_WEIGHTS.overflow + overflow * overflow * COST_WEIGHTS.overflowQuadratic) *
+        (dayCapacity.overflowPenaltyMultiplier ?? 1);
+      const fullDayActivities = route.filter((activity) => (basePreparedMap as Map<string, any>).get(activity.id)?.isFullDay);
+      if (fullDayActivities.length > 0) {
+        let nearbyWeightedHours = 0;
+        for (const activity of route) {
+          if ((basePreparedMap as Map<string, any>).get(activity.id)?.isFullDay) continue;
+          const duration = getLoadDurationHours(basePreparedMap as any, activity.id);
+          let minDistance = Number.POSITIVE_INFINITY;
+          for (const fullDayActivity of fullDayActivities) {
+            minDistance = Math.min(minDistance, activityDistanceProxy(activity as any, fullDayActivity as any));
+          }
+          const proximityScore = 1 / (1 + minDistance);
+          nearbyWeightedHours += duration * proximityScore;
+        }
+        overflowPenalty = Math.max(0, overflowPenalty - nearbyWeightedHours * COST_WEIGHTS.fullDayNearbyOverflowRelief);
+      }
+      totals.overflow = overflowPenalty;
+      route.forEach((activity) => {
+        addToActivity(activity.id, "overflow", totals.overflow * loadShare(activity.id));
+      });
+
+      return { route, totals, byActivity, loadById, totalLoad, totalHours };
+    };
+
+    const baseBreakdown = computeTotalCostBreakdown(
+      baseDays as any,
+      basePreparedMap as any,
+      commuteMinutesByPair,
+      dayCapacities
+    );
+
+    const dayDetailsByNumber = new Map<number, ReturnType<typeof computeDayStructuralDetails>>();
+    displayGroupedDays.forEach((day, dayIndex) => {
+      dayDetailsByNumber.set(
+        day.dayNumber,
+        computeDayStructuralDetails(day.activities.map((activity) => activity.id), dayCapacities[dayIndex])
+      );
+    });
+
+    const totalScheduledLoad = displayGroupedDays.reduce((sum, day) => {
+      const details = dayDetailsByNumber.get(day.dayNumber);
+      return sum + Math.max(0, details?.totalLoad ?? 0);
+    }, 0);
+    const totalScheduledLoadSafe = totalScheduledLoad > 0 ? totalScheduledLoad : 1;
+
+    const commuteImbalanceByActivityId: Record<string, number> = {};
+    if (baseBreakdown.commuteImbalancePenalty > 0 && baseBreakdown.dayBreakdowns.length > 0) {
+      const maxCommute = Math.max(...baseBreakdown.dayBreakdowns.map((dayBreakdown) => dayBreakdown.commuteProxy));
+      const maxCommuteDayNumbers = displayGroupedDays
+        .filter((_, index) => baseBreakdown.dayBreakdowns[index]?.commuteProxy === maxCommute)
+        .map((day) => day.dayNumber);
+      const maxCommuteLoad = maxCommuteDayNumbers.reduce((sum, dayNumber) => {
+        const details = dayDetailsByNumber.get(dayNumber);
+        return sum + Math.max(0, details?.totalLoad ?? 0);
+      }, 0);
+      const maxCommuteLoadSafe = maxCommuteLoad > 0 ? maxCommuteLoad : totalScheduledLoadSafe;
+      maxCommuteDayNumbers.forEach((dayNumber) => {
+        const details = dayDetailsByNumber.get(dayNumber);
+        if (!details) return;
+        details.route.forEach((activity) => {
+          const load = details.loadById.get(activity.id) ?? 0;
+          commuteImbalanceByActivityId[activity.id] =
+            (commuteImbalanceByActivityId[activity.id] ?? 0) +
+            baseBreakdown.commuteImbalancePenalty * (load / maxCommuteLoadSafe);
+        });
+      });
+    }
+
+    const nearbySplitByActivityId: Record<string, number> = {};
+    const activityDayIndex = new Map<string, number>();
+    baseDays.forEach((day, dayIndex) => {
+      day.activityIds.forEach((activityId) => {
+        activityDayIndex.set(activityId, dayIndex);
+      });
+    });
+    const preparedEntries = Array.from((basePreparedMap as Map<string, any>).values()) as Array<{
+      activity: SuggestedActivity;
+      loadDurationHours: number;
+    }>;
+    const dayHoursByIndex = baseBreakdown.dayBreakdowns.map((dayBreakdown) => dayBreakdown.totalHours);
+    for (let i = 0; i < preparedEntries.length; i += 1) {
+      for (let j = i + 1; j < preparedEntries.length; j += 1) {
+        const left = preparedEntries[i].activity;
+        const right = preparedEntries[j].activity;
+        const leftDay = activityDayIndex.get(left.id);
+        const rightDay = activityDayIndex.get(right.id);
+        if (leftDay == null || rightDay == null || leftDay === rightDay) continue;
+        const commuteMinutes = activityCommuteMinutes(left as any, right as any, commuteMinutesByPair);
+        if (commuteMinutes > NEARBY_CLUSTER_MAX_COMMUTE_MINUTES) continue;
+        const leftLoad = preparedEntries[i].loadDurationHours;
+        const rightLoad = preparedEntries[j].loadDurationHours;
+        const leftProfile = dayCapacities[leftDay];
+        const rightProfile = dayCapacities[rightDay];
+        const leftTotalIfMerged = (dayHoursByIndex[leftDay] ?? 0) + rightLoad;
+        const rightTotalIfMerged = (dayHoursByIndex[rightDay] ?? 0) + leftLoad;
+        const squeezableOnEitherDay =
+          (leftProfile && leftTotalIfMerged <= leftProfile.maxHours + NEARBY_CLUSTER_SQUEEZE_HOURS) ||
+          (rightProfile && rightTotalIfMerged <= rightProfile.maxHours + NEARBY_CLUSTER_SQUEEZE_HOURS);
+        if (!squeezableOnEitherDay) continue;
+        const proximity = (NEARBY_CLUSTER_MAX_COMMUTE_MINUTES - commuteMinutes) / NEARBY_CLUSTER_MAX_COMMUTE_MINUTES;
+        const pairWeightedPenalty = proximity * (leftLoad + rightLoad) * 0.5 * COST_WEIGHTS.nearbySplit;
+        nearbySplitByActivityId[left.id] = (nearbySplitByActivityId[left.id] ?? 0) + pairWeightedPenalty / 2;
+        nearbySplitByActivityId[right.id] = (nearbySplitByActivityId[right.id] ?? 0) + pairWeightedPenalty / 2;
+      }
+    }
+
+    const durationMismatchByActivityId: Record<string, number> = {};
+    allActivities.forEach((activity) => {
+      const prepared = (basePreparedMap as Map<string, any>).get(activity.id);
+      if (!prepared) return;
+      const recommendedHours = Math.max(0, prepared.durationHours ?? 0);
+      const isScheduled = scheduledActivityIds.has(activity.id);
+      const overrideHours = allocatedHoursByActivityId[activity.id];
+      const scheduledHours = isScheduled
+        ? Math.max(0, Math.min(overrideHours ?? prepared.loadDurationHours ?? 0, recommendedHours))
+        : 0;
+      const underscheduledHours = Math.max(0, recommendedHours - scheduledHours);
+      durationMismatchByActivityId[activity.id] =
+        underscheduledHours * COST_WEIGHTS.underDurationShortfallLinear +
+        underscheduledHours * underscheduledHours * COST_WEIGHTS.underDurationShortfallQuadratic;
+    });
+
+    const debugById: Record<string, { score: number; breakdown: ActivityGroupingCostBreakdown }> = {};
+    allActivities.forEach((activity) => {
+      const isScheduled = scheduledActivityIds.has(activity.id);
+      const dayNumber = displayGroupedDays.find((day) => day.activities.some((a) => a.id === activity.id))?.dayNumber ?? null;
+      const dayDetails = dayNumber != null ? dayDetailsByNumber.get(dayNumber) : null;
+      const activityDetails = dayDetails?.byActivity.get(activity.id) ?? makeZeroComponents();
+      const balanceShare =
+        isScheduled && dayDetails && dayDetails.totalLoad > 0 && dayNumber != null
+          ? ((baseBreakdown.dayBreakdowns[displayGroupedDays.findIndex((day) => day.dayNumber === dayNumber)]?.balancePenalty ?? 0) *
+            ((dayDetails.loadById.get(activity.id) ?? 0) / dayDetails.totalLoad))
+          : 0;
+      const commuteImbalanceShare = commuteImbalanceByActivityId[activity.id] ?? 0;
+      const nearbySplitShare = nearbySplitByActivityId[activity.id] ?? 0;
+      const durationMismatch = durationMismatchByActivityId[activity.id] ?? 0;
+      const total =
+        activityDetails.overflow +
+        activityDetails.commute +
+        activityDetails.afterHoursCommute +
+        activityDetails.longLeg +
+        activityDetails.spread +
+        activityDetails.variety +
+        activityDetails.slotOverflow +
+        activityDetails.slotMismatch +
+        activityDetails.recommendedStartMiss +
+        activityDetails.daylightViolation +
+        activityDetails.emptySlot +
+        balanceShare +
+        commuteImbalanceShare +
+        nearbySplitShare +
+        durationMismatch;
+
+      debugById[activity.id] = {
+        score: total,
+        breakdown: {
+          kind: isScheduled ? "scheduled" : "unscheduled",
+          total,
+          details: isScheduled
+            ? ["Direct component contributions from the current plan (no delta)."]
+            : ["Unscheduled activity: only duration mismatch contributes in the current plan."],
+          lines: [
+            { label: "Overflow", value: activityDetails.overflow },
+            { label: "Commute", value: activityDetails.commute },
+            { label: "After-hours commute", value: activityDetails.afterHoursCommute },
+            { label: "Long-leg", value: activityDetails.longLeg },
+            { label: "Spread", value: activityDetails.spread },
+            { label: "Variety", value: activityDetails.variety },
+            { label: "Slot overflow", value: activityDetails.slotOverflow },
+            { label: "Slot mismatch", value: activityDetails.slotMismatch },
+            { label: "Recommended-start miss", value: activityDetails.recommendedStartMiss },
+            { label: "Daylight violation", value: activityDetails.daylightViolation },
+            { label: "Empty slot", value: activityDetails.emptySlot },
+            { label: "Balance", value: balanceShare },
+            { label: "Commute imbalance", value: commuteImbalanceShare },
+            { label: "Nearby split", value: nearbySplitShare },
+            { label: "Duration mismatch", value: durationMismatch },
+          ],
+        },
+      };
+    });
+
+    return debugById;
+  }, [debugMode, displayGroupedDays, groupedDays, commuteByLeg, tripInfo, allocatedHoursByActivityId]);
+  const activityGroupingCostById = useMemo(() => {
+    const byId: Record<string, number> = {};
+    Object.entries(activityGroupingCostDebugById).forEach(([id, value]) => {
+      byId[id] = value.score;
+    });
+    return byId;
+  }, [activityGroupingCostDebugById]);
+  const activityGroupingCostBreakdownById = useMemo(() => {
+    const byId: Record<string, ActivityGroupingCostBreakdown> = {};
+    Object.entries(activityGroupingCostDebugById).forEach(([id, value]) => {
+      byId[id] = value.breakdown;
+    });
+    return byId;
+  }, [activityGroupingCostDebugById]);
   const rawDayByNumber = useMemo(
     () => new Map(groupedDays.map((day) => [day.dayNumber, day])),
     [groupedDays]
@@ -645,6 +1213,7 @@ export function DayGroupingView({
   const formatCostScore = useCallback((value: number): string => {
     return Number.isFinite(value) ? value.toFixed(2) : "N/A";
   }, []);
+
 
   const isRailFriendlyDestination = useMemo(() => {
     return checkRailFriendlyDestination(destination);
@@ -1139,6 +1708,9 @@ export function DayGroupingView({
                           dragInsertion={dragInsertion}
                           draggedActivity={draggedActivity}
                           sourceDayByActivityId={sourceDayByActivityId}
+                          activityGroupingCostById={activityGroupingCostById}
+                          activityGroupingCostBreakdownById={activityGroupingCostBreakdownById}
+                          onAllocatedHoursChange={handleAllocatedHoursChange}
                           onDayDragOver={handleDayDragOver}
                           onActivityDrop={handleActivityDrop}
                           onActivityDragStart={handleActivityDragStart}
@@ -1182,6 +1754,8 @@ export function DayGroupingView({
                           sourceDayNumber={sourceDayByActivityId[activity.id]}
                           index={index}
                           affordLabel="Auto-placement could not fit this activity."
+                          groupingCostScore={activityGroupingCostById[activity.id] ?? null}
+                          groupingCostBreakdown={activityGroupingCostBreakdownById[activity.id] ?? null}
                           isMoving={movingActivity?.id === activity.id}
                           isCollapsed={collapsedActivityCards[activity.id] ?? true}
                           debugMode={debugMode}

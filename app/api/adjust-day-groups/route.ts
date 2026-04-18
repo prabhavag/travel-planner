@@ -5,7 +5,6 @@ import {
   generateDayTheme,
   buildDayCapacityProfiles,
   parseDurationHours,
-  activityLoadFactor,
   isFullDayDuration,
   computeActivityCommuteMatrix,
   annotateDayGroupsWithCostDebug,
@@ -144,7 +143,7 @@ export async function POST(request: NextRequest) {
           {
             activity,
             durationHours,
-            loadDurationHours: Math.min(durationHours, durationHours * activityLoadFactor(activity)),
+            loadDurationHours: durationHours,
             isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
           },
         ] as const;

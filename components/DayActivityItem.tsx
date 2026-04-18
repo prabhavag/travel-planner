@@ -1,10 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { ActivityCard } from "@/components/ActivityCard";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
 import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
+
+export interface ActivityGroupingCostBreakdown {
+    kind: "scheduled" | "unscheduled";
+    total: number;
+    details: string[];
+    lines: Array<{
+        label: string;
+        value: number;
+    }>;
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -37,6 +48,8 @@ interface DayActivityItemProps {
     onMoveUp?: (activityId: string) => void;
     onMoveDown?: (activityId: string) => void;
     allowUnscheduledTarget?: boolean;
+    groupingCostScore?: number | null;
+    groupingCostBreakdown?: ActivityGroupingCostBreakdown | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,12 +83,31 @@ export function DayActivityItem({
     onMoveUp,
     onMoveDown,
     allowUnscheduledTarget = false,
+    groupingCostScore = null,
+    groupingCostBreakdown = null,
 }: DayActivityItemProps) {
     const sourceDay = sourceDayNumber ?? dayNumber;
+    const [showCostBreakdown, setShowCostBreakdown] = useState(false);
+    const groupingCostLabel =
+        groupingCostScore == null
+            ? null
+            : `Cost score ${groupingCostScore.toFixed(2)}`;
 
     // ── "Change Day" button shown in the card header ────────────────────────
     const cardHeaderActions = (
         <div className="flex items-center gap-1">
+            {debugMode && groupingCostLabel ? (
+                <button
+                    type="button"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setShowCostBreakdown((prev) => !prev);
+                    }}
+                    className="rounded border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700 hover:bg-slate-200"
+                >
+                    {groupingCostLabel}
+                </button>
+            ) : null}
             {onMoveUp && onMoveDown ? (
                 <>
                     <Button
@@ -192,6 +224,22 @@ export function DayActivityItem({
                     <Button variant="outline" size="sm" onClick={onMoveCancel} className="h-8 px-2 text-[10px]">
                         Cancel
                     </Button>
+                </div>
+            ) : null}
+            {debugMode && showCostBreakdown && groupingCostBreakdown ? (
+                <div className="mt-3 space-y-1 rounded-md border border-slate-300 bg-slate-50 p-2 text-[11px] leading-4 text-slate-700">
+                    <p className="font-semibold uppercase tracking-wide text-slate-800">
+                        Cost Breakdown ({groupingCostBreakdown.kind})
+                    </p>
+                    {groupingCostBreakdown.details.map((detail, detailIndex) => (
+                        <p key={`cost-breakdown-detail-${activity.id}-${detailIndex}`}>{detail}</p>
+                    ))}
+                    {groupingCostBreakdown.lines.map((line, lineIndex) => (
+                        <p key={`cost-breakdown-line-${activity.id}-${lineIndex}`}>
+                            {line.label}: {line.value.toFixed(2)}
+                        </p>
+                    ))}
+                    <p className="font-semibold text-slate-800">Total: {groupingCostBreakdown.total.toFixed(2)}</p>
                 </div>
             ) : null}
 

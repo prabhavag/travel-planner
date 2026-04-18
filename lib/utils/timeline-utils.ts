@@ -315,21 +315,6 @@ export function recommendedWindowMidpointMinutes(activity: SuggestedActivity): n
 }
 
 /**
- * A scale factor applied to an activity's duration when it has a very early
- * fixed start time (e.g. sunrise). Reduces the effective hours to avoid
- * over-filling the rest of the day.
- */
-export function activityLoadFactor(activity: SuggestedActivity): number {
-    if (activity.isDurationFlexible === false) return 1;
-    if (!activity.isFixedStartTime) return 1;
-    const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
-    if (fixedStartMinutes != null && fixedStartMinutes <= 7 * 60) return 0.7;
-    if ((activity.fixedStartTime || "").toLowerCase() === "sunrise") return 0.7;
-    if (fixedStartMinutes == null && activity.bestTimeOfDay === "morning") return 0.7;
-    return 1;
-}
-
-/**
  * Format the recommended start window as a clock range string,
  * e.g. "8:00 AM-10:00 AM". Returns null if the window is not defined.
  */
