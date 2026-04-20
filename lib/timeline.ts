@@ -1,13 +1,34 @@
+export const TIMELINE_VISIT_PROBABILITY_THRESHOLD = 0.6;
+export const TIMELINE_TOP_CANDIDATE_PROBABILITY_THRESHOLD = 0.75;
+
+export type TimelinePlaceCategory =
+  | "Food & Drink"
+  | "Shopping"
+  | "Hotels"
+  | "Attractions"
+  | "Sports"
+  | "Airports"
+  | "Culture"
+  | "Other";
+
+export type TimelineMapView = "cities" | "trips" | "countries";
+
+export type TimelineMapPoints = Record<TimelineMapView, TimelineMapPoint[]> & {
+  places: TimelineMapPoint[];
+};
+
 export interface TimelineVisit {
+  id: string;
   key: string;
-  placeId: string | null;
-  name: string | null;
+  placeId: string;
   semanticType: string | null;
   lat: number;
   lng: number;
   startTime: string | null;
   endTime: string | null;
   durationMinutes: number;
+  visitProbability: number;
+  candidateProbability: number;
 }
 
 export interface TimelineAnalysisRequest {
@@ -19,18 +40,91 @@ export interface TimelineMapPoint {
   lat: number;
   lng: number;
   name: string;
-  kind: "local" | "regional" | "travel";
+  kind: "place" | "city" | "trip" | "country";
+  description: string;
+  color: string;
   visitCount: number;
   totalDurationMinutes: number;
   identified: boolean;
 }
 
-export interface TimelineVisitedPlace {
+export interface TimelinePlaceSummary {
+  placeId: string;
   name: string;
+  category: TimelinePlaceCategory;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  countryCode: string | null;
+  formattedAddress: string | null;
   lat: number;
   lng: number;
   visitCount: number;
   totalDurationMinutes: number;
+  firstVisitedAt: string | null;
+  lastVisitedAt: string | null;
+  types: string[];
+}
+
+export interface TimelineCitySummary {
+  id: string;
+  city: string;
+  region: string | null;
+  country: string | null;
+  countryCode: string | null;
+  lat: number;
+  lng: number;
+  visitCount: number;
+  totalDurationMinutes: number;
+  placeCount: number;
+  tripCount: number;
+  firstVisitedAt: string | null;
+  lastVisitedAt: string | null;
+  categories: TimelinePlaceCategory[];
+}
+
+export interface TimelineCountrySummary {
+  id: string;
+  country: string;
+  countryCode: string | null;
+  lat: number;
+  lng: number;
+  visitCount: number;
+  totalDurationMinutes: number;
+  cityCount: number;
+  placeCount: number;
+  tripCount: number;
+  firstVisitedAt: string | null;
+  lastVisitedAt: string | null;
+}
+
+export interface TimelineTripSummary {
+  id: string;
+  label: string;
+  startTime: string | null;
+  endTime: string | null;
+  monthLabel: string | null;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  countryCode: string | null;
+  lat: number;
+  lng: number;
+  visitCount: number;
+  placeCount: number;
+  totalDurationMinutes: number;
+  durationHours: number;
+  cities: string[];
+  categories: TimelinePlaceCategory[];
+  topPlaces: string[];
+}
+
+export interface TimelineVerificationCheck {
+  id: string;
+  label: string;
+  passed: boolean;
+  actual: string;
+  expected: string;
 }
 
 export interface TimelineAnalysisResponse {
@@ -38,15 +132,19 @@ export interface TimelineAnalysisResponse {
   preferences: string[];
   foodPreferences: string[];
   visitedDestinations: string[];
-  visitedPlaces: TimelineVisitedPlace[];
-  localSignals: string[];
-  travelSignals: string[];
-  mapPoints: TimelineMapPoint[];
+  places: TimelinePlaceSummary[];
+  cities: TimelineCitySummary[];
+  countries: TimelineCountrySummary[];
+  trips: TimelineTripSummary[];
+  mapPoints: TimelineMapPoints;
+  verification: {
+    checks: TimelineVerificationCheck[];
+  };
   stats: {
     visitCount: number;
-    recurringPlaceCount: number;
-    localPlaceCount: number;
-    travelPlaceCount: number;
+    placeCount: number;
+    cityCount: number;
+    countryCount: number;
     tripCount: number;
   };
 }
@@ -64,6 +162,10 @@ function toNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function toNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function toIsoString(value: unknown): string | null {
@@ -84,35 +186,16 @@ function toIsoString(value: unknown): string | null {
 }
 
 function parseCoordinatePair(value: unknown): { lat: number; lng: number } | null {
-  if (typeof value === "string") {
-    const match = value.match(/geo:([-\d.]+),([-\d.]+)/);
-    if (!match) return null;
-    const lat = Number(match[1]);
-    const lng = Number(match[2]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    return { lat, lng };
-  }
+  if (typeof value !== "string") return null;
 
-  if (!isRecord(value)) return null;
+  const match = value.match(/^geo:([-\d.]+),([-\d.]+)$/i);
+  if (!match) return null;
 
-  const lat =
-    toNumber(value.lat) ??
-    toNumber(value.latitude) ??
-    (toNumber(value.latitudeE7) != null ? Number(toNumber(value.latitudeE7)) / 1e7 : null);
-  const lng =
-    toNumber(value.lng) ??
-    toNumber(value.longitude) ??
-    (toNumber(value.longitudeE7) != null ? Number(toNumber(value.longitudeE7)) / 1e7 : null);
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
-  if (lat != null && lng != null) {
-    return { lat, lng };
-  }
-
-  if ("latLng" in value) {
-    return parseCoordinatePair(value.latLng);
-  }
-
-  return null;
+  return { lat, lng };
 }
 
 function parseDurationMinutes(startTime: string | null, endTime: string | null): number {
@@ -120,100 +203,50 @@ function parseDurationMinutes(startTime: string | null, endTime: string | null):
   const start = new Date(startTime);
   const end = new Date(endTime);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+
   const diffMs = end.getTime() - start.getTime();
   if (diffMs <= 0) return 0;
   return Math.round(diffMs / (1000 * 60));
 }
 
-function buildTimelineVisit(
-  placeId: string | null,
-  coordinates: { lat: number; lng: number } | null,
-  name: string | null,
-  semanticType: string | null,
-  startTime: string | null,
-  endTime: string | null
-): TimelineVisit | null {
-  if (!coordinates) return null;
+function buildTimelineVisit(entry: UnknownRecord): TimelineVisit | null {
+  const visit = isRecord(entry.visit) ? entry.visit : null;
+  const candidate = visit && isRecord(visit.topCandidate) ? visit.topCandidate : null;
+  if (!visit || !candidate) return null;
 
-  const normalizedName = typeof name === "string" && name.trim() ? name.trim() : null;
-  const normalizedSemanticType =
-    typeof semanticType === "string" && semanticType.trim() ? semanticType.trim() : null;
-  const key = placeId || `coord:${coordinates.lat.toFixed(5)},${coordinates.lng.toFixed(5)}`;
+  const visitProbability = toNumber(visit.probability);
+  const candidateProbability = toNumber(candidate.probability);
+  const placeId = toNonEmptyString(candidate.placeID) ?? toNonEmptyString(candidate.placeId);
+  const coordinates = parseCoordinatePair(candidate.placeLocation);
+
+  if (
+    visitProbability == null ||
+    visitProbability <= TIMELINE_VISIT_PROBABILITY_THRESHOLD ||
+    candidateProbability == null ||
+    candidateProbability <= TIMELINE_TOP_CANDIDATE_PROBABILITY_THRESHOLD ||
+    !placeId ||
+    !coordinates
+  ) {
+    return null;
+  }
+
+  const startTime = toIsoString(entry.startTime) ?? toIsoString(visit.startTime);
+  const endTime = toIsoString(entry.endTime) ?? toIsoString(visit.endTime);
+  const id = `${placeId}:${startTime ?? endTime ?? "unknown"}`;
 
   return {
-    key,
+    id,
+    key: placeId,
     placeId,
-    name: normalizedName,
-    semanticType: normalizedSemanticType,
+    semanticType: toNonEmptyString(candidate.semanticType),
     lat: coordinates.lat,
     lng: coordinates.lng,
     startTime,
     endTime,
     durationMinutes: parseDurationMinutes(startTime, endTime),
+    visitProbability,
+    candidateProbability,
   };
-}
-
-function extractDirectVisit(entry: UnknownRecord): TimelineVisit | null {
-  if (!isRecord(entry.visit)) return null;
-
-  const visit = entry.visit;
-  const candidate = isRecord(visit.topCandidate) ? visit.topCandidate : null;
-  const coordinates =
-    parseCoordinatePair(candidate?.placeLocation) ??
-    parseCoordinatePair(visit.placeLocation) ??
-    parseCoordinatePair(candidate?.location) ??
-    parseCoordinatePair(visit.location);
-
-  return buildTimelineVisit(
-    (typeof candidate?.placeID === "string" && candidate.placeID) ||
-      (typeof candidate?.placeId === "string" && candidate.placeId) ||
-      (typeof visit.placeId === "string" && visit.placeId) ||
-      null,
-    coordinates,
-    (typeof candidate?.name === "string" && candidate.name) ||
-      (typeof visit.name === "string" && visit.name) ||
-      null,
-    (typeof candidate?.semanticType === "string" && candidate.semanticType) ||
-      (typeof visit.semanticType === "string" && visit.semanticType) ||
-      null,
-    toIsoString(entry.startTime) ?? toIsoString(visit.startTime),
-    toIsoString(entry.endTime) ?? toIsoString(visit.endTime)
-  );
-}
-
-function extractPlaceVisit(entry: UnknownRecord): TimelineVisit | null {
-  if (!isRecord(entry.placeVisit)) return null;
-
-  const placeVisit = entry.placeVisit;
-  const location = isRecord(placeVisit.location) ? placeVisit.location : null;
-  const duration = isRecord(placeVisit.duration) ? placeVisit.duration : null;
-  const candidateLocations = Array.isArray(placeVisit.otherCandidateLocations)
-    ? placeVisit.otherCandidateLocations.filter(isRecord)
-    : [];
-  const fallbackCandidate = candidateLocations[0] ?? null;
-  const coordinates =
-    parseCoordinatePair(location) ??
-    parseCoordinatePair(fallbackCandidate) ??
-    parseCoordinatePair(location?.latLng) ??
-    null;
-
-  return buildTimelineVisit(
-    (typeof location?.placeId === "string" && location.placeId) ||
-      (typeof location?.placeID === "string" && location.placeID) ||
-      (typeof fallbackCandidate?.placeId === "string" && fallbackCandidate.placeId) ||
-      null,
-    coordinates,
-    (typeof location?.name === "string" && location.name) ||
-      (typeof location?.address === "string" && location.address) ||
-      null,
-    (typeof location?.semanticType === "string" && location.semanticType) || null,
-    toIsoString(duration?.startTimestamp) ??
-      toIsoString(duration?.startTimestampMs) ??
-      toIsoString(placeVisit.startTime),
-    toIsoString(duration?.endTimestamp) ??
-      toIsoString(duration?.endTimestampMs) ??
-      toIsoString(placeVisit.endTime)
-  );
 }
 
 function getTimelineEntries(payload: unknown): UnknownRecord[] {
@@ -231,15 +264,11 @@ function getTimelineEntries(payload: unknown): UnknownRecord[] {
     return payload.semanticSegments.filter(isRecord);
   }
 
-  if (Array.isArray(payload.locations)) {
-    return payload.locations.filter(isRecord);
-  }
-
   return [];
 }
 
 export function extractTimelineVisits(payload: unknown): TimelineVisit[] {
   return getTimelineEntries(payload)
-    .map((entry) => extractDirectVisit(entry) ?? extractPlaceVisit(entry))
+    .map((entry) => buildTimelineVisit(entry))
     .filter((visit): visit is TimelineVisit => Boolean(visit));
 }

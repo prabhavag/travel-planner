@@ -6,9 +6,14 @@ function isTimelineVisit(value: unknown): value is TimelineVisit {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return (
+    typeof candidate.id === "string" &&
     typeof candidate.key === "string" &&
+    typeof candidate.placeId === "string" &&
     typeof candidate.lat === "number" &&
-    typeof candidate.lng === "number"
+    typeof candidate.lng === "number" &&
+    typeof candidate.durationMinutes === "number" &&
+    typeof candidate.visitProbability === "number" &&
+    typeof candidate.candidateProbability === "number"
   );
 }
 

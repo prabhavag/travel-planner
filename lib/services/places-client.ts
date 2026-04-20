@@ -1,8 +1,15 @@
-import fs from "fs";
-import os from "os";
-import path from "path";
 import { Client } from "@googlemaps/google-maps-services-js";
 import type { Coordinates } from "@/lib/models/travel-plan";
+import {
+  buildCachedPlaceInfoFromPlaceDetails,
+  buildCachedPlaceInfoFromSearchResult,
+  extractLatLngFromGeometry,
+  getCachedPlaceInfo,
+  setCachedPlaceInfo,
+  type CachedPlaceAddressComponent,
+  type CachedPlaceInfo,
+  type CachedPlacePhoto,
+} from "@/lib/services/place-info-cache";
 
 export interface PlaceResult {
   name: string;
@@ -28,7 +35,8 @@ export interface PlaceDetails {
   price_level?: number;
   types?: string[];
   geometry?: unknown;
-  photos?: Array<{ photo_reference: string }>;
+  address_components?: CachedPlaceAddressComponent[];
+  photos?: CachedPlacePhoto[];
 }
 
 export interface ReverseGeocodeResult {
@@ -37,14 +45,10 @@ export interface ReverseGeocodeResult {
   adminAreaLevel1?: string;
   adminAreaLevel2?: string;
   country?: string;
+  countryCode?: string;
   featureName?: string;
   parkName?: string;
   types: string[];
-}
-
-interface PlaceDetailsCacheEntry {
-  cachedAt: number;
-  details: PlaceDetails | null;
 }
 
 interface PlaceSearchCacheEntry {
@@ -60,13 +64,8 @@ interface ReverseGeocodeCacheEntry {
 class PlacesClient {
   private client: Client;
   private apiKey: string;
-  private placeDetailsCache = new Map<string, PlaceDetailsCacheEntry>();
   private placeSearchCache = new Map<string, PlaceSearchCacheEntry>();
   private reverseGeocodeCache = new Map<string, ReverseGeocodeCacheEntry>();
-  private cacheLoaded = false;
-  private readonly detailsCachePath: string;
-  private readonly searchCachePath: string;
-  private readonly reverseGeocodeCachePath: string;
   private readonly cacheTtlMs = 1000 * 60 * 60 * 24 * 30;
   private readonly searchCacheTtlMs = 1000 * 60 * 60 * 24 * 7;
   private readonly reverseGeocodeCacheVersion = 3;
@@ -83,111 +82,29 @@ class PlacesClient {
     }
 
     this.client = new Client({});
-    const basePath = process.env.PLACES_CACHE_PATH || path.join(os.tmpdir(), "travel-planner-place-details-cache.json");
-    this.detailsCachePath = basePath;
-    this.searchCachePath = basePath.replace(/\.json$/i, ".search.json");
-    this.reverseGeocodeCachePath = basePath.replace(/\.json$/i, ".geocode.json");
   }
 
-  private loadCache(): void {
-    if (this.cacheLoaded) return;
-    this.cacheLoaded = true;
-
-    try {
-      if (fs.existsSync(this.detailsCachePath)) {
-        const raw = fs.readFileSync(this.detailsCachePath, "utf8");
-        if (raw.trim()) {
-          const parsed = JSON.parse(raw) as Record<string, PlaceDetailsCacheEntry>;
-          for (const [placeId, entry] of Object.entries(parsed)) {
-            if (!entry || typeof entry.cachedAt !== "number") continue;
-            this.placeDetailsCache.set(placeId, {
-              cachedAt: entry.cachedAt,
-              details: entry.details ?? null,
-            });
-          }
-        }
-      }
-
-      if (fs.existsSync(this.searchCachePath)) {
-        const raw = fs.readFileSync(this.searchCachePath, "utf8");
-        if (raw.trim()) {
-          const parsed = JSON.parse(raw) as Record<string, PlaceSearchCacheEntry>;
-          for (const [cacheKey, entry] of Object.entries(parsed)) {
-            if (!entry || typeof entry.cachedAt !== "number" || !Array.isArray(entry.results)) continue;
-            this.placeSearchCache.set(cacheKey, {
-              cachedAt: entry.cachedAt,
-              results: entry.results,
-            });
-          }
-        }
-      }
-
-      if (fs.existsSync(this.reverseGeocodeCachePath)) {
-        const raw = fs.readFileSync(this.reverseGeocodeCachePath, "utf8");
-        if (raw.trim()) {
-          const parsed = JSON.parse(raw) as Record<string, ReverseGeocodeCacheEntry>;
-          for (const [cacheKey, entry] of Object.entries(parsed)) {
-            if (!entry || typeof entry.cachedAt !== "number") continue;
-            this.reverseGeocodeCache.set(cacheKey, {
-              cachedAt: entry.cachedAt,
-              result: entry.result ?? null,
-            });
-          }
-        }
-      }
-    } catch (error) {
-      console.warn("Failed to load Places cache:", (error as Error).message);
-    }
-  }
-
-  private persistDetailsCache(): void {
-    try {
-      const serialized = JSON.stringify(Object.fromEntries(this.placeDetailsCache), null, 2);
-      fs.writeFileSync(this.detailsCachePath, serialized, "utf8");
-    } catch (error) {
-      console.warn("Failed to persist Places details cache:", (error as Error).message);
-    }
-  }
-
-  private persistSearchCache(): void {
-    try {
-      const serialized = JSON.stringify(Object.fromEntries(this.placeSearchCache), null, 2);
-      fs.writeFileSync(this.searchCachePath, serialized, "utf8");
-    } catch (error) {
-      console.warn("Failed to persist Places search cache:", (error as Error).message);
-    }
-  }
-
-  private persistReverseGeocodeCache(): void {
-    try {
-      const serialized = JSON.stringify(Object.fromEntries(this.reverseGeocodeCache), null, 2);
-      fs.writeFileSync(this.reverseGeocodeCachePath, serialized, "utf8");
-    } catch (error) {
-      console.warn("Failed to persist reverse geocode cache:", (error as Error).message);
-    }
-  }
-
-  private getCachedPlaceDetails(placeId: string): PlaceDetails | null | undefined {
-    this.loadCache();
-    const entry = this.placeDetailsCache.get(placeId);
-    if (!entry) return undefined;
-    if (Date.now() - entry.cachedAt > this.cacheTtlMs) {
-      this.placeDetailsCache.delete(placeId);
-      return undefined;
-    }
-    if (entry.details == null) {
-      return undefined;
-    }
-    return entry.details;
-  }
-
-  private setCachedPlaceDetails(placeId: string, details: PlaceDetails | null): void {
-    this.loadCache();
-    this.placeDetailsCache.set(placeId, {
-      cachedAt: Date.now(),
-      details,
-    });
-    this.persistDetailsCache();
+  private buildPlaceDetailsFromCache(info: CachedPlaceInfo): PlaceDetails {
+    return {
+      name: info.name,
+      formatted_address: info.formattedAddress || undefined,
+      formatted_phone_number: info.formattedPhoneNumber || undefined,
+      website: info.website || undefined,
+      rating: info.rating ?? undefined,
+      user_ratings_total: info.userRatingsTotal ?? undefined,
+      opening_hours_text: info.openingHoursText || undefined,
+      editorial_summary: info.editorialSummary || undefined,
+      price_level: info.priceLevel ?? undefined,
+      types: info.types,
+      geometry: {
+        location: {
+          lat: info.lat,
+          lng: info.lng,
+        },
+      },
+      address_components: info.addressComponents.length > 0 ? info.addressComponents : undefined,
+      photos: info.photos.length > 0 ? info.photos : undefined,
+    };
   }
 
   private buildSearchCacheKey(
@@ -198,15 +115,15 @@ class PlacesClient {
     options: {
       preferTextSearch?: boolean;
       region?: string;
-    }
+    },
   ): string {
     return JSON.stringify({
       query: query.trim().toLowerCase(),
       location: location
         ? {
-          lat: Number(location.lat.toFixed(4)),
-          lng: Number(location.lng.toFixed(4)),
-        }
+            lat: Number(location.lat.toFixed(4)),
+            lng: Number(location.lng.toFixed(4)),
+          }
         : null,
       radius,
       placeType,
@@ -216,7 +133,6 @@ class PlacesClient {
   }
 
   private getCachedSearchResults(cacheKey: string): PlaceResult[] | undefined {
-    this.loadCache();
     const entry = this.placeSearchCache.get(cacheKey);
     if (!entry) return undefined;
     if (Date.now() - entry.cachedAt > this.searchCacheTtlMs) {
@@ -227,12 +143,10 @@ class PlacesClient {
   }
 
   private setCachedSearchResults(cacheKey: string, results: PlaceResult[]): void {
-    this.loadCache();
     this.placeSearchCache.set(cacheKey, {
       cachedAt: Date.now(),
       results,
     });
-    this.persistSearchCache();
   }
 
   private buildReverseGeocodeCacheKey(location: Coordinates): string {
@@ -244,26 +158,27 @@ class PlacesClient {
   }
 
   private getCachedReverseGeocode(cacheKey: string): ReverseGeocodeResult | null | undefined {
-    this.loadCache();
     const entry = this.reverseGeocodeCache.get(cacheKey);
     if (!entry) return undefined;
     if (Date.now() - entry.cachedAt > this.cacheTtlMs) {
       this.reverseGeocodeCache.delete(cacheKey);
       return undefined;
     }
-    if (entry.result == null) {
-      return undefined;
-    }
     return entry.result;
   }
 
   private setCachedReverseGeocode(cacheKey: string, result: ReverseGeocodeResult | null): void {
-    this.loadCache();
     this.reverseGeocodeCache.set(cacheKey, {
       cachedAt: Date.now(),
       result,
     });
-    this.persistReverseGeocodeCache();
+  }
+
+  private rememberSearchResults(results: PlaceResult[]): void {
+    results.forEach((result) => {
+      if (!result.place_id) return;
+      setCachedPlaceInfo(result.place_id, buildCachedPlaceInfoFromSearchResult(result));
+    });
   }
 
   async searchPlaces(
@@ -274,7 +189,7 @@ class PlacesClient {
     options: {
       preferTextSearch?: boolean;
       region?: string;
-    } = {}
+    } = {},
   ): Promise<PlaceResult[]> {
     const cleanQuery = query.replace(/[^\x20-\x7E]/g, "").trim();
     const cacheKey = this.buildSearchCacheKey(cleanQuery, location, radius, placeType, options);
@@ -282,6 +197,7 @@ class PlacesClient {
     if (cached) {
       return cached;
     }
+
     try {
       const useTextSearch = !location || options.preferTextSearch;
       if (useTextSearch) {
@@ -299,16 +215,16 @@ class PlacesClient {
         const response = await this.client.textSearch({
           params: params as unknown as Parameters<typeof this.client.textSearch>[0]["params"],
         });
-        const results = this._processResults(response.data.results || []);
+        const results = this.processResults(response.data.results || []);
         this.setCachedSearchResults(cacheKey, results);
+        this.rememberSearchResults(results);
         return results;
       }
 
-      // Nearby search
       const params: Record<string, unknown> = {
         key: this.apiKey,
-        location: location,
-        radius: radius,
+        location,
+        radius,
         keyword: cleanQuery,
       };
       if (placeType) params.type = placeType;
@@ -316,11 +232,18 @@ class PlacesClient {
       const response = await this.client.placesNearby({
         params: params as unknown as Parameters<typeof this.client.placesNearby>[0]["params"],
       });
-      const results = this._processResults(response.data.results || []);
+      const results = this.processResults(response.data.results || []);
       this.setCachedSearchResults(cacheKey, results);
+      this.rememberSearchResults(results);
       return results;
     } catch (error) {
-      const axiosError = error as any;
+      const axiosError = error as {
+        message?: string;
+        response?: {
+          status?: number;
+          data?: unknown;
+        };
+      };
       const status = axiosError.response?.status;
       const message = axiosError.message;
       const data = axiosError.response?.data;
@@ -328,16 +251,16 @@ class PlacesClient {
       console.error(`Error searching places for '${cleanQuery}':`, {
         status,
         message,
-        data: data ? (typeof data === 'string' ? data.substring(0, 200) : data) : 'No response data'
+        data: data ? (typeof data === "string" ? data.substring(0, 200) : data) : "No response data",
       });
 
       return [];
     }
   }
 
-  private _processResults(results: unknown[]): PlaceResult[] {
+  private processResults(results: unknown[]): PlaceResult[] {
     return results.slice(0, 10).map((place: unknown) => {
-      const p = place as {
+      const candidate = place as {
         name: string;
         place_id: string;
         types: string[];
@@ -348,23 +271,27 @@ class PlacesClient {
         formatted_address?: string;
         price_level?: number;
       };
+
       return {
-        name: p.name,
-        place_id: p.place_id,
-        types: p.types,
-        rating: p.rating || 0.0,
-        user_ratings_total: p.user_ratings_total || 0,
-        location: p.geometry.location,
-        vicinity: p.vicinity || p.formatted_address || "",
-        price_level: p.price_level,
+        name: candidate.name,
+        place_id: candidate.place_id,
+        types: candidate.types,
+        rating: candidate.rating || 0,
+        user_ratings_total: candidate.user_ratings_total || 0,
+        location: candidate.geometry.location,
+        vicinity: candidate.vicinity || candidate.formatted_address || "",
+        price_level: candidate.price_level,
       };
     });
   }
 
   async getPlaceDetails(placeId: string): Promise<PlaceDetails | null> {
-    const cached = this.getCachedPlaceDetails(placeId);
-    if (cached !== undefined) {
-      return cached;
+    const cached = getCachedPlaceInfo(placeId);
+    if (cached?.hasDetails) {
+      return this.buildPlaceDetailsFromCache(cached);
+    }
+    if (cached === null) {
+      return null;
     }
 
     try {
@@ -373,6 +300,7 @@ class PlacesClient {
           place_id: placeId,
           key: this.apiKey,
           fields: [
+            "address_components",
             "name",
             "formatted_address",
             "formatted_phone_number",
@@ -384,13 +312,15 @@ class PlacesClient {
             "price_level",
             "types",
             "geometry",
-            // "photos",
           ],
         },
       });
 
       const result = response.data.result;
-      if (!result) return null;
+      if (!result) {
+        return null;
+      }
+
       const weekdayText = Array.isArray(result.opening_hours?.weekday_text)
         ? result.opening_hours.weekday_text.filter((value): value is string => typeof value === "string")
         : [];
@@ -399,7 +329,7 @@ class PlacesClient {
           ? result.editorial_summary.overview
           : undefined;
 
-      const details = {
+      const details: PlaceDetails = {
         name: result.name || "",
         formatted_address: result.formatted_address,
         formatted_phone_number: result.formatted_phone_number,
@@ -412,11 +342,24 @@ class PlacesClient {
         price_level: result.price_level,
         types: result.types,
         geometry: result.geometry,
-        photos: (result.photos || []).slice(0, 3).map((p) => ({
-          photo_reference: p.photo_reference,
+        address_components: Array.isArray(result.address_components)
+          ? result.address_components.map((component) => ({
+              long_name: component.long_name,
+              short_name: component.short_name,
+              types: Array.isArray(component.types) ? component.types : [],
+            }))
+          : undefined,
+        photos: (result.photos || []).slice(0, 3).map((photo) => ({
+          photo_reference: photo.photo_reference,
         })),
       };
-      this.setCachedPlaceDetails(placeId, details);
+
+      const fallbackCoordinates = extractLatLngFromGeometry(result.geometry);
+      const normalized = buildCachedPlaceInfoFromPlaceDetails(placeId, details, fallbackCoordinates || undefined);
+      if (normalized) {
+        setCachedPlaceInfo(placeId, normalized);
+      }
+
       return details;
     } catch (error) {
       console.error("Error getting place details:", (error as Error).message);
@@ -462,6 +405,7 @@ class PlacesClient {
 
         return formattedAddress.split(",")[0]?.trim() || undefined;
       };
+
       const prioritized =
         results.find((result) => hasType(result.types, "locality")) ||
         results.find((result) => hasType(result.types, "postal_town")) ||
@@ -485,10 +429,12 @@ class PlacesClient {
         adminAreaLevel1: getComponent("administrative_area_level_1"),
         adminAreaLevel2: getComponent("administrative_area_level_2"),
         country: getComponent("country"),
+        countryCode: components.find((component) => hasType(component.types, "country"))?.short_name,
         featureName: getResultName(featureResult),
         parkName: getResultName(parkResult),
         types: Array.isArray(prioritized.types) ? prioritized.types : [],
       };
+
       this.setCachedReverseGeocode(cacheKey, result);
       return result;
     } catch (error) {
@@ -504,35 +450,9 @@ class PlacesClient {
 
   async getPlacePhotoUrlsFromId(_placeId: string | null, _maxWidth: number = 400): Promise<string[]> {
     return [];
-    /*
-    if (!placeId) return [];
-    try {
-      const response = await this.client.placeDetails({
-        params: {
-          place_id: placeId,
-          key: this.apiKey,
-          fields: ["photos"],
-        },
-      });
-      const result = response.data.result;
-
-      if (!result || !result.photos || result.photos.length === 0) {
-        return [];
-      }
-
-      return result.photos
-        .slice(0, 3)
-        .map((photo) => this.getPlacePhotoUrl(photo.photo_reference, maxWidth))
-        .filter((url): url is string => Boolean(url));
-    } catch {
-      return [];
-    }
-    */
   }
-
 }
 
-// Export singleton
 let placesClientInstance: PlacesClient | null = null;
 
 export function getPlacesClient(): PlacesClient {

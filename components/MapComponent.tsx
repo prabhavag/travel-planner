@@ -73,6 +73,7 @@ interface Location {
   photoUrl?: string | null;
   timelineId?: string;
   timelineKind?: TimelineMapPoint["kind"];
+  timelineColor?: string;
   timelineVisitCount?: number;
   timelineTotalDurationMinutes?: number;
   timelineIdentified?: boolean;
@@ -102,10 +103,10 @@ interface MapComponentProps {
   selectedActivityIds?: string[];
   groupedDays?: GroupedDay[];
   onActivityClick?: (activityId: string) => void;
-  onGoogleMapsReady?: () => void;
   hoveredActivityId?: string | null;
   highlightedDay?: number | null;
   timelineLocations?: TimelineMapPoint[];
+  timelineLabel?: string;
 }
 
 function formatTimelineDuration(totalMinutes: number): string {
@@ -123,10 +124,9 @@ function formatTimelineDuration(totalMinutes: number): string {
 }
 
 function buildTimelineDescription(point: TimelineMapPoint): string {
-  const parts = [
-    point.kind === "travel" ? "Travel place" : point.kind === "regional" ? "Regional place" : "Local place",
-    `${point.visitCount} ${point.visitCount === 1 ? "visit" : "visits"}`,
-  ];
+  if (point.description) return point.description;
+
+  const parts = [`${point.visitCount} ${point.visitCount === 1 ? "visit" : "visits"}`];
 
   if (point.totalDurationMinutes > 0) {
     parts.push(`${formatTimelineDuration(point.totalDurationMinutes)} total`);
@@ -234,10 +234,10 @@ export default function MapComponent({
   selectedActivityIds,
   groupedDays,
   onActivityClick,
-  onGoogleMapsReady,
   hoveredActivityId,
   highlightedDay,
   timelineLocations,
+  timelineLabel,
 }: MapComponentProps) {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -419,6 +419,7 @@ export default function MapComponent({
           desc: buildTimelineDescription(loc),
           timelineId: loc.id,
           timelineKind: loc.kind,
+          timelineColor: loc.color,
           timelineVisitCount: loc.visitCount,
           timelineTotalDurationMinutes: loc.totalDurationMinutes,
           timelineIdentified: loc.identified,
@@ -514,13 +515,14 @@ export default function MapComponent({
         isActivitySelectionMode={isActivitySelectionMode}
         isTimelineMode={isTimelineOnlyMode}
         onActivityClick={onActivityClick}
-        onGoogleMapsReady={onGoogleMapsReady}
         hoveredActivityId={hoveredActivityId}
         highlightedDay={highlightedDay}
       />
       {isTimelineOnlyMode ? (
         <div className="pointer-events-none absolute bottom-4 left-4 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-white shadow-2xl backdrop-blur">
-          <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-white/65">Visited Places</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-white/65">
+            {timelineLabel ? `${timelineLabel} Map` : "Timeline Map"}
+          </p>
           <p className="mt-1 text-2xl font-semibold leading-none">{locations.length}</p>
         </div>
       ) : null}
@@ -538,7 +540,6 @@ interface GoogleMapContentProps {
   isActivitySelectionMode?: boolean;
   isTimelineMode?: boolean;
   onActivityClick?: (activityId: string) => void;
-  onGoogleMapsReady?: () => void;
   hoveredActivityId?: string | null;
   highlightedDay?: number | null;
 }
@@ -594,7 +595,6 @@ function GoogleMapContent({
   isActivitySelectionMode,
   isTimelineMode,
   onActivityClick,
-  onGoogleMapsReady,
   hoveredActivityId,
   highlightedDay,
 }: GoogleMapContentProps) {
@@ -841,16 +841,6 @@ function GoogleMapContent({
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg.trim())}`;
   }, []);
 
-  const timelineMarkerUrl = useMemo(() => {
-    const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
-        <circle cx="24" cy="24" r="14" fill="#f15946" stroke="#1f1f1f" stroke-width="6" />
-        <circle cx="24" cy="24" r="4.5" fill="#1f1f1f" />
-      </svg>
-    `;
-    return `data:image/svg+xml;utf8,${encodeURIComponent(svg.trim())}`;
-  }, []);
-
   // Get marker icon based on day or selection state
   const getMarkerIcon = (loc: Location): google.maps.Symbol | google.maps.Icon => {
     const isHovered =
@@ -882,19 +872,22 @@ function GoogleMapContent({
     }
 
     if (loc.mode === "timeline") {
-      const baseSize =
-        loc.timelineKind === "travel"
-          ? 22
-          : loc.timelineKind === "regional"
-            ? 20
-            : loc.timelineIdentified
-              ? 18
-              : 16;
-      const size = isHovered ? baseSize + 4 : baseSize;
+      const baseScale =
+        loc.timelineKind === "country"
+          ? 11
+          : loc.timelineKind === "trip"
+            ? 9.5
+            : loc.timelineKind === "city"
+              ? 8.5
+              : 7.5;
+      const visitScale = Math.min(6, Math.log2((loc.timelineVisitCount || 1) + 1) * 2);
       return {
-        url: timelineMarkerUrl,
-        scaledSize: new window.google.maps.Size(size, size),
-        anchor: new window.google.maps.Point(size / 2, size / 2),
+        path: window.google.maps.SymbolPath.CIRCLE,
+        fillColor: loc.timelineColor || "#f15946",
+        fillOpacity: isHovered ? 1 : 0.88,
+        strokeColor: isHovered ? "#ffffff" : "#0f172a",
+        strokeWeight: isHovered ? 2.5 : 1.5,
+        scale: isHovered ? baseScale + visitScale + 2 : baseScale + visitScale,
       };
     }
 
@@ -980,12 +973,6 @@ function GoogleMapContent({
       ? { lat: locations[0].lat, lng: locations[0].lng }
       : destinationCenter || { lat: 37.7749, lng: -122.4194 }; // Default to SF
   }, [mapCenterLat, mapCenterLng, destinationCenter, locations.length]);
-
-  useEffect(() => {
-    if (isLoaded) {
-      onGoogleMapsReady?.();
-    }
-  }, [isLoaded, onGoogleMapsReady]);
 
   if (loadError) {
     return (
@@ -1126,7 +1113,7 @@ function GoogleMapContent({
             onMouseOut={() => setHoveredMarker(null)}
             zIndex={
               loc.mode === "timeline"
-                ? (loc.timelineKind === "travel" ? 2200 : loc.timelineKind === "regional" ? 2000 : 1800)
+                ? (loc.timelineKind === "country" ? 2200 : loc.timelineKind === "trip" ? 2100 : loc.timelineKind === "city" ? 2000 : 1900)
                 : isResearchSelectionMode ? (loc.isSelected ? 2000 : 1000) : 1500
             }
           />

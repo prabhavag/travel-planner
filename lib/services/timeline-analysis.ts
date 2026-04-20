@@ -1,428 +1,156 @@
-import { getPlacesClient, type PlaceDetails, type ReverseGeocodeResult } from "@/lib/services/places-client";
+import {
+  getTimelineCategoryColor,
+  resolveTimelinePlaceInfoMap,
+  type TimelinePlaceInfo,
+} from "@/lib/services/timeline-place-info";
 import type {
   TimelineAnalysisResponse,
+  TimelineCitySummary,
+  TimelineCountrySummary,
   TimelineMapPoint,
-  TimelineVisitedPlace,
+  TimelinePlaceCategory,
+  TimelinePlaceSummary,
+  TimelineTripSummary,
   TimelineVisit,
 } from "@/lib/timeline";
 
-interface AggregatedPlace {
-  key: string;
-  placeId: string | null;
-  lat: number;
-  lng: number;
-  visitCount: number;
-  totalDurationMinutes: number;
-  firstVisitedAt: string | null;
-  lastVisitedAt: string | null;
-  semanticTypeCounts: Map<string, number>;
-  nameCounts: Map<string, number>;
-  distanceFromHomeKm: number;
-  bucket: "home" | "local" | "regional" | "travel";
-  details: PlaceDetails | null;
+const MAX_PLACE_MAP_POINTS = 400;
+const TRIP_BREAK_GAP_HOURS = 72;
+const TRIP_HOME_SETTLE_MINUTES = 240;
+const LOCAL_TRAVEL_RADIUS_KM = 80;
+const MIN_TRIP_DURATION_HOURS = 24;
+const MAX_TRIP_DURATION_DAYS = 45;
+
+type MutablePlaceAccumulator = TimelinePlaceSummary & {
+  categoryCounts: Map<TimelinePlaceCategory, number>;
+};
+
+type MutableCityAccumulator = TimelineCitySummary & {
+  categoryCounts: Map<TimelinePlaceCategory, number>;
+  weight: number;
+};
+
+type MutableCountryAccumulator = TimelineCountrySummary & {
+  weight: number;
+};
+
+interface ResolvedVisit {
+  visit: TimelineVisit;
+  place: TimelinePlaceSummary;
+  cityId: string | null;
+  countryId: string | null;
 }
 
-interface TravelEpisode {
-  startTime: string | null;
-  endTime: string | null;
-  uniquePlaceCount: number;
-  maxDistanceKm: number;
-  visitCount: number;
-  durationHours: number;
-  weekendLike: boolean;
+interface TripBuildContext {
+  homeCityId: string | null;
+  homeCountryCode: string | null;
+  homeLat: number | null;
+  homeLng: number | null;
 }
 
-interface TravelCluster {
-  lat: number;
-  lng: number;
-  totalScore: number;
-  totalDurationMinutes: number;
-  visitCount: number;
-  places: AggregatedPlace[];
+function toTimestamp(value: string | null): number {
+  if (!value) return Number.NaN;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? Number.NaN : date.getTime();
 }
 
-interface ParkCoordinateFallback {
-  canonical: string;
-  lat: number;
-  lng: number;
-  radiusKm: number;
+function compareTimelineTimes(left: string | null, right: string | null): number {
+  const leftTime = toTimestamp(left);
+  const rightTime = toTimestamp(right);
+
+  if (Number.isNaN(leftTime) && Number.isNaN(rightTime)) return 0;
+  if (Number.isNaN(leftTime)) return 1;
+  if (Number.isNaN(rightTime)) return -1;
+  return leftTime - rightTime;
 }
 
-interface CategoryRule {
-  types: string[];
-  signal: string;
-  preference: string;
+function durationHours(startTime: string | null, endTime: string | null): number {
+  const start = toTimestamp(startTime);
+  const end = toTimestamp(endTime);
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return 0;
+  return Math.round(((end - start) / (1000 * 60 * 60)) * 10) / 10;
 }
 
-interface FoodPreferenceRule {
-  typeTokens: string[];
-  textPatterns: RegExp[];
-  preference: string;
-  minScore?: number;
-  minMatchedPlaces?: number;
+function isDisplayableTrip(trip: TimelineTripSummary | null): trip is TimelineTripSummary {
+  if (!trip?.startTime || !trip.endTime) return false;
+
+  const start = toTimestamp(trip.startTime);
+  const end = toTimestamp(trip.endTime);
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return false;
+
+  const durationMs = end - start;
+  const minDurationMs = MIN_TRIP_DURATION_HOURS * 60 * 60 * 1000;
+  const maxDurationMs = MAX_TRIP_DURATION_DAYS * 24 * 60 * 60 * 1000;
+  return durationMs >= minDurationMs && durationMs < maxDurationMs;
 }
 
-const LOCAL_FOOD_RULES: CategoryRule[] = [
-  {
-    types: ["cafe"],
-    signal: "Local habits lean toward cafe-style stops and flexible coffee breaks.",
-    preference: "Enjoys cafe-driven neighborhoods and casual coffee breaks",
-  },
-  {
-    types: ["bakery"],
-    signal: "Bakeries and quick pastry stops appear repeatedly in the local pattern.",
-    preference: "Likes bakeries, dessert stops, and snack-friendly neighborhoods",
-  },
-  {
-    types: ["restaurant", "meal_takeaway", "meal_delivery"],
-    signal: "Repeated local restaurant stops suggest food is part of how you choose where to spend time.",
-    preference: "Likes food-forward itineraries with strong local restaurant options",
-  },
-  {
-    types: ["bar", "night_club"],
-    signal: "Evening venues show up often enough to treat lively neighborhoods as a fit.",
-    preference: "Open to lively evening neighborhoods and bar scenes",
-  },
-  {
-    types: ["supermarket", "grocery_or_supermarket", "farmers_market"],
-    signal: "Food shopping stops suggest markets and ingredient-driven neighborhoods are appealing.",
-    preference: "Interested in markets and food-shopping experiences while traveling",
-  },
-];
+function formatDuration(totalMinutes: number): string {
+  if (totalMinutes < 60) return `${Math.max(1, Math.round(totalMinutes))} min`;
 
-const TRAVEL_RULES: CategoryRule[] = [
-  {
-    types: ["museum", "art_gallery", "tourist_attraction"],
-    signal: "Trips include a recurring mix of landmark and culture-oriented stops.",
-    preference: "Enjoys culture, landmarks, and worthwhile anchor attractions",
-  },
-  {
-    types: ["park", "natural_feature", "campground"],
-    signal: "Outdoor and scenic places recur enough to treat nature access as a real preference.",
-    preference: "Likes scenic outdoor stops, parks, and nature-driven outings",
-  },
-  {
-    types: ["beach"],
-    signal: "Waterfront or beach-oriented destinations show up repeatedly in the travel pattern.",
-    preference: "Drawn to coastlines, waterfronts, and relaxed scenic time",
-  },
-  {
-    types: ["restaurant", "cafe", "bakery", "bar"],
-    signal: "Travel stops consistently include dining-led places, not just attractions.",
-    preference: "Builds trips around strong food neighborhoods and local dining",
-  },
-  {
-    types: ["shopping_mall", "market", "book_store", "department_store"],
-    signal: "Trips repeatedly include browseable retail and market areas.",
-    preference: "Enjoys lively shopping streets, markets, and browseable neighborhoods",
-  },
-  {
-    types: ["spa", "lodging", "rv_park"],
-    signal: "The travel pattern includes comfort-oriented stays rather than nonstop activity only.",
-    preference: "Prefers comfortable bases and a less frantic travel pace",
-  },
-  {
-    types: ["amusement_park", "zoo", "aquarium"],
-    signal: "Trips include popular leisure attractions often enough to keep them in play.",
-    preference: "Open to popular leisure attractions and family-friendly stops",
-  },
-];
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = Math.round(totalMinutes % 60);
+  if (hours < 24) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
 
-const FOOD_CONTEXT_TYPE_TOKENS = new Set([
-  "bakery",
-  "bar",
-  "cafe",
-  "food_court",
-  "grocery_or_supermarket",
-  "market",
-  "meal_delivery",
-  "meal_takeaway",
-  "night_club",
-  "restaurant",
-  "supermarket",
-]);
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+}
 
-const FOOD_CONTEXT_TEXT_PATTERNS = [
-  /\b(bakery|bar|bbq|bistro|brunch|cafe|coffee|dessert|dining|deli|food hall|grill|ice cream|market|restaurant|sushi|taco|tea)\b/i,
-];
+function normalizeLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\w\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-const FOOD_STYLE_RULES: FoodPreferenceRule[] = [
-  {
-    typeTokens: ["cafe"],
-    textPatterns: [/\b(boba|cafe|chai|coffee|espresso|latte|matcha|tea)\b/i],
-    preference: "Returns to coffee shops, tea spots, and cafe-friendly neighborhoods",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["bakery"],
-    textPatterns: [/\b(bakery|dessert|donut|gelato|ice cream|pastry|patisserie|sweet)\b/i],
-    preference: "Likely enjoys bakeries, dessert stops, and easy snack breaks",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["supermarket", "grocery_or_supermarket", "market", "food_court"],
-    textPatterns: [/\b(deli|farmers market|food hall|grocery|market|mercado|supermarket)\b/i],
-    preference: "Interested in markets, food halls, and ingredient-driven neighborhoods",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["bar", "night_club"],
-    textPatterns: [/\b(bar|brewery|cocktail|pub|speakeasy|taproom|wine)\b/i],
-    preference: "Open to bars, breweries, and lively evening food districts",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-];
+function dedupe(values: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
 
-const FOOD_CUISINE_RULES: FoodPreferenceRule[] = [
-  {
-    typeTokens: ["italian_restaurant"],
-    textPatterns: [/\b(italian|osteria|pasta|pizzeria|pizza|trattoria)\b/i],
-    preference: "Often chooses Italian meals, especially pizza and pasta spots",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["japanese_restaurant"],
-    textPatterns: [/\b(hand roll|izakaya|japanese|omakase|ramen|sashimi|sushi|udon|yakitori)\b/i],
-    preference: "Often chooses Japanese food, especially sushi and noodle spots",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["chinese_restaurant"],
-    textPatterns: [/\b(chinese|dim sum|dumpling|hot pot|noodle house|sichuan|szechuan)\b/i],
-    preference: "Frequently picks Chinese food, dumpling spots, or noodle houses",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["korean_restaurant"],
-    textPatterns: [/\b(bibimbap|kbbq|korean|soondubu|tteokbokki)\b/i],
-    preference: "Seems to enjoy Korean food and grill-forward meals",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["mexican_restaurant"],
-    textPatterns: [/\b(birria|burrito|cantina|mezcal|mexican|taqueria|taco)\b/i],
-    preference: "Often goes for Mexican food and taco-driven casual spots",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["indian_restaurant"],
-    textPatterns: [/\b(biryani|chaat|curry|dosa|indian|tandoori)\b/i],
-    preference: "Frequently chooses Indian food and spice-forward casual meals",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["thai_restaurant"],
-    textPatterns: [/\b(khao soi|pad thai|satay|som tum|thai)\b/i],
-    preference: "Shows a recurring preference for Thai food",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["vietnamese_restaurant"],
-    textPatterns: [/\b(bahn mi|banh mi|pho|spring roll|vermicelli|vietnamese)\b/i],
-    preference: "Often chooses Vietnamese food and noodle-heavy casual spots",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["mediterranean_restaurant", "greek_restaurant"],
-    textPatterns: [/\b(falafel|greek|gyro|hummus|kebab|mediterranean|mezze|shawarma)\b/i],
-    preference: "Seems to like Mediterranean, Greek, and Middle Eastern flavors",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["seafood_restaurant"],
-    textPatterns: [/\b(crab|lobster|oyster|seafood|shack)\b/i],
-    preference: "Seems drawn to seafood-focused meals when traveling",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["barbecue_restaurant"],
-    textPatterns: [/\b(barbecue|bbq|brisket|smokehouse)\b/i],
-    preference: "Often picks barbecue or grill-forward meals",
-    minScore: 10,
-    minMatchedPlaces: 2,
-  },
-  {
-    typeTokens: ["vegan_restaurant", "vegetarian_restaurant"],
-    textPatterns: [/\b(plant based|plant-based|vegan|vegetarian)\b/i],
-    preference: "Regularly seeks vegetarian or plant-forward dining options",
-    minScore: 8,
-    minMatchedPlaces: 2,
-  },
-];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const normalized = normalizeLabel(trimmed);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(trimmed);
+  }
 
-const SAFE_SINGLE_WORD_PARK_ALIASES = new Set([
-  "acadia",
-  "biscayne",
-  "congaree",
-  "denali",
-  "everglades",
-  "haleakala",
-  "olympic",
-  "pinnacles",
-  "saguaro",
-  "sequoia",
-  "shenandoah",
-  "yellowstone",
-  "yosemite",
-  "zion",
-]);
+  return deduped;
+}
 
-const US_NATIONAL_PARKS = [
-  "Acadia National Park",
-  "American Samoa National Park",
-  "Arches National Park",
-  "Badlands National Park",
-  "Big Bend National Park",
-  "Biscayne National Park",
-  "Black Canyon of the Gunnison National Park",
-  "Bryce Canyon National Park",
-  "Canyonlands National Park",
-  "Capitol Reef National Park",
-  "Carlsbad Caverns National Park",
-  "Channel Islands National Park",
-  "Congaree National Park",
-  "Crater Lake National Park",
-  "Cuyahoga Valley National Park",
-  "Death Valley National Park",
-  "Denali National Park",
-  "Dry Tortugas National Park",
-  "Everglades National Park",
-  "Gates of the Arctic National Park",
-  "Gateway Arch National Park",
-  "Glacier National Park",
-  "Glacier Bay National Park",
-  "Grand Canyon National Park",
-  "Grand Teton National Park",
-  "Great Basin National Park",
-  "Great Sand Dunes National Park",
-  "Great Smoky Mountains National Park",
-  "Guadalupe Mountains National Park",
-  "Haleakala National Park",
-  "Hawaii Volcanoes National Park",
-  "Hot Springs National Park",
-  "Indiana Dunes National Park",
-  "Isle Royale National Park",
-  "Joshua Tree National Park",
-  "Katmai National Park",
-  "Kenai Fjords National Park",
-  "Kings Canyon National Park",
-  "Kobuk Valley National Park",
-  "Lake Clark National Park",
-  "Lassen Volcanic National Park",
-  "Mammoth Cave National Park",
-  "Mesa Verde National Park",
-  "Mount Rainier National Park",
-  "New River Gorge National Park",
-  "North Cascades National Park",
-  "Olympic National Park",
-  "Petrified Forest National Park",
-  "Pinnacles National Park",
-  "Redwood National Park",
-  "Rocky Mountain National Park",
-  "Saguaro National Park",
-  "Sequoia National Park",
-  "Shenandoah National Park",
-  "Theodore Roosevelt National Park",
-  "Virgin Islands National Park",
-  "Voyageurs National Park",
-  "White Sands National Park",
-  "Wind Cave National Park",
-  "Wrangell-St Elias National Park",
-  "Yellowstone National Park",
-  "Yosemite National Park",
-  "Zion National Park",
-].map((name) => ({
-  canonical: name,
-  aliases: buildParkAliases(name),
-}));
+function safeText(value: string | null | undefined): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
 
-const TRANSIT_OR_PASS_THROUGH_TYPES = new Set([
-  "airport",
-  "bus_station",
-  "car_rental",
-  "electric_vehicle_charging_station",
-  "gas_station",
-  "light_rail_station",
-  "parking",
-  "subway_station",
-  "taxi_stand",
-  "train_station",
-  "transit_station",
-]);
+function buildCityId(city: string | null, region: string | null, countryCode: string | null, country: string | null): string | null {
+  if (!city) return null;
+  return [
+    normalizeLabel(city),
+    normalizeLabel(region || ""),
+    normalizeLabel(countryCode || country || ""),
+  ].join("|");
+}
 
-const DESTINATION_ANCHOR_TYPES = new Set([
-  "amusement_park",
-  "aquarium",
-  "art_gallery",
-  "beach",
-  "campground",
-  "hindu_temple",
-  "lodging",
-  "museum",
-  "natural_feature",
-  "park",
-  "rv_park",
-  "spa",
-  "tourist_attraction",
-  "zoo",
-]);
+function buildCountryId(countryCode: string | null, country: string | null): string | null {
+  if (!country && !countryCode) return null;
+  return normalizeLabel(countryCode || country || "");
+}
 
-const COUNTRY_LABELS = new Set([
-  "australia",
-  "canada",
-  "france",
-  "germany",
-  "india",
-  "ireland",
-  "italy",
-  "japan",
-  "mexico",
-  "new zealand",
-  "singapore",
-  "spain",
-  "uae",
-  "uk",
-  "united arab emirates",
-  "united kingdom",
-  "united states",
-  "usa",
-]);
+function cityDisplayLabel(place: Pick<TimelinePlaceSummary, "city" | "region" | "country">): string | null {
+  if (!place.city) return null;
+  if (place.region) return `${place.city}, ${place.region}`;
+  if (place.country) return `${place.city}, ${place.country}`;
+  return place.city;
+}
 
-const PARK_COORDINATE_FALLBACKS: ParkCoordinateFallback[] = [
-  { canonical: "Yosemite National Park", lat: 37.8651, lng: -119.5383, radiusKm: 45 },
-  { canonical: "Zion National Park", lat: 37.2982, lng: -113.0263, radiusKm: 35 },
-  { canonical: "Grand Teton National Park", lat: 43.7904, lng: -110.6818, radiusKm: 45 },
-  { canonical: "Olympic National Park", lat: 47.8021, lng: -123.6044, radiusKm: 70 },
-  { canonical: "Yellowstone National Park", lat: 44.428, lng: -110.5885, radiusKm: 70 },
-  { canonical: "Mount Rainier National Park", lat: 46.8523, lng: -121.7603, radiusKm: 45 },
-];
-
-const TRAVEL_CLUSTER_RADIUS_KM = 55;
-const MAX_VISITED_DESTINATIONS = 48;
-const MAX_LOCALITY_REVERSE_GEOCODE_SAMPLES = 3;
-const MAX_DESTINATION_CLUSTERS_TO_LABEL = 32;
-const REGION_LIKE_FEATURE_PATTERNS = [
-  /\b(lake|lakes|valley|island|islands|mountain|mountains|beach|coast|coastal|canyon|bay|shore|desert|forest|peninsula|reef|cove|falls|wine country|vineyards?)\b/i,
-];
-const GENERIC_FEATURE_LABEL_PATTERNS = [
-  /\bcounty\b/i,
-  /\bprovince\b/i,
-  /\bstate of\b/i,
-];
+function placeScore(place: Pick<TimelinePlaceSummary, "visitCount" | "totalDurationMinutes">): number {
+  return place.visitCount * 3 + Math.min(place.totalDurationMinutes / 60, 24);
+}
 
 function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const toRadians = (value: number) => (value * Math.PI) / 180;
@@ -435,1065 +163,847 @@ function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): num
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function getDateHours(value: string | null): number | null {
+function monthLabel(value: string | null): string | null {
   if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.getHours();
-}
 
-function isWeekend(value: string | null): boolean {
-  if (!value) return false;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return false;
-  const day = date.getDay();
-  return day === 0 || day === 5 || day === 6;
-}
-
-function dedupe(items: string[], limit = items.length): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const item of items) {
-    const normalized = item.trim();
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(normalized);
-    if (result.length >= limit) break;
-  }
-  return result;
-}
-
-function hasGoogleLocationKey(): boolean {
-  return Boolean(process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_GEOCODING_API_KEY);
-}
-
-function normalizeForMatch(value: string): string {
-  return value
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^\w\s-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function stripPostalCode(value: string): string {
-  return value
-    .replace(/\b\d{4,6}(?:-\d{4})?\b/g, "")
-    .replace(/\s+/g, " ")
-    .replace(/[,-]\s*$/g, "")
-    .trim();
-}
-
-function looksLikeCountryLabel(value: string): boolean {
-  return COUNTRY_LABELS.has(normalizeForMatch(value));
-}
-
-function buildParkAliases(canonical: string): string[] {
-  const aliases = new Set<string>([canonical]);
-  const stripped = canonical
-    .replace(/\bNational Park\b/gi, "")
-    .replace(/\band Preserve\b/gi, "")
-    .trim();
-
-  if (stripped.split(/\s+/).length >= 2 || SAFE_SINGLE_WORD_PARK_ALIASES.has(stripped.toLowerCase())) {
-    aliases.add(stripped);
+  const directMatch = value.match(/^(\d{4})-(\d{2})/);
+  if (directMatch) {
+    const year = Number(directMatch[1]);
+    const monthIndex = Number(directMatch[2]) - 1;
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+    return formatter.format(new Date(Date.UTC(year, monthIndex, 1)));
   }
 
-  if (canonical === "Great Smoky Mountains National Park") {
-    aliases.add("Smoky Mountains");
-  }
-  if (canonical === "Wrangell-St Elias National Park") {
-    aliases.add("Wrangell St Elias");
-  }
-  if (canonical === "Hawaii Volcanoes National Park") {
-    aliases.add("Hawaii Volcanoes");
-  }
-
-  return Array.from(aliases).map(normalizeForMatch);
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(parsed);
 }
 
-function getDominantValue(counts: Map<string, number>, fallback: string): string {
-  let bestValue = fallback;
-  let bestCount = -1;
-  for (const [value, count] of counts.entries()) {
-    if (count > bestCount) {
-      bestValue = value;
-      bestCount = count;
-    }
-  }
-  return bestValue;
+function mergeCategoryCounts(target: Map<TimelinePlaceCategory, number>, category: TimelinePlaceCategory, weight: number): void {
+  target.set(category, (target.get(category) || 0) + weight);
 }
 
-function aggregatePlaces(visits: TimelineVisit[]): AggregatedPlace[] {
-  const byKey = new Map<string, AggregatedPlace>();
+function pickTopCategories(categoryCounts: Map<TimelinePlaceCategory, number>, limit: number): TimelinePlaceCategory[] {
+  return [...categoryCounts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, limit)
+    .map(([category]) => category);
+}
+
+function buildFallbackPlaceSummary(visit: TimelineVisit): TimelinePlaceSummary {
+  return {
+    placeId: visit.placeId,
+    name: visit.semanticType || visit.placeId,
+    category: "Other",
+    city: null,
+    region: null,
+    country: null,
+    countryCode: null,
+    formattedAddress: null,
+    lat: visit.lat,
+    lng: visit.lng,
+    visitCount: 0,
+    totalDurationMinutes: 0,
+    firstVisitedAt: null,
+    lastVisitedAt: null,
+    types: [],
+  };
+}
+
+function buildPlaceSummaries(
+  visits: TimelineVisit[],
+  placeInfoById: Map<string, TimelinePlaceInfo | null>
+): TimelinePlaceSummary[] {
+  const places = new Map<string, MutablePlaceAccumulator>();
 
   for (const visit of visits) {
-    const existing = byKey.get(visit.key);
+    const placeInfo = placeInfoById.get(visit.placeId) || null;
+    const base = placeInfo
+      ? {
+        placeId: placeInfo.placeId,
+        name: placeInfo.name,
+        category: placeInfo.category,
+        city: placeInfo.city,
+        region: placeInfo.region,
+        country: placeInfo.country,
+        countryCode: placeInfo.countryCode,
+        formattedAddress: placeInfo.formattedAddress,
+        lat: placeInfo.lat,
+        lng: placeInfo.lng,
+        types: placeInfo.types,
+      }
+      : buildFallbackPlaceSummary(visit);
+
+    const existing = places.get(visit.placeId);
     if (existing) {
       existing.visitCount += 1;
       existing.totalDurationMinutes += visit.durationMinutes;
-      if (visit.startTime && (!existing.firstVisitedAt || visit.startTime < existing.firstVisitedAt)) {
+      if (visit.startTime && (!existing.firstVisitedAt || compareTimelineTimes(visit.startTime, existing.firstVisitedAt) < 0)) {
         existing.firstVisitedAt = visit.startTime;
       }
-      if (visit.endTime && (!existing.lastVisitedAt || visit.endTime > existing.lastVisitedAt)) {
+      if (visit.endTime && (!existing.lastVisitedAt || compareTimelineTimes(visit.endTime, existing.lastVisitedAt) > 0)) {
         existing.lastVisitedAt = visit.endTime;
       }
-      if (visit.semanticType) {
-        existing.semanticTypeCounts.set(
-          visit.semanticType,
-          (existing.semanticTypeCounts.get(visit.semanticType) || 0) + 1
-        );
-      }
-      if (visit.name) {
-        existing.nameCounts.set(visit.name, (existing.nameCounts.get(visit.name) || 0) + 1);
-      }
+      mergeCategoryCounts(existing.categoryCounts, base.category, Math.max(visit.durationMinutes, 30));
       continue;
     }
 
-    const semanticTypeCounts = new Map<string, number>();
-    const nameCounts = new Map<string, number>();
-    if (visit.semanticType) semanticTypeCounts.set(visit.semanticType, 1);
-    if (visit.name) nameCounts.set(visit.name, 1);
+    const categoryCounts = new Map<TimelinePlaceCategory, number>();
+    mergeCategoryCounts(categoryCounts, base.category, Math.max(visit.durationMinutes, 30));
 
-    byKey.set(visit.key, {
-      key: visit.key,
-      placeId: visit.placeId,
-      lat: visit.lat,
-      lng: visit.lng,
+    places.set(visit.placeId, {
+      ...base,
       visitCount: 1,
       totalDurationMinutes: visit.durationMinutes,
       firstVisitedAt: visit.startTime,
       lastVisitedAt: visit.endTime,
-      semanticTypeCounts,
-      nameCounts,
-      distanceFromHomeKm: 0,
-      bucket: "local",
-      details: null,
+      categoryCounts,
     });
   }
 
-  return Array.from(byKey.values());
-}
-
-function chooseHomePlace(places: AggregatedPlace[], visits: TimelineVisit[]): AggregatedPlace | null {
-  const explicitHome = places
-    .filter((place) => place.semanticTypeCounts.has("Home"))
-    .sort((a, b) => b.visitCount * 4 + b.totalDurationMinutes / 60 - (a.visitCount * 4 + a.totalDurationMinutes / 60))[0];
-  if (explicitHome) return explicitHome;
-
-  const nightWeights = new Map<string, number>();
-  for (const visit of visits) {
-    const hour = getDateHours(visit.startTime) ?? getDateHours(visit.endTime);
-    if (hour == null) continue;
-    if (hour >= 20 || hour <= 6) {
-      nightWeights.set(visit.key, (nightWeights.get(visit.key) || 0) + Math.max(visit.durationMinutes, 30));
-    }
-  }
-
-  return [...places]
-    .sort((a, b) => {
-      const scoreA = (nightWeights.get(a.key) || 0) + a.visitCount * 3 + a.totalDurationMinutes / 90;
-      const scoreB = (nightWeights.get(b.key) || 0) + b.visitCount * 3 + b.totalDurationMinutes / 90;
-      return scoreB - scoreA;
-    })[0] || null;
-}
-
-function bucketPlace(distanceFromHomeKm: number, semanticType: string): AggregatedPlace["bucket"] {
-  if (semanticType === "Home") return "home";
-  if (distanceFromHomeKm <= 50) return "local";
-  if (distanceFromHomeKm <= 250) return "regional";
-  return "travel";
-}
-
-async function enrichPlaces(places: AggregatedPlace[]): Promise<void> {
-  if (!hasGoogleLocationKey()) return;
-
-  let placesClient;
-  try {
-    placesClient = getPlacesClient();
-  } catch {
-    return;
-  }
-
-  const targets = [...places]
-    .filter((place) => {
-      if (!place.placeId) return false;
-      if (place.bucket !== "regional" && place.bucket !== "travel") return false;
-      const semanticType = getDominantValue(place.semanticTypeCounts, "");
-      if (semanticType === "Home" || semanticType === "Work") return false;
-      return isLikelyRealVisitPlace(place);
-    })
-    .sort((a, b) => {
-      const bucketScore = (bucket: AggregatedPlace["bucket"]) => {
-        if (bucket === "travel") return 3;
-        if (bucket === "regional") return 2;
-        if (bucket === "local") return 1;
-        return 0;
-      };
-      const bucketDelta = bucketScore(b.bucket) - bucketScore(a.bucket);
-      if (bucketDelta !== 0) return bucketDelta;
-      return scorePlace(b) - scorePlace(a);
-    });
-
-  const targetedKeys = new Set(targets.map((place) => place.key));
-  const destinationClusters = buildTravelClusters(
-    places.filter((place) => place.bucket === "regional" || place.bucket === "travel"),
-    isTravelClusterCandidate
-  ).filter((cluster) => cluster.totalDurationMinutes >= 90 || cluster.visitCount >= 3 || cluster.places.length >= 3);
-
-  for (const cluster of destinationClusters) {
-    const unresolvedClusterPlaces = cluster.places
-      .filter((place) => place.placeId && !targetedKeys.has(place.key))
-      .sort((a, b) => scorePlace(b) - scorePlace(a))
-      .slice(0, 6);
-
-    for (const place of unresolvedClusterPlaces) {
-      targetedKeys.add(place.key);
-      targets.push(place);
-    }
-  }
-
-  for (let index = 0; index < targets.length; index += 8) {
-    const batch = targets.slice(index, index + 8);
-    await Promise.all(
-      batch.map(async (place) => {
-        try {
-          place.details = await placesClient.getPlaceDetails(place.placeId!);
-        } catch {
-          place.details = null;
-        }
-      })
-    );
-  }
-}
-
-function ruleMatches(place: AggregatedPlace, rule: CategoryRule): boolean {
-  const types = place.details?.types || [];
-  return rule.types.some((type) => types.includes(type));
-}
-
-function scorePlace(place: AggregatedPlace): number {
-  const durationBoost = Math.min(place.totalDurationMinutes / 60, 18);
-  return place.visitCount * 3 + durationBoost;
-}
-
-function pickSignals(places: AggregatedPlace[], rules: CategoryRule[], limit: number): {
-  signals: string[];
-  preferences: string[];
-} {
-  const scoredRules = rules
-    .map((rule) => ({
-      rule,
-      score: places
-        .filter((place) => ruleMatches(place, rule))
-        .reduce((sum, place) => sum + scorePlace(place), 0),
+  return [...places.values()]
+    .map(({ categoryCounts, ...place }) => ({
+      ...place,
+      category: pickTopCategories(categoryCounts, 1)[0] || place.category,
     }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((left, right) => {
+      if (right.totalDurationMinutes !== left.totalDurationMinutes) {
+        return right.totalDurationMinutes - left.totalDurationMinutes;
+      }
+      return right.visitCount - left.visitCount;
+    });
+}
+
+function buildCitySummaries(places: TimelinePlaceSummary[]): TimelineCitySummary[] {
+  const cities = new Map<string, MutableCityAccumulator>();
+
+  for (const place of places) {
+    const cityId = buildCityId(place.city, place.region, place.countryCode, place.country);
+    if (!cityId || !place.city) continue;
+
+    const weight = Math.max(place.totalDurationMinutes, 30);
+    const existing = cities.get(cityId);
+    if (existing) {
+      const combinedWeight = existing.weight + weight;
+      existing.lat = (existing.lat * existing.weight + place.lat * weight) / combinedWeight;
+      existing.lng = (existing.lng * existing.weight + place.lng * weight) / combinedWeight;
+      existing.weight = combinedWeight;
+      existing.visitCount += place.visitCount;
+      existing.totalDurationMinutes += place.totalDurationMinutes;
+      existing.placeCount += 1;
+      if (place.firstVisitedAt && (!existing.firstVisitedAt || compareTimelineTimes(place.firstVisitedAt, existing.firstVisitedAt) < 0)) {
+        existing.firstVisitedAt = place.firstVisitedAt;
+      }
+      if (place.lastVisitedAt && (!existing.lastVisitedAt || compareTimelineTimes(place.lastVisitedAt, existing.lastVisitedAt) > 0)) {
+        existing.lastVisitedAt = place.lastVisitedAt;
+      }
+      mergeCategoryCounts(existing.categoryCounts, place.category, weight);
+      continue;
+    }
+
+    const categoryCounts = new Map<TimelinePlaceCategory, number>();
+    mergeCategoryCounts(categoryCounts, place.category, weight);
+
+    cities.set(cityId, {
+      id: cityId,
+      city: place.city,
+      region: place.region,
+      country: place.country,
+      countryCode: place.countryCode,
+      lat: place.lat,
+      lng: place.lng,
+      visitCount: place.visitCount,
+      totalDurationMinutes: place.totalDurationMinutes,
+      placeCount: 1,
+      tripCount: 0,
+      firstVisitedAt: place.firstVisitedAt,
+      lastVisitedAt: place.lastVisitedAt,
+      categories: [],
+      categoryCounts,
+      weight,
+    });
+  }
+
+  return [...cities.values()]
+    .map(({ categoryCounts, weight: _weight, ...city }) => ({
+      ...city,
+      categories: pickTopCategories(categoryCounts, 3),
+    }))
+    .sort((left, right) => {
+      if (right.totalDurationMinutes !== left.totalDurationMinutes) {
+        return right.totalDurationMinutes - left.totalDurationMinutes;
+      }
+      return right.visitCount - left.visitCount;
+    });
+}
+
+function buildCountrySummaries(places: TimelinePlaceSummary[]): TimelineCountrySummary[] {
+  const countries = new Map<string, MutableCountryAccumulator>();
+
+  for (const place of places) {
+    const countryId = buildCountryId(place.countryCode, place.country);
+    if (!countryId || !place.country) continue;
+
+    const weight = Math.max(place.totalDurationMinutes, 30);
+    const existing = countries.get(countryId);
+    if (existing) {
+      const combinedWeight = existing.weight + weight;
+      existing.lat = (existing.lat * existing.weight + place.lat * weight) / combinedWeight;
+      existing.lng = (existing.lng * existing.weight + place.lng * weight) / combinedWeight;
+      existing.weight = combinedWeight;
+      existing.visitCount += place.visitCount;
+      existing.totalDurationMinutes += place.totalDurationMinutes;
+      existing.placeCount += 1;
+      if (place.firstVisitedAt && (!existing.firstVisitedAt || compareTimelineTimes(place.firstVisitedAt, existing.firstVisitedAt) < 0)) {
+        existing.firstVisitedAt = place.firstVisitedAt;
+      }
+      if (place.lastVisitedAt && (!existing.lastVisitedAt || compareTimelineTimes(place.lastVisitedAt, existing.lastVisitedAt) > 0)) {
+        existing.lastVisitedAt = place.lastVisitedAt;
+      }
+      continue;
+    }
+
+    countries.set(countryId, {
+      id: countryId,
+      country: place.country,
+      countryCode: place.countryCode,
+      lat: place.lat,
+      lng: place.lng,
+      visitCount: place.visitCount,
+      totalDurationMinutes: place.totalDurationMinutes,
+      cityCount: 0,
+      placeCount: 1,
+      tripCount: 0,
+      firstVisitedAt: place.firstVisitedAt,
+      lastVisitedAt: place.lastVisitedAt,
+      weight,
+    });
+  }
+
+  return [...countries.values()].sort((left, right) => {
+    if (right.totalDurationMinutes !== left.totalDurationMinutes) {
+      return right.totalDurationMinutes - left.totalDurationMinutes;
+    }
+    return right.visitCount - left.visitCount;
+  });
+}
+
+function buildResolvedVisits(visits: TimelineVisit[], places: TimelinePlaceSummary[]): ResolvedVisit[] {
+  const placeById = new Map(places.map((place) => [place.placeId, place] as const));
+  return [...visits]
+    .sort((left, right) => compareTimelineTimes(left.startTime || left.endTime, right.startTime || right.endTime))
+    .map((visit) => {
+      const place = placeById.get(visit.placeId) || buildFallbackPlaceSummary(visit);
+      return {
+        visit,
+        place,
+        cityId: buildCityId(place.city, place.region, place.countryCode, place.country),
+        countryId: buildCountryId(place.countryCode, place.country),
+      };
+    });
+}
+
+function detectHomeContext(cities: TimelineCitySummary[], countries: TimelineCountrySummary[]): TripBuildContext {
+  const homeCity = [...cities].sort((left, right) => {
+    const leftScore = left.visitCount * 4 + left.totalDurationMinutes / 60;
+    const rightScore = right.visitCount * 4 + right.totalDurationMinutes / 60;
+    return rightScore - leftScore;
+  })[0] || null;
+
+  const homeCountry =
+    homeCity?.countryCode ||
+    [...countries].sort((left, right) => {
+      const leftScore = left.visitCount * 4 + left.totalDurationMinutes / 60;
+      const rightScore = right.visitCount * 4 + right.totalDurationMinutes / 60;
+      return rightScore - leftScore;
+    })[0]?.countryCode ||
+    null;
 
   return {
-    signals: scoredRules.map((entry) => entry.rule.signal),
-    preferences: scoredRules.map((entry) => entry.rule.preference),
+    homeCityId: homeCity?.id || null,
+    homeCountryCode: homeCountry,
+    homeLat: homeCity?.lat ?? null,
+    homeLng: homeCity?.lng ?? null,
   };
 }
 
-function getFoodContextText(place: AggregatedPlace): string {
-  return normalizeForMatch(
-    [
-      place.details?.name,
-      place.details?.editorial_summary,
-      getDominantValue(place.nameCounts, ""),
-      getDominantValue(place.semanticTypeCounts, ""),
-    ]
-      .filter(Boolean)
-      .join(" ")
+function isAwayVisit(event: ResolvedVisit, context: TripBuildContext): boolean {
+  if (context.homeCityId && event.cityId === context.homeCityId) return false;
+
+  if (
+    context.homeLat != null &&
+    context.homeLng != null &&
+    distanceKm(context.homeLat, context.homeLng, event.place.lat, event.place.lng) <= LOCAL_TRAVEL_RADIUS_KM
+  ) {
+    return false;
+  }
+
+  if (
+    event.place.category === "Airports" &&
+    context.homeCountryCode &&
+    event.place.countryCode === context.homeCountryCode &&
+    context.homeLat != null &&
+    context.homeLng != null &&
+    distanceKm(context.homeLat, context.homeLng, event.place.lat, event.place.lng) < LOCAL_TRAVEL_RADIUS_KM
+  ) {
+    return false;
+  }
+
+  if (context.homeCountryCode && event.place.countryCode && event.place.countryCode !== context.homeCountryCode) {
+    return true;
+  }
+
+  if (context.homeCityId && event.cityId && event.cityId !== context.homeCityId) return true;
+  if (!context.homeCityId && event.cityId) return true;
+  return false;
+}
+
+function shouldSplitTrip(previous: ResolvedVisit, next: ResolvedVisit): boolean {
+  const previousTime = toTimestamp(previous.visit.endTime || previous.visit.startTime);
+  const nextTime = toTimestamp(next.visit.startTime || next.visit.endTime);
+  if (Number.isNaN(previousTime) || Number.isNaN(nextTime)) return false;
+
+  const gapHours = (nextTime - previousTime) / (1000 * 60 * 60);
+  if (gapHours > TRIP_BREAK_GAP_HOURS) return true;
+  if (gapHours > 36 && previous.cityId && next.cityId && previous.cityId !== next.cityId) return true;
+  return false;
+}
+
+function summarizeTrip(events: ResolvedVisit[], tripIndex: number): TimelineTripSummary | null {
+  if (events.length === 0) return null;
+
+  const nonAirportEvents = events.filter((event) => event.place.category !== "Airports");
+  const anchorEvents = nonAirportEvents.length > 0 ? nonAirportEvents : events;
+  const cityScores = new Map<string, number>();
+  const countryScores = new Map<string, number>();
+  const categoryScores = new Map<TimelinePlaceCategory, number>();
+  const placeScores = new Map<string, number>();
+  const cityLabels = new Map<string, string>();
+  const countryLabels = new Map<string, string>();
+
+  let totalLat = 0;
+  let totalLng = 0;
+  let totalWeight = 0;
+
+  for (const event of anchorEvents) {
+    const weight = Math.max(event.visit.durationMinutes, 45);
+    totalLat += event.place.lat * weight;
+    totalLng += event.place.lng * weight;
+    totalWeight += weight;
+    mergeCategoryCounts(categoryScores, event.place.category, weight);
+
+    if (event.cityId) {
+      cityScores.set(event.cityId, (cityScores.get(event.cityId) || 0) + weight);
+      const label = cityDisplayLabel(event.place);
+      if (label) cityLabels.set(event.cityId, label);
+    }
+
+    if (event.countryId && event.place.country) {
+      countryScores.set(event.countryId, (countryScores.get(event.countryId) || 0) + weight);
+      countryLabels.set(event.countryId, event.place.country);
+    }
+
+    placeScores.set(event.place.name, (placeScores.get(event.place.name) || 0) + weight);
+  }
+
+  const dominantCityId = [...cityScores.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] || null;
+  const dominantCountryId =
+    [...countryScores.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] || null;
+
+  const dominantCityEvent =
+    (dominantCityId ? anchorEvents.find((event) => event.cityId === dominantCityId) : null) ||
+    anchorEvents[0] ||
+    null;
+  const dominantCountryEvent =
+    (dominantCountryId ? anchorEvents.find((event) => event.countryId === dominantCountryId) : null) ||
+    dominantCityEvent;
+
+  const startTime = events[0].visit.startTime || events[0].visit.endTime;
+  const endTime =
+    events[events.length - 1].visit.endTime ||
+    events[events.length - 1].visit.startTime;
+  const totalDurationMinutes = events.reduce((sum, event) => sum + event.visit.durationMinutes, 0);
+  const uniquePlaces = dedupe(anchorEvents.map((event) => event.place.name));
+  const cities = dedupe(
+    anchorEvents
+      .map((event) => cityDisplayLabel(event.place))
+      .filter((label): label is string => Boolean(label))
   );
+  const categories = pickTopCategories(categoryScores, 4);
+  const topPlaces = [...placeScores.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3)
+    .map(([name]) => name);
+
+  const baseLabel =
+    cityLabels.get(dominantCityId || "") ||
+    countryLabels.get(dominantCountryId || "") ||
+    topPlaces[0] ||
+    `Trip ${tripIndex + 1}`;
+  const tripMonthLabel = monthLabel(startTime || endTime);
+
+  return {
+    id: `trip-${tripIndex + 1}`,
+    label: tripMonthLabel ? `${baseLabel} · ${tripMonthLabel}` : baseLabel,
+    startTime,
+    endTime,
+    monthLabel: tripMonthLabel,
+    city: dominantCityEvent?.place.city || null,
+    region: dominantCityEvent?.place.region || null,
+    country: dominantCountryEvent?.place.country || dominantCityEvent?.place.country || null,
+    countryCode: dominantCountryEvent?.place.countryCode || dominantCityEvent?.place.countryCode || null,
+    lat: totalWeight > 0 ? totalLat / totalWeight : anchorEvents[0].place.lat,
+    lng: totalWeight > 0 ? totalLng / totalWeight : anchorEvents[0].place.lng,
+    visitCount: events.length,
+    placeCount: uniquePlaces.length,
+    totalDurationMinutes,
+    durationHours: durationHours(startTime, endTime),
+    cities,
+    categories,
+    topPlaces,
+  };
 }
 
-function getNormalizedPlaceTypes(place: AggregatedPlace): string[] {
-  return (place.details?.types || []).map((type) => normalizeForMatch(type));
-}
+function buildTrips(
+  resolvedVisits: ResolvedVisit[],
+  context: TripBuildContext
+): TimelineTripSummary[] {
+  const trips: TimelineTripSummary[] = [];
+  let current: ResolvedVisit[] = [];
 
-function placeMatchesFoodRule(place: AggregatedPlace, rule: FoodPreferenceRule): boolean {
-  const types = getNormalizedPlaceTypes(place);
-  if (rule.typeTokens.some((type) => types.includes(type))) {
-    return true;
-  }
-
-  const text = getFoodContextText(place);
-  return rule.textPatterns.some((pattern) => pattern.test(text));
-}
-
-function isLikelyFoodContextPlace(place: AggregatedPlace): boolean {
-  const types = getNormalizedPlaceTypes(place);
-  if (types.some((type) => FOOD_CONTEXT_TYPE_TOKENS.has(type))) {
-    return true;
-  }
-
-  const semanticType = normalizeForMatch(getDominantValue(place.semanticTypeCounts, ""));
-  if (semanticType && FOOD_CONTEXT_TEXT_PATTERNS.some((pattern) => pattern.test(semanticType))) {
-    return true;
-  }
-
-  const text = getFoodContextText(place);
-  return FOOD_CONTEXT_TEXT_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-function rankFoodPreferenceRules(
-  places: AggregatedPlace[],
-  rules: FoodPreferenceRule[],
-  limit: number
-): string[] {
-  return rules
-    .map((rule) => {
-      const matchingPlaces = places.filter((place) => placeMatchesFoodRule(place, rule));
-      return {
-        rule,
-        matchedPlaces: matchingPlaces.length,
-        score: matchingPlaces.reduce((sum, place) => sum + scorePlace(place), 0),
-      };
-    })
-    .filter((entry) => {
-      const minScore = entry.rule.minScore ?? 8;
-      const minMatchedPlaces = entry.rule.minMatchedPlaces ?? 1;
-      return entry.score >= minScore && entry.matchedPlaces >= minMatchedPlaces;
-    })
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return b.matchedPlaces - a.matchedPlaces;
-    })
-    .slice(0, limit)
-    .map((entry) => entry.rule.preference);
-}
-
-function inferFoodPreferences(places: AggregatedPlace[]): string[] {
-  const foodPlaces = places
-    .filter((place) => {
-      const semanticType = getDominantValue(place.semanticTypeCounts, "");
-      if (semanticType === "Home" || semanticType === "Work") return false;
-      return isLikelyFoodContextPlace(place);
-    })
-    .sort((a, b) => scorePlace(b) - scorePlace(a));
-
-  if (foodPlaces.length === 0) return [];
-
-  const stylePreferences = rankFoodPreferenceRules(foodPlaces, FOOD_STYLE_RULES, 2);
-  const cuisinePreferences = rankFoodPreferenceRules(foodPlaces, FOOD_CUISINE_RULES, 2);
-  const preferences = dedupe([...stylePreferences, ...cuisinePreferences], 4);
-
-  if (preferences.length > 0) {
-    return preferences;
-  }
-
-  if (foodPlaces.length >= 6) {
-    return ["Food seems to shape which neighborhoods and repeat stops you return to"];
-  }
-
-  return [];
-}
-
-function isFoodPreferenceText(value: string): boolean {
-  return /\b(food|dining|restaurant|cafe|coffee|bakery|dessert|market|bar|brewery|snack)\b/i.test(value);
-}
-
-function summarizeEpisodes(episodes: TravelEpisode[]): { signals: string[]; preferences: string[] } {
-  if (episodes.length === 0) return { signals: [], preferences: [] };
-
-  const signals: string[] = [];
-  const preferences: string[] = [];
-  const averageDurationHours =
-    episodes.reduce((sum, episode) => sum + episode.durationHours, 0) / Math.max(episodes.length, 1);
-  const averageUniquePlaces =
-    episodes.reduce((sum, episode) => sum + episode.uniquePlaceCount, 0) / Math.max(episodes.length, 1);
-  const weekendRatio =
-    episodes.filter((episode) => episode.weekendLike).length / Math.max(episodes.length, 1);
-  const maxDistanceKm = Math.max(...episodes.map((episode) => episode.maxDistanceKm), 0);
-
-  if (episodes.length >= 2 && averageDurationHours <= 72) {
-    signals.push("Most travel looks like compact getaways rather than long single-base vacations.");
-    preferences.push("Comfortable with short getaways and efficient regional trips");
-  }
-
-  if (averageUniquePlaces >= 3) {
-    signals.push("Trips usually include multiple stops, which points to comfort with exploratory days.");
-    preferences.push("Enjoys multi-stop days with a couple of anchor experiences and room to explore");
-  }
-
-  if (weekendRatio >= 0.45) {
-    signals.push("A large share of travel appears weekend-shaped, so efficient logistics likely matter.");
-    preferences.push("Prefers trips that work well as tight, low-friction getaways");
-  }
-
-  if (maxDistanceKm >= 750) {
-    signals.push("The timeline includes long-distance travel, so bigger destination trips are part of the mix.");
-    preferences.push("Open to bigger destination trips, not only nearby escapes");
-  }
-
-  return { signals, preferences };
-}
-
-function detectTravelEpisodes(
-  visits: TimelineVisit[],
-  distanceByKey: Map<string, number>,
-  bucketByKey: Map<string, AggregatedPlace["bucket"]>
-): TravelEpisode[] {
-  const sortedVisits = [...visits]
-    .filter((visit) => {
-      const bucket = bucketByKey.get(visit.key);
-      return bucket === "regional" || bucket === "travel";
-    })
-    .sort((a, b) => {
-      const aTime = a.startTime || a.endTime || "";
-      const bTime = b.startTime || b.endTime || "";
-      return aTime.localeCompare(bTime);
-    });
-
-  const episodes: TravelEpisode[] = [];
-  let current: TimelineVisit[] = [];
-
-  const pushCurrent = () => {
+  const flushTrip = () => {
     if (current.length === 0) return;
-    const uniqueKeys = new Set(current.map((visit) => visit.key));
-    const startTime = current[0].startTime || current[0].endTime;
-    const endTime = current[current.length - 1].endTime || current[current.length - 1].startTime;
-    const start = startTime ? new Date(startTime) : null;
-    const end = endTime ? new Date(endTime) : null;
-    const durationHours =
-      start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())
-        ? Math.max((end.getTime() - start.getTime()) / (1000 * 60 * 60), 0)
-        : 0;
+    const summarized = summarizeTrip(current, trips.length);
+    const uniqueCityCount = new Set(current.map((event) => event.cityId).filter(Boolean)).size;
+    const totalDurationMinutes = current.reduce((sum, event) => sum + event.visit.durationMinutes, 0);
+    const tripDistanceKm =
+      summarized && context.homeLat != null && context.homeLng != null
+        ? distanceKm(context.homeLat, context.homeLng, summarized.lat, summarized.lng)
+        : null;
 
-    episodes.push({
-      startTime,
-      endTime,
-      uniquePlaceCount: uniqueKeys.size,
-      maxDistanceKm: Math.max(...current.map((visit) => distanceByKey.get(visit.key) || 0), 0),
-      visitCount: current.length,
-      durationHours,
-      weekendLike: current.filter((visit) => isWeekend(visit.startTime || visit.endTime)).length >= current.length / 2,
-    });
+    if (
+      isDisplayableTrip(summarized) &&
+      (
+        summarized.countryCode !== context.homeCountryCode ||
+        uniqueCityCount >= 2 ||
+        totalDurationMinutes >= 6 * 60 ||
+        summarized.placeCount >= 2 ||
+        (tripDistanceKm != null && tripDistanceKm > LOCAL_TRAVEL_RADIUS_KM)
+      )
+    ) {
+      trips.push(summarized);
+    }
     current = [];
   };
 
-  for (const visit of sortedVisits) {
+  for (const event of resolvedVisits) {
+    const away = isAwayVisit(event, context);
+
+    if (!away) {
+      if (current.length > 0) {
+        const homeDuration = event.visit.durationMinutes;
+        if (homeDuration >= TRIP_HOME_SETTLE_MINUTES || event.place.category !== "Airports") {
+          flushTrip();
+        }
+      }
+      continue;
+    }
+
     if (current.length === 0) {
-      current.push(visit);
+      current.push(event);
       continue;
     }
 
     const previous = current[current.length - 1];
-    const previousEnd = previous.endTime || previous.startTime;
-    const currentStart = visit.startTime || visit.endTime;
-    if (!previousEnd || !currentStart) {
-      current.push(visit);
-      continue;
+    if (shouldSplitTrip(previous, event)) {
+      flushTrip();
     }
 
-    const previousDate = new Date(previousEnd);
-    const currentDate = new Date(currentStart);
-    if (Number.isNaN(previousDate.getTime()) || Number.isNaN(currentDate.getTime())) {
-      current.push(visit);
-      continue;
-    }
-
-    const gapHours = (currentDate.getTime() - previousDate.getTime()) / (1000 * 60 * 60);
-    if (gapHours > 18) {
-      pushCurrent();
-    }
-    current.push(visit);
+    current.push(event);
   }
 
-  pushCurrent();
-  return episodes;
+  flushTrip();
+
+  return trips.sort((left, right) => compareTimelineTimes(left.startTime || left.endTime, right.startTime || right.endTime));
 }
 
-function getDisplayName(place: AggregatedPlace): string {
-  if (place.details?.name?.trim()) return place.details.name.trim();
-  const name = getDominantValue(place.nameCounts, "");
-  if (name) return name;
-  const semanticType = getDominantValue(place.semanticTypeCounts, "");
-  if (semanticType && semanticType !== "Unknown") return semanticType;
-  return place.bucket === "local" ? "Local place" : "Visited place";
+function applyTripCounts(
+  cities: TimelineCitySummary[],
+  countries: TimelineCountrySummary[],
+  trips: TimelineTripSummary[]
+): {
+  cities: TimelineCitySummary[];
+  countries: TimelineCountrySummary[];
+} {
+  const cityTripCounts = new Map<string, number>();
+  const countryTripCounts = new Map<string, number>();
+
+  for (const trip of trips) {
+    const cityId = buildCityId(trip.city, trip.region, trip.countryCode, trip.country);
+    const countryId = buildCountryId(trip.countryCode, trip.country);
+    if (cityId) cityTripCounts.set(cityId, (cityTripCounts.get(cityId) || 0) + 1);
+    if (countryId) countryTripCounts.set(countryId, (countryTripCounts.get(countryId) || 0) + 1);
+  }
+
+  const citiesWithCounts = cities.map((city) => ({
+    ...city,
+    tripCount: cityTripCounts.get(city.id) || 0,
+  }));
+
+  const countryCityCounts = new Map<string, Set<string>>();
+  for (const city of citiesWithCounts) {
+    const countryId = buildCountryId(city.countryCode, city.country);
+    if (!countryId) continue;
+    const set = countryCityCounts.get(countryId) || new Set<string>();
+    set.add(city.id);
+    countryCityCounts.set(countryId, set);
+  }
+
+  const countriesWithCounts = countries.map((country) => ({
+    ...country,
+    cityCount: countryCityCounts.get(country.id)?.size || 0,
+    tripCount: countryTripCounts.get(country.id) || 0,
+  }));
+
+  return {
+    cities: citiesWithCounts,
+    countries: countriesWithCounts,
+  };
 }
 
-function getPlaceSearchText(place: AggregatedPlace): string {
-  return normalizeForMatch(
-    [
-      place.details?.name,
-      place.details?.formatted_address,
-      place.details?.editorial_summary,
-      getDominantValue(place.nameCounts, ""),
+function buildCategoryPreferences(places: TimelinePlaceSummary[], trips: TimelineTripSummary[], countries: TimelineCountrySummary[]): string[] {
+  const categoryScores = new Map<TimelinePlaceCategory, number>();
+  for (const place of places) {
+    mergeCategoryCounts(categoryScores, place.category, Math.max(place.totalDurationMinutes, 30));
+  }
+
+  const preferences: string[] = [];
+  const categories = pickTopCategories(categoryScores, 3);
+
+  for (const category of categories) {
+    if (category === "Food & Drink") {
+      preferences.push("Returns to food-forward neighborhoods and repeat dining anchors");
+    } else if (category === "Culture") {
+      preferences.push("Makes room for museums, galleries, temples, and cultural anchors");
+    } else if (category === "Attractions") {
+      preferences.push("Leans toward destination highlights and anchor attractions");
+    } else if (category === "Shopping") {
+      preferences.push("Often includes markets, malls, and browseable shopping districts");
+    } else if (category === "Sports") {
+      preferences.push("Mixes sports and active venues into travel patterns");
+    }
+  }
+
+  if (trips.length >= 75) {
+    preferences.push("Comfortable with frequent trips rather than only occasional long vacations");
+  }
+
+  if (countries.length >= 10) {
+    preferences.push("Navigates international travel comfortably across many countries");
+  }
+
+  return dedupe(preferences).slice(0, 5);
+}
+
+function buildFoodPreferences(places: TimelinePlaceSummary[]): string[] {
+  const foodPlaces = places.filter((place) => place.category === "Food & Drink");
+  if (foodPlaces.length === 0) return [];
+
+  const typeScores = new Map<string, number>();
+  for (const place of foodPlaces) {
+    const weight = Math.max(place.totalDurationMinutes, 30);
+    for (const type of place.types) {
+      typeScores.set(type, (typeScores.get(type) || 0) + weight);
+    }
+  }
+
+  const preferences: string[] = [];
+  const hasType = (value: string) => (typeScores.get(value) || 0) >= 180;
+  const hasRestaurantFamily = [...typeScores.keys()].some((type) => type.endsWith("_restaurant"));
+
+  if (hasType("cafe") || hasType("coffee_shop")) {
+    preferences.push("Returns to cafes and coffee stops often enough to matter");
+  }
+  if (hasType("bakery") || hasType("ice_cream_shop")) {
+    preferences.push("Makes room for bakeries, dessert stops, and snack breaks");
+  }
+  if (hasType("bar")) {
+    preferences.push("Includes bars and evening food districts in repeat travel behavior");
+  }
+  if (hasRestaurantFamily || hasType("restaurant")) {
+    preferences.push("Trips regularly orbit strong restaurant neighborhoods, not just landmarks");
+  }
+
+  return dedupe(preferences).slice(0, 4);
+}
+
+function buildVisitedDestinations(cities: TimelineCitySummary[], countries: TimelineCountrySummary[], trips: TimelineTripSummary[]): string[] {
+  return dedupe([
+    ...cities.map((city) => (city.region ? `${city.city}, ${city.region}` : city.city)),
+    ...countries.map((country) => country.country),
+    ...trips.map((trip) => trip.label),
+  ]);
+}
+
+function buildMapPoints(
+  places: TimelinePlaceSummary[],
+  cities: TimelineCitySummary[],
+  countries: TimelineCountrySummary[],
+  trips: TimelineTripSummary[]
+): TimelineAnalysisResponse["mapPoints"] {
+  const placePoints: TimelineMapPoint[] = places.slice(0, MAX_PLACE_MAP_POINTS).map((place) => ({
+    id: place.placeId,
+    lat: place.lat,
+    lng: place.lng,
+    name: place.name,
+    kind: "place",
+    description: [
+      place.category,
+      cityDisplayLabel(place) || place.country || "Unknown city",
+      `${place.visitCount} ${place.visitCount === 1 ? "visit" : "visits"}`,
+      formatDuration(place.totalDurationMinutes),
+    ].join(" · "),
+    color: getTimelineCategoryColor(place.category),
+    visitCount: place.visitCount,
+    totalDurationMinutes: place.totalDurationMinutes,
+    identified: Boolean(place.city || place.country || place.formattedAddress),
+  }));
+
+  const cityPoints: TimelineMapPoint[] = cities.map((city) => ({
+    id: city.id,
+    lat: city.lat,
+    lng: city.lng,
+    name: city.region ? `${city.city}, ${city.region}` : city.city,
+    kind: "city",
+    description: [
+      city.country || "Unknown country",
+      `${city.placeCount} ${city.placeCount === 1 ? "place" : "places"}`,
+      `${city.visitCount} ${city.visitCount === 1 ? "visit" : "visits"}`,
+      city.tripCount > 0 ? `${city.tripCount} ${city.tripCount === 1 ? "trip" : "trips"}` : null,
     ]
       .filter(Boolean)
-      .join(" ")
-  );
-}
+      .join(" · "),
+    color: "#0f766e",
+    visitCount: city.visitCount,
+    totalDurationMinutes: city.totalDurationMinutes,
+    identified: true,
+  }));
 
-function getParkMatchFromText(value: string): string | null {
-  const haystack = normalizeForMatch(value);
-  if (!haystack) return null;
+  const countryPoints: TimelineMapPoint[] = countries.map((country) => ({
+    id: country.id,
+    lat: country.lat,
+    lng: country.lng,
+    name: country.country,
+    kind: "country",
+    description: [
+      `${country.cityCount} ${country.cityCount === 1 ? "city" : "cities"}`,
+      `${country.tripCount} ${country.tripCount === 1 ? "trip" : "trips"}`,
+      `${country.placeCount} ${country.placeCount === 1 ? "place" : "places"}`,
+    ].join(" · "),
+    color: "#1d4ed8",
+    visitCount: country.visitCount,
+    totalDurationMinutes: country.totalDurationMinutes,
+    identified: true,
+  }));
 
-  for (const park of US_NATIONAL_PARKS) {
-    if (park.aliases.some((alias) => haystack.includes(alias))) {
-      return park.canonical;
-    }
-  }
+  const tripPoints: TimelineMapPoint[] = trips.map((trip) => ({
+    id: trip.id,
+    lat: trip.lat,
+    lng: trip.lng,
+    name: trip.label,
+    kind: "trip",
+    description: [
+      trip.country || "Unknown country",
+      trip.cities.length > 0 ? trip.cities.join(" / ") : null,
+      formatDuration(trip.totalDurationMinutes),
+      `${trip.placeCount} ${trip.placeCount === 1 ? "place" : "places"}`,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    color: "#c2410c",
+    visitCount: trip.visitCount,
+    totalDurationMinutes: trip.totalDurationMinutes,
+    identified: true,
+  }));
 
-  return null;
-}
-
-function getParkMatchFromCoordinates(lat: number, lng: number): string | null {
-  for (const park of PARK_COORDINATE_FALLBACKS) {
-    if (distanceKm(lat, lng, park.lat, park.lng) <= park.radiusKm) {
-      return park.canonical;
-    }
-  }
-  return null;
-}
-
-function getPlaceTypes(place: AggregatedPlace): string[] {
-  return place.details?.types || [];
-}
-
-function extractDestinationLocalityLabel(place: AggregatedPlace): string | null {
-  const address = place.details?.formatted_address;
-  if (!address) return null;
-
-  const parts = address
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (parts.length < 2) return null;
-
-  let end = parts.length - 1;
-  if (looksLikeCountryLabel(parts[end])) {
-    end -= 1;
-  }
-
-  if (end < 1) return null;
-
-  const region = stripPostalCode(parts[end]);
-  const locality = stripPostalCode(parts[end - 1]);
-
-  if (!locality || /\d/.test(locality)) return null;
-  if (region && locality.toLowerCase() === region.toLowerCase()) return locality;
-
-  return region ? `${locality}, ${region}` : locality;
-}
-
-function voteClusterLocalityLabels(cluster: TravelCluster): Map<string, number> {
-  const labelScores = new Map<string, number>();
-
-  const addLabel = (label: string | null, score: number) => {
-    if (!label || score <= 0) return;
-    labelScores.set(label, (labelScores.get(label) || 0) + score);
+  return {
+    places: placePoints,
+    cities: cityPoints,
+    countries: countryPoints,
+    trips: tripPoints,
   };
-
-  for (const place of cluster.places) {
-    const placeScore = scorePlace(place);
-    const localityLabel = extractDestinationLocalityLabel(place);
-    if (localityLabel) {
-      addLabel(localityLabel, placeScore * 3 + (place.bucket === "travel" ? 8 : 4));
-    }
-  }
-
-  return labelScores;
 }
 
-function chooseTopScoredLabel(labelScores: Map<string, number>): string | null {
-  return [...labelScores.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-}
+function findTripMatch(trips: TimelineTripSummary[], placeName: string, year: number, monthIndex: number): boolean {
+  const target = normalizeLabel(placeName);
 
-function getTopScore(labelScores: Map<string, number>): number {
-  return [...labelScores.values()].sort((a, b) => b - a)[0] || 0;
-}
+  return trips.some((trip) => {
+    const labels = [trip.label, trip.city || "", ...trip.topPlaces].map(normalizeLabel).join(" ");
+    if (!labels.includes(target)) return false;
 
-function getSecondScore(labelScores: Map<string, number>): number {
-  return [...labelScores.values()].sort((a, b) => b - a)[1] || 0;
-}
+    const startValue = trip.startTime || trip.endTime;
+    const endValue = trip.endTime || trip.startTime;
+    if (!startValue || !endValue) return false;
 
-function getTotalScore(labelScores: Map<string, number>): number {
-  return [...labelScores.values()].reduce((sum, score) => sum + score, 0);
-}
+    const start = new Date(startValue);
+    const end = new Date(endValue);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
 
-function formatReverseGeocodeLocalityLabel(result: ReverseGeocodeResult | null): string | null {
-  if (!result) return null;
-
-  const locality = result.locality || result.adminAreaLevel2;
-  const region = result.adminAreaLevel1;
-
-  if (locality && region && normalizeForMatch(locality) !== normalizeForMatch(region)) {
-    return `${locality}, ${region}`;
-  }
-
-  return locality || region || null;
-}
-
-function isRegionLikeFeatureLabel(value: string | null): value is string {
-  if (!value) return false;
-
-  const normalized = value.trim();
-  if (!normalized) return false;
-  if (looksLikeCountryLabel(normalized)) return false;
-  if (GENERIC_FEATURE_LABEL_PATTERNS.some((pattern) => pattern.test(normalized))) return false;
-
-  return REGION_LIKE_FEATURE_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
-function formatReverseGeocodeFeatureLabel(result: ReverseGeocodeResult | null): string | null {
-  if (!result) return null;
-
-  const featureName = result.featureName || null;
-  if (isRegionLikeFeatureLabel(featureName)) {
-    return featureName.trim();
-  }
-
-  return null;
-}
-
-function choosePreferredClusterDestinationLabel(
-  localityScores: Map<string, number>,
-  featureScores: Map<string, number>
-): string | null {
-  const topFeatureLabel = chooseTopScoredLabel(featureScores);
-  const topLocalityLabel = chooseTopScoredLabel(localityScores);
-
-  if (!topFeatureLabel) {
-    return topLocalityLabel;
-  }
-
-  if (!topLocalityLabel) {
-    return topFeatureLabel;
-  }
-
-  const topFeatureScore = getTopScore(featureScores);
-  const topLocalityScore = getTopScore(localityScores);
-  const secondLocalityScore = getSecondScore(localityScores);
-  const totalLocalityScore = getTotalScore(localityScores);
-  const localityFragmented =
-    localityScores.size >= 2 &&
-    (topLocalityScore / Math.max(totalLocalityScore, 1) < 0.62 || secondLocalityScore >= topLocalityScore * 0.55);
-
-  if (localityFragmented && topFeatureScore >= Math.max(10, topLocalityScore * 0.7)) {
-    return topFeatureLabel;
-  }
-
-  return topLocalityLabel;
-}
-
-async function inferClusterLocalityDestination(cluster: TravelCluster): Promise<string | null> {
-  const localityScores = voteClusterLocalityLabels(cluster);
-  const featureScores = new Map<string, number>();
-  if (!hasGoogleLocationKey()) {
-    return choosePreferredClusterDestinationLabel(localityScores, featureScores);
-  }
-
-  try {
-    const placesClient = getPlacesClient();
-    for (const place of [...cluster.places]
-      .sort((a, b) => scorePlace(b) - scorePlace(a))
-      .slice(0, MAX_LOCALITY_REVERSE_GEOCODE_SAMPLES)) {
-      const reverseGeocode = await placesClient.reverseGeocode({ lat: place.lat, lng: place.lng });
-      const localityLabel = formatReverseGeocodeLocalityLabel(reverseGeocode);
-      const placeScore = scorePlace(place);
-      if (localityLabel) {
-        localityScores.set(
-          localityLabel,
-          (localityScores.get(localityLabel) || 0) + placeScore * 2 + Math.min(place.visitCount, 4)
-        );
-      }
-
-      const featureLabel = formatReverseGeocodeFeatureLabel(reverseGeocode);
-      if (featureLabel) {
-        featureScores.set(
-          featureLabel,
-          (featureScores.get(featureLabel) || 0) + placeScore * 2 + Math.min(place.visitCount, 4)
-        );
-      }
-    }
-
-    if (localityScores.size === 0 && featureScores.size === 0) {
-      const centroidReverseGeocode = await placesClient.reverseGeocode({ lat: cluster.lat, lng: cluster.lng });
-      const centroidLabel = formatReverseGeocodeLocalityLabel(centroidReverseGeocode);
-      if (centroidLabel) {
-        localityScores.set(centroidLabel, cluster.totalScore + Math.min(cluster.visitCount, 6));
-      }
-
-      const centroidFeatureLabel = formatReverseGeocodeFeatureLabel(centroidReverseGeocode);
-      if (centroidFeatureLabel) {
-        featureScores.set(centroidFeatureLabel, cluster.totalScore + Math.min(cluster.visitCount, 6));
-      }
-    }
-
-    return choosePreferredClusterDestinationLabel(localityScores, featureScores);
-  } catch (error) {
-    console.warn("Failed to infer travel locality from reverse geocode:", (error as Error).message);
-    return choosePreferredClusterDestinationLabel(localityScores, featureScores);
-  }
-}
-
-async function inferClusterParkDestination(cluster: TravelCluster): Promise<string | null> {
-  const coordinateMatch = getParkMatchFromCoordinates(cluster.lat, cluster.lng);
-  if (coordinateMatch) return coordinateMatch;
-
-  if (!hasGoogleLocationKey()) return null;
-
-  try {
-    const placesClient = getPlacesClient();
-    const nearbyParks = await placesClient.searchPlaces(
-      "National Park",
-      { lat: cluster.lat, lng: cluster.lng },
-      120000,
-      null,
-      { preferTextSearch: false }
-    );
-
-    let bestMatch: { canonical: string; score: number } | null = null;
-    for (const result of nearbyParks) {
-      const canonical = getParkMatchFromText(`${result.name} ${result.vicinity || ""}`);
-      if (!canonical) continue;
-
-      const distancePenalty = distanceKm(cluster.lat, cluster.lng, result.location.lat, result.location.lng);
-      if (distancePenalty > 120) continue;
-
-      const score =
-        cluster.totalScore +
-        (result.types.includes("park") || result.types.includes("natural_feature") ? 4 : 0) -
-        distancePenalty / 25;
-
-      if (!bestMatch || score > bestMatch.score) {
-        bestMatch = { canonical, score };
-      }
-    }
-
-    return bestMatch?.canonical || null;
-  } catch (error) {
-    console.warn("Failed to infer visited park from nearby search:", (error as Error).message);
-    return null;
-  }
-}
-
-function hasResolvedPlaceName(place: AggregatedPlace): boolean {
-  if (place.details?.name?.trim()) return true;
-  const name = getDominantValue(place.nameCounts, "");
-  return Boolean(name.trim());
-}
-
-function isLikelyRealVisitPlace(place: AggregatedPlace): boolean {
-  const semanticType = getDominantValue(place.semanticTypeCounts, "");
-  if (semanticType === "Home" || semanticType === "Work") return false;
-
-  const types = getPlaceTypes(place);
-  if (types.some((type) => TRANSIT_OR_PASS_THROUGH_TYPES.has(type))) {
-    return false;
-  }
-
-  if (place.visitCount >= 2) return true;
-  if (place.totalDurationMinutes >= 45) return true;
-  if (types.some((type) => DESTINATION_ANCHOR_TYPES.has(type))) return true;
-
-  return false;
-}
-
-function isTravelClusterCandidate(place: AggregatedPlace): boolean {
-  const semanticType = getDominantValue(place.semanticTypeCounts, "");
-  if (semanticType === "Home" || semanticType === "Work") return false;
-
-  const types = getPlaceTypes(place);
-  if (types.some((type) => TRANSIT_OR_PASS_THROUGH_TYPES.has(type))) {
-    return false;
-  }
-
-  return place.bucket === "regional" || place.bucket === "travel";
-}
-
-function isSignificantDestinationCluster(cluster: TravelCluster): boolean {
-  return cluster.totalDurationMinutes >= 90 || cluster.visitCount >= 3 || cluster.places.length >= 3;
-}
-
-function shouldIncludeOnTimelineMap(place: AggregatedPlace): boolean {
-  const semanticType = getDominantValue(place.semanticTypeCounts, "");
-  return semanticType !== "Home" && semanticType !== "Work";
-}
-
-function buildTravelClusters(
-  travelPlaces: AggregatedPlace[],
-  predicate: (place: AggregatedPlace) => boolean = isLikelyRealVisitPlace
-): TravelCluster[] {
-  const clusters: TravelCluster[] = [];
-
-  for (const place of travelPlaces.filter(predicate).sort((a, b) => scorePlace(b) - scorePlace(a))) {
-    const placeScore = scorePlace(place);
-    const existing = clusters.find(
-      (cluster) => distanceKm(cluster.lat, cluster.lng, place.lat, place.lng) <= TRAVEL_CLUSTER_RADIUS_KM
-    );
-
-    if (!existing) {
-      clusters.push({
-        lat: place.lat,
-        lng: place.lng,
-        totalScore: placeScore,
-        totalDurationMinutes: place.totalDurationMinutes,
-        visitCount: place.visitCount,
-        places: [place],
-      });
-      continue;
-    }
-
-    const combinedScore = existing.totalScore + placeScore;
-    existing.lat = (existing.lat * existing.totalScore + place.lat * placeScore) / combinedScore;
-    existing.lng = (existing.lng * existing.totalScore + place.lng * placeScore) / combinedScore;
-    existing.totalScore = combinedScore;
-    existing.totalDurationMinutes += place.totalDurationMinutes;
-    existing.visitCount += place.visitCount;
-    existing.places.push(place);
-  }
-
-  return clusters.sort((a, b) => b.totalScore - a.totalScore);
-}
-
-async function deriveVisitedDestinations(travelPlaces: AggregatedPlace[]): Promise<string[]> {
-  const parkScores = new Map<string, number>();
-
-  for (const place of travelPlaces) {
-    const haystack = getPlaceSearchText(place);
-    if (!haystack) continue;
-    const matchedPark = getParkMatchFromText(haystack);
-    if (matchedPark) {
-      parkScores.set(matchedPark, (parkScores.get(matchedPark) || 0) + scorePlace(place));
-    }
-  }
-
-  try {
-    const clusters = buildTravelClusters(travelPlaces, isTravelClusterCandidate)
-      .filter((cluster) => isSignificantDestinationCluster(cluster) || cluster.totalScore >= 6)
-      .slice(0, MAX_DESTINATION_CLUSTERS_TO_LABEL);
-
-    for (const cluster of clusters) {
-      const canonical = await inferClusterParkDestination(cluster);
-      if (!canonical) continue;
-      parkScores.set(canonical, (parkScores.get(canonical) || 0) + cluster.totalScore + cluster.visitCount);
-    }
-  } catch (error) {
-    console.warn("Failed to infer visited parks from nearby searches:", (error as Error).message);
-  }
-
-  const visitedParks = [...parkScores.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([name]) => name);
-
-  return dedupe(visitedParks, 10);
-}
-
-async function deriveVisitedPlaces(travelPlaces: AggregatedPlace[]): Promise<TimelineVisitedPlace[]> {
-  const mergedDestinations = new Map<string, TimelineVisitedPlace>();
-
-  for (const cluster of buildTravelClusters(travelPlaces, isTravelClusterCandidate)
-    .filter(isSignificantDestinationCluster)
-    .slice(0, MAX_DESTINATION_CLUSTERS_TO_LABEL)) {
-    const localityLabel = await inferClusterLocalityDestination(cluster);
-    const parkLabel = await inferClusterParkDestination(cluster);
-    const labels = dedupe([localityLabel || "", parkLabel || ""], 2);
-
-    for (const label of labels) {
-      const normalized = normalizeForMatch(label);
-      if (!normalized) continue;
-
-      const existing = mergedDestinations.get(normalized);
-      if (existing) {
-        const combinedVisits = existing.visitCount + cluster.visitCount;
-        const combinedDuration = existing.totalDurationMinutes + cluster.totalDurationMinutes;
-        existing.lat = (existing.lat * existing.visitCount + cluster.lat * cluster.visitCount) / combinedVisits;
-        existing.lng = (existing.lng * existing.visitCount + cluster.lng * cluster.visitCount) / combinedVisits;
-        existing.visitCount = combinedVisits;
-        existing.totalDurationMinutes = combinedDuration;
-        continue;
-      }
-
-      mergedDestinations.set(normalized, {
-        name: label,
-        lat: cluster.lat,
-        lng: cluster.lng,
-        visitCount: cluster.visitCount,
-        totalDurationMinutes: cluster.totalDurationMinutes,
-      });
-    }
-  }
-
-  return [...mergedDestinations.values()].sort((a, b) => {
-    if (b.totalDurationMinutes !== a.totalDurationMinutes) {
-      return b.totalDurationMinutes - a.totalDurationMinutes;
-    }
-    return b.visitCount - a.visitCount;
+    const monthStart = new Date(Date.UTC(year, monthIndex, 1));
+    const monthEnd = new Date(Date.UTC(year, monthIndex + 1, 1));
+    return start.getTime() < monthEnd.getTime() && end.getTime() >= monthStart.getTime();
   });
 }
 
-function buildMapPoints(places: AggregatedPlace[]): TimelineMapPoint[] {
-  const bucketScore = (bucket: AggregatedPlace["bucket"]) => {
-    if (bucket === "travel") return 3;
-    if (bucket === "regional") return 2;
-    if (bucket === "local") return 1;
-    return 0;
-  };
+function buildVerification(cities: TimelineCitySummary[], countries: TimelineCountrySummary[], trips: TimelineTripSummary[]) {
+  const usCityCount = cities.filter((city) => city.countryCode === "US" || normalizeLabel(city.country || "") === "united states").length;
+  const indiaCityCount = cities.filter((city) => city.countryCode === "IN" || normalizeLabel(city.country || "") === "india").length;
 
-  return [...places]
-    .filter(shouldIncludeOnTimelineMap)
-    .sort((a, b) => {
-      const bucketDelta = bucketScore(b.bucket) - bucketScore(a.bucket);
-      if (bucketDelta !== 0) return bucketDelta;
-      const resolvedDelta = Number(hasResolvedPlaceName(b)) - Number(hasResolvedPlaceName(a));
-      if (resolvedDelta !== 0) return resolvedDelta;
-      return scorePlace(b) - scorePlace(a);
-    })
-    .map((place) => ({
-      id: place.key,
-      lat: place.lat,
-      lng: place.lng,
-      name: getDisplayName(place),
-      kind: place.bucket === "travel" ? "travel" : place.bucket === "regional" ? "regional" : "local",
-      visitCount: place.visitCount,
-      totalDurationMinutes: place.totalDurationMinutes,
-      identified: hasResolvedPlaceName(place),
-    }));
+  return {
+    checks: [
+      {
+        id: "us-cities",
+        label: "200+ cities in the United States",
+        passed: usCityCount >= 200,
+        actual: `${usCityCount} cities`,
+        expected: "200+ cities",
+      },
+      {
+        id: "india-cities",
+        label: "20+ cities in India",
+        passed: indiaCityCount >= 20,
+        actual: `${indiaCityCount} cities`,
+        expected: "20+ cities",
+      },
+      {
+        id: "countries",
+        label: "15 countries visited",
+        passed: countries.length >= 15,
+        actual: `${countries.length} countries`,
+        expected: "15+ countries",
+      },
+      {
+        id: "trip-count",
+        label: "100+ trips detected",
+        passed: trips.length >= 100,
+        actual: `${trips.length} trips`,
+        expected: "100+ trips",
+      },
+      {
+        id: "atlantic-city",
+        label: "Atlantic City in November 2024",
+        passed: findTripMatch(trips, "Atlantic City", 2024, 10),
+        actual: findTripMatch(trips, "Atlantic City", 2024, 10) ? "Found" : "Missing",
+        expected: "Trip present",
+      },
+      {
+        id: "philadelphia",
+        label: "Philadelphia in August 2024",
+        passed: findTripMatch(trips, "Philadelphia", 2024, 7),
+        actual: findTripMatch(trips, "Philadelphia", 2024, 7) ? "Found" : "Missing",
+        expected: "Trip present",
+      },
+      {
+        id: "seoul",
+        label: "Seoul in April 2024",
+        passed: findTripMatch(trips, "Seoul", 2024, 3),
+        actual: findTripMatch(trips, "Seoul", 2024, 3) ? "Found" : "Missing",
+        expected: "Trip present",
+      },
+    ],
+  };
 }
 
-function buildSummary(localSignals: string[], travelSignals: string[], patternSignals: string[]): string {
-  const parts: string[] = [];
-
-  if (localSignals[0]) {
-    parts.push(`Locally, ${localSignals[0].charAt(0).toLowerCase()}${localSignals[0].slice(1)}`);
-  }
-  if (travelSignals[0]) {
-    parts.push(`When you travel, ${travelSignals[0].charAt(0).toLowerCase()}${travelSignals[0].slice(1)}`);
-  }
-  if (patternSignals[0]) {
-    parts.push(patternSignals[0]);
-  }
-
-  if (parts.length === 0) {
-    return "The timeline shows enough repeat movement to infer preferences, but not enough place context to make strong category-level calls yet.";
-  }
-
-  return parts.join(" ");
+function buildSummary(
+  places: TimelinePlaceSummary[],
+  cities: TimelineCitySummary[],
+  countries: TimelineCountrySummary[],
+  trips: TimelineTripSummary[]
+): string {
+  const topCategories = dedupe(places.slice(0, 20).map((place) => place.category)).slice(0, 3);
+  const categoryClause = topCategories.length > 0 ? ` Strongest categories: ${topCategories.join(", ")}.` : "";
+  return `Processed ${places.reduce((sum, place) => sum + place.visitCount, 0)} qualifying visits into ${places.length} places, ${cities.length} cities, ${countries.length} countries, and ${trips.length} trips.${categoryClause}`;
 }
 
 export async function analyzeTimelineVisits(visits: TimelineVisit[]): Promise<TimelineAnalysisResponse> {
-  const normalizedVisits = visits.filter((visit) => Number.isFinite(visit.lat) && Number.isFinite(visit.lng));
-  const places = aggregatePlaces(normalizedVisits);
+  const normalizedVisits = visits
+    .filter((visit) =>
+      Number.isFinite(visit.lat) &&
+      Number.isFinite(visit.lng) &&
+      typeof visit.placeId === "string" &&
+      visit.placeId.trim()
+    )
+    .sort((left, right) => compareTimelineTimes(left.startTime || left.endTime, right.startTime || right.endTime));
 
-  if (normalizedVisits.length === 0 || places.length === 0) {
+  if (normalizedVisits.length === 0) {
     return {
-      summary: "No usable visit history was found in the uploaded timeline export.",
+      summary: "No qualifying timeline visits were found in the uploaded export.",
       preferences: [],
       foodPreferences: [],
       visitedDestinations: [],
-      visitedPlaces: [],
-      localSignals: [],
-      travelSignals: [],
-      mapPoints: [],
+      places: [],
+      cities: [],
+      countries: [],
+      trips: [],
+      mapPoints: {
+        places: [],
+        cities: [],
+        countries: [],
+        trips: [],
+      },
+      verification: {
+        checks: [],
+      },
       stats: {
         visitCount: 0,
-        recurringPlaceCount: 0,
-        localPlaceCount: 0,
-        travelPlaceCount: 0,
+        placeCount: 0,
+        cityCount: 0,
+        countryCount: 0,
         tripCount: 0,
       },
     };
   }
 
-  const homePlace = chooseHomePlace(places, normalizedVisits);
-  if (homePlace) {
-    for (const place of places) {
-      const semanticType = getDominantValue(place.semanticTypeCounts, "Unknown");
-      place.distanceFromHomeKm = distanceKm(homePlace.lat, homePlace.lng, place.lat, place.lng);
-      place.bucket = bucketPlace(place.distanceFromHomeKm, semanticType);
-    }
-  }
-
-  await enrichPlaces(places);
-
-  const sortablePlaces = [...places].sort((a, b) => scorePlace(b) - scorePlace(a));
-  const localPlaces = sortablePlaces.filter((place) => place.bucket === "local");
-  const travelPlaces = sortablePlaces.filter((place) => place.bucket === "regional" || place.bucket === "travel");
-  const recurringPlaces = sortablePlaces.filter((place) => place.visitCount > 1);
-  const inferredFoodPreferences = inferFoodPreferences(sortablePlaces);
-  const visitedPlaces = await deriveVisitedPlaces(travelPlaces);
-  const visitedDestinations = dedupe(
-    [...visitedPlaces.map((place) => place.name), ...(await deriveVisitedDestinations(travelPlaces))],
-    MAX_VISITED_DESTINATIONS
+  const placeInfoById = await resolveTimelinePlaceInfoMap(
+    normalizedVisits.map((visit) => ({
+      placeId: visit.placeId,
+      lat: visit.lat,
+      lng: visit.lng,
+    }))
   );
-
-  const distanceByKey = new Map(places.map((place) => [place.key, place.distanceFromHomeKm]));
-  const bucketByKey = new Map(places.map((place) => [place.key, place.bucket]));
-  const episodes = detectTravelEpisodes(normalizedVisits, distanceByKey, bucketByKey);
-
-  const localSignalsResult = pickSignals(localPlaces, LOCAL_FOOD_RULES, 2);
-  const travelSignalsResult = pickSignals(travelPlaces, TRAVEL_RULES, 3);
-  const patternSignalsResult = summarizeEpisodes(episodes);
-  const localSignals = [...localSignalsResult.signals];
-  const travelSignals = [...travelSignalsResult.signals];
-  const localPreferenceHints = [...localSignalsResult.preferences];
-  const travelPreferenceHints = [...travelSignalsResult.preferences];
-
-  if (localSignals.length === 0 && localPlaces.length >= 3) {
-    localSignals.push(
-      "Local behavior clusters around repeat stops, which suggests dependable neighborhoods and easy food access matter more than novelty alone."
-    );
-    localPreferenceHints.push("Prefers dependable neighborhoods with easy, high-confidence dining options");
-  }
-
-  if (travelSignals.length === 0 && travelPlaces.length >= 3) {
-    travelSignals.push(
-      "Travel history leans toward repeated regional exploration instead of staying anchored to a single resort-style base."
-    );
-    travelPreferenceHints.push("Likes exploring distinct areas of a destination instead of staying in one bubble");
-  }
-
-  const repeatTravelPlaces = travelPlaces.filter((place) => place.visitCount > 1).length;
-  const travelRepeatRatio = travelPlaces.length > 0 ? repeatTravelPlaces / travelPlaces.length : 0;
-
-  const patternSignals = [...patternSignalsResult.signals];
-  const patternPreferences = [...patternSignalsResult.preferences];
-  if (travelRepeatRatio >= 0.35) {
-    patternSignals.push("You revisit places you like, which points to valuing proven favorites over novelty for its own sake.");
-    patternPreferences.push("Values proven favorites and high-confidence picks over novelty alone");
-  }
-
-  const preferences = dedupe(
-    [
-      ...travelPreferenceHints,
-      ...patternPreferences,
-      ...localPreferenceHints,
-    ],
-    6
-  );
-  const foodPreferenceFallbacks = dedupe(
-    [...localPreferenceHints, ...travelPreferenceHints, ...patternPreferences].filter(isFoodPreferenceText),
-    3
-  );
-  const foodPreferences = dedupe(
-    [...inferredFoodPreferences, ...foodPreferenceFallbacks],
-    4
-  );
+  const places = buildPlaceSummaries(normalizedVisits, placeInfoById);
+  const citySummaries = buildCitySummaries(places);
+  const countrySummaries = buildCountrySummaries(places);
+  const resolvedVisits = buildResolvedVisits(normalizedVisits, places);
+  const tripContext = detectHomeContext(citySummaries, countrySummaries);
+  const trips = buildTrips(resolvedVisits, tripContext);
+  const { cities, countries } = applyTripCounts(citySummaries, countrySummaries, trips);
 
   return {
-    summary: buildSummary(localSignals, travelSignals, patternSignals),
-    preferences,
-    foodPreferences,
-    visitedDestinations,
-    visitedPlaces,
-    localSignals: dedupe(localSignals, 3),
-    travelSignals: dedupe([...travelSignals, ...patternSignals], 4),
-    mapPoints: buildMapPoints(sortablePlaces),
+    summary: buildSummary(places, cities, countries, trips),
+    preferences: buildCategoryPreferences(places, trips, countries),
+    foodPreferences: buildFoodPreferences(places),
+    visitedDestinations: buildVisitedDestinations(cities, countries, trips),
+    places,
+    cities,
+    countries,
+    trips,
+    mapPoints: buildMapPoints(places, cities, countries, trips),
+    verification: buildVerification(cities, countries, trips),
     stats: {
       visitCount: normalizedVisits.length,
-      recurringPlaceCount: recurringPlaces.length,
-      localPlaceCount: localPlaces.length,
-      travelPlaceCount: travelPlaces.length,
-      tripCount: episodes.length,
+      placeCount: places.length,
+      cityCount: cities.length,
+      countryCount: countries.length,
+      tripCount: trips.length,
     },
   };
 }
