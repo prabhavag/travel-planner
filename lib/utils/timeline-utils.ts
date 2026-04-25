@@ -4,6 +4,7 @@
  */
 
 import type { SuggestedActivity } from "@/lib/api-client";
+import { parseDurationHours } from "@/lib/services/day-grouping/utils";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -103,28 +104,7 @@ export function hasHardFixedStart(activity: SuggestedActivity): boolean {
  * Examples: "2-3 hours" → 2.5, "half day" → 4, "30 min" → 0.5
  */
 export function parseEstimatedHours(duration?: string | null): number {
-    if (!duration) return 2;
-    const text = duration.toLowerCase().trim();
-    if (!text) return 2;
-
-    const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
-    if (rangeMatch) {
-        const min = Number(rangeMatch[1]);
-        const max = Number(rangeMatch[2]);
-        if (Number.isFinite(min) && Number.isFinite(max) && max >= min) return (min + max) / 2;
-    }
-
-    const singleHourMatch = text.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)/);
-    if (singleHourMatch) {
-        const value = Number(singleHourMatch[1]);
-        if (Number.isFinite(value)) return value;
-    }
-
-    if (/half\s*day/.test(text)) return 4;
-    if (/full\s*day|all\s*day/.test(text)) return 7;
-    if (/30\s*min/.test(text)) return 0.5;
-    if (/45\s*min/.test(text)) return 0.75;
-    return 2;
+    return parseDurationHours(duration);
 }
 
 /** Format decimal hours as a short human label. E.g. 1 → "1 hr", 2.5 → "2.5 hrs". */

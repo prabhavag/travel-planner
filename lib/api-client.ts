@@ -162,8 +162,14 @@ export interface SessionResponse {
   suggestedActivities?: SuggestedActivity[];
   selectedActivityIds?: string[];
   selectedCount?: number;
+  currentSchedule?: ScheduleState;
+  tentativeSchedule?: ScheduleState | null;
   dayGroups?: DayGroup[];
   groupedDays?: GroupedDay[];
+  activityCostDebugById?: Record<string, ActivityCostDebug>;
+  unassignedActivityIds?: string[];
+  llmRefinementResult?: LlmRefinementResult | null;
+  llmRefinementPreview?: LlmRefinementPreview | null;
   restaurantSuggestions?: RestaurantSuggestion[];
   selectedRestaurantIds?: string[];
   wantsRestaurants?: boolean;
@@ -187,6 +193,32 @@ export interface AiCheckResult {
   status: "OK" | "ERROR";
   summary: string;
   checkedAt: string;
+}
+
+export interface LlmRefinementResult {
+  accepted: boolean;
+  beforeTotalCost: number;
+  candidateTotalCost: number | null;
+  afterTotalCost: number;
+  costDelta: number | null;
+  operationType: "move" | "unschedule" | "set_night_stay" | "no_op" | "multi" | "error";
+  operationCount: number;
+  operationSummary: string;
+  suggestedOperations: Array<Record<string, unknown>>;
+  reason: string | null;
+}
+
+export interface LlmRefinementPreview {
+  hasCandidate: boolean;
+  recommendedByCost: boolean;
+  beforeGroupedDays: GroupedDay[];
+  afterGroupedDays: GroupedDay[] | null;
+  beforeUnassignedActivityIds: string[];
+  afterUnassignedActivityIds: string[] | null;
+  candidateDayGroups: DayGroup[] | null;
+  candidateUnassignedActivityIds: string[] | null;
+  currentSchedule?: ScheduleState;
+  tentativeSchedule?: ScheduleState | null;
 }
 
 export type AgentTurnTrigger = "user_message" | "ui_action" | "auto";
@@ -635,6 +667,17 @@ export interface GroupedDay {
   restaurants: RestaurantSuggestion[];
   nightStay?: NightStay | null;
   debugCost?: DayCostDebug | null;
+  timelineItems?: TimelineItem[];
+}
+
+export interface TimelineItem {
+  type: "stay" | "activity" | "lunch" | "commute" | "continue" | "free" | "warning";
+  id: string;
+  title: string;
+  detail: string;
+  timeRange?: string;
+  activityId?: string;
+  affordLabel?: string;
 }
 
 export interface DayCostDebug {
@@ -648,6 +691,23 @@ export interface DayCostDebug {
   commuteImbalancePenalty: number;
   nearbySplitPenalty: number;
   durationMismatchPenalty: number;
+}
+
+export interface ActivityCostDebug {
+  kind: "scheduled" | "unscheduled";
+  total: number;
+  details: string[];
+  lines: Array<{
+    label: string;
+    value: number;
+  }>;
+}
+
+export interface ScheduleState {
+  dayGroups: DayGroup[];
+  groupedDays: GroupedDay[];
+  unassignedActivityIds: string[];
+  activityCostDebugById: Record<string, ActivityCostDebug>;
 }
 
 export interface NightStay {
@@ -700,6 +760,40 @@ export async function selectActivities(
   return fetchJson(`${BASE_URL}/select-activities`, {
     method: "POST",
     body: JSON.stringify({ sessionId, selectedActivityIds }),
+  });
+}
+
+export async function runLlmRefinementStep(sessionId: string): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/refine-day-grouping`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+export async function applyLlmRefinementCandidate(
+  sessionId: string,
+  candidateDayGroups: DayGroup[],
+  candidateUnassignedActivityIds: string[],
+  llmRefinementResult?: LlmRefinementResult | null
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/refine-day-grouping/apply`, {
+    method: "POST",
+    body: JSON.stringify({
+      sessionId,
+      candidateDayGroups,
+      candidateUnassignedActivityIds,
+      llmRefinementResult: llmRefinementResult ?? null,
+    }),
+  });
+}
+
+export async function resolveLlmRefinementPreview(
+  sessionId: string,
+  action: "reject" | "discard"
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/refine-day-grouping/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, action }),
   });
 }
 

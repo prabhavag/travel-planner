@@ -2,6 +2,8 @@ import type {
     SuggestedActivity,
 } from "@/lib/models/travel-plan";
 
+export type ActivityGroupingStrategy = "heuristic" | "llm";
+
 export const TIME_ORDER: Record<SuggestedActivity["bestTimeOfDay"], number> = {
     morning: 0,
     afternoon: 1,
@@ -77,6 +79,16 @@ export interface DayCapacityProfile {
     slotCapacity: Record<Exclude<SuggestedActivity["bestTimeOfDay"], "any">, number>;
     targetWeight: number;
     overflowPenaltyMultiplier?: number;
+    timingConstraints?: DayTimingConstraint[];
+}
+
+export interface DayTimingConstraint {
+    type: "arrival" | "departure";
+    sourceTime: string | null;
+    earliestStartMinutes?: number;
+    latestEndMinutes?: number;
+    airportArrivalDeadlineMinutes?: number;
+    reason: string;
 }
 
 export interface DayBucket {

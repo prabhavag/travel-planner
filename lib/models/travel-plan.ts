@@ -364,6 +364,18 @@ export const DayCostDebugSchema = z.object({
 
 export type DayCostDebug = z.infer<typeof DayCostDebugSchema>;
 
+export const TimelineItemSchema = z.object({
+  type: z.enum(["stay", "activity", "lunch", "commute", "continue", "free", "warning"]),
+  id: z.string(),
+  title: z.string(),
+  detail: z.string(),
+  timeRange: z.string().optional(),
+  activityId: z.string().optional(),
+  affordLabel: z.string().optional(),
+});
+
+export type TimelineItem = z.infer<typeof TimelineItemSchema>;
+
 // Day grouping from LLM
 export const DayGroupSchema = z.object({
   dayNumber: z.number(),
@@ -406,6 +418,7 @@ export const GroupedDaySchema = z.object({
   restaurants: z.array(RestaurantSuggestionSchema).default([]),
   nightStay: NightStaySchema.optional().nullable(),
   debugCost: DayCostDebugSchema.optional().nullable(),
+  timelineItems: z.array(TimelineItemSchema).optional(),
 });
 
 export type GroupedDay = z.infer<typeof GroupedDaySchema>;

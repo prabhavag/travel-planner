@@ -28,13 +28,234 @@ import {
     parseFixedStartTimeMinutes,
     cloneDefaultSlotCapacity,
     getPermutations,
+    isFullDayDuration,
+    parseDurationHours,
 } from "./utils";
 import {
     activityCommuteMinutes,
     activityDistanceProxy,
 } from "./routing";
+import { computePlannableDurationHours } from "@/lib/planning-flags";
 
 export const structuralStatsCache = new Map<string, DayStructuralStats>();
+
+export interface ActivityCostDebug {
+    kind: "scheduled" | "unscheduled";
+    total: number;
+    details: string[];
+    lines: Array<{
+        label: string;
+        value: number;
+    }>;
+}
+
+export function buildPreparedActivityMap<T extends {
+    id: string;
+    estimatedDuration: string;
+    isDurationFlexible?: boolean | null;
+}>(activities: T[]): Map<string, PreparedActivity> {
+    const preparedMap = new Map<string, PreparedActivity>();
+    for (const activity of activities) {
+        const durationHours = parseDurationHours(activity.estimatedDuration);
+        preparedMap.set(activity.id, {
+            activity: activity as unknown as SuggestedActivity,
+            durationHours,
+            loadDurationHours: computePlannableDurationHours(durationHours, activity.isDurationFlexible),
+            isFullDay: isFullDayDuration(activity.estimatedDuration, durationHours),
+        });
+    }
+    return preparedMap;
+}
+
+function addActivityCostLine(
+    debugById: Record<string, ActivityCostDebug>,
+    activityId: string,
+    kind: ActivityCostDebug["kind"],
+    label: string,
+    value: number,
+    details: string[]
+): void {
+    if (!Number.isFinite(value) || value === 0) return;
+    const current = debugById[activityId] ?? {
+        kind,
+        total: 0,
+        details,
+        lines: [],
+    };
+    current.kind = kind;
+    current.total += value;
+    const existingLine = current.lines.find((line) => line.label === label);
+    if (existingLine) {
+        existingLine.value += value;
+    } else {
+        current.lines.push({ label, value });
+    }
+    debugById[activityId] = current;
+}
+
+export function computeActivityCostDebug({
+    days,
+    preparedMap,
+    commuteMinutesByPair,
+    dayCapacities,
+    unassignedActivityIds,
+    costBreakdown,
+    dayStats,
+}: {
+    days: WorkingDay[];
+    preparedMap: Map<string, PreparedActivity>;
+    commuteMinutesByPair: ActivityCommuteMatrix;
+    dayCapacities: DayCapacityProfile[];
+    unassignedActivityIds: string[];
+    costBreakdown?: TripCostBreakdown;
+    dayStats?: DayStructuralStats[];
+}): Record<string, ActivityCostDebug> {
+    const debugById: Record<string, ActivityCostDebug> = {};
+    const scheduledHoursByActivity = new Map<string, number>();
+    const activityDayIndex = new Map<string, number>();
+
+    const breakdown =
+        costBreakdown ?? computeTotalCostBreakdown(days, preparedMap, commuteMinutesByPair, dayCapacities, dayStats);
+    const computedDayStats = dayStats ?? computeAllDayStats(days, preparedMap, commuteMinutesByPair, dayCapacities);
+
+    days.forEach((day, dayIndex) => {
+        const scheduledIds = day.activityIds.filter((id) => preparedMap.has(id));
+        const totalLoad = scheduledIds.reduce((sum, id) => sum + Math.max(0.01, preparedMap.get(id)?.loadDurationHours ?? 0), 0);
+        const totalLoadSafe = totalLoad > 0 ? totalLoad : Math.max(1, scheduledIds.length);
+        const dayCost = breakdown.dayBreakdowns[dayIndex]?.dayCost ?? 0;
+
+        for (const activityId of scheduledIds) {
+            const prepared = preparedMap.get(activityId);
+            if (!prepared) continue;
+            activityDayIndex.set(activityId, dayIndex);
+            scheduledHoursByActivity.set(
+                activityId,
+                (scheduledHoursByActivity.get(activityId) ?? 0) + Math.min(prepared.loadDurationHours, prepared.durationHours)
+            );
+            const share = Math.max(0.01, prepared.loadDurationHours) / totalLoadSafe;
+            addActivityCostLine(
+                debugById,
+                activityId,
+                "scheduled",
+                "Day cost share",
+                dayCost * share,
+                ["Server cost attribution for the current scheduled plan."]
+            );
+        }
+    });
+
+    if (breakdown.commuteImbalancePenalty > 0 && computedDayStats.length > 0) {
+        const maxCommute = Math.max(...computedDayStats.map((stats) => stats.commuteProxy));
+        const maxCommuteDayIndexes = computedDayStats
+            .map((stats, index) => ({ stats, index }))
+            .filter((entry) => entry.stats.commuteProxy === maxCommute)
+            .map((entry) => entry.index);
+        const maxCommuteActivityIds = maxCommuteDayIndexes.flatMap((dayIndex) =>
+            (days[dayIndex]?.activityIds ?? []).filter((id) => preparedMap.has(id))
+        );
+        const totalLoad = maxCommuteActivityIds.reduce(
+            (sum, id) => sum + Math.max(0.01, preparedMap.get(id)?.loadDurationHours ?? 0),
+            0
+        );
+        const totalLoadSafe = totalLoad > 0 ? totalLoad : Math.max(1, maxCommuteActivityIds.length);
+        for (const activityId of maxCommuteActivityIds) {
+            const prepared = preparedMap.get(activityId);
+            if (!prepared) continue;
+            addActivityCostLine(
+                debugById,
+                activityId,
+                "scheduled",
+                "Commute imbalance",
+                breakdown.commuteImbalancePenalty * (Math.max(0.01, prepared.loadDurationHours) / totalLoadSafe),
+                ["Server cost attribution for the current scheduled plan."]
+            );
+        }
+    }
+
+    const preparedEntries = Array.from(preparedMap.values());
+    for (let i = 0; i < preparedEntries.length; i += 1) {
+        for (let j = i + 1; j < preparedEntries.length; j += 1) {
+            const left = preparedEntries[i];
+            const right = preparedEntries[j];
+            const leftDay = activityDayIndex.get(left.activity.id);
+            const rightDay = activityDayIndex.get(right.activity.id);
+            if (leftDay == null || rightDay == null || leftDay === rightDay) continue;
+
+            const commuteMinutes = activityCommuteMinutes(left.activity, right.activity, commuteMinutesByPair);
+            if (commuteMinutes > NEARBY_CLUSTER_MAX_COMMUTE_MINUTES) continue;
+
+            const leftProfile = dayCapacities[leftDay];
+            const rightProfile = dayCapacities[rightDay];
+            const leftTotalIfMerged = (computedDayStats[leftDay]?.totalHours ?? 0) + right.loadDurationHours;
+            const rightTotalIfMerged = (computedDayStats[rightDay]?.totalHours ?? 0) + left.loadDurationHours;
+            const squeezableOnEitherDay =
+                (leftProfile && leftTotalIfMerged <= leftProfile.maxHours + NEARBY_CLUSTER_SQUEEZE_HOURS) ||
+                (rightProfile && rightTotalIfMerged <= rightProfile.maxHours + NEARBY_CLUSTER_SQUEEZE_HOURS);
+            if (!squeezableOnEitherDay) continue;
+
+            const proximity = (NEARBY_CLUSTER_MAX_COMMUTE_MINUTES - commuteMinutes) / NEARBY_CLUSTER_MAX_COMMUTE_MINUTES;
+            const pairPenalty = proximity * (left.loadDurationHours + right.loadDurationHours) * 0.5 * COST_WEIGHTS.nearbySplit;
+            addActivityCostLine(
+                debugById,
+                left.activity.id,
+                "scheduled",
+                "Nearby split",
+                pairPenalty / 2,
+                ["Server cost attribution for the current scheduled plan."]
+            );
+            addActivityCostLine(
+                debugById,
+                right.activity.id,
+                "scheduled",
+                "Nearby split",
+                pairPenalty / 2,
+                ["Server cost attribution for the current scheduled plan."]
+            );
+        }
+    }
+
+    const unassignedSet = new Set(unassignedActivityIds);
+    for (const [activityId, prepared] of preparedMap.entries()) {
+        const recommendedHours = Math.max(0, prepared.durationHours);
+        const scheduledHours = Math.max(0, scheduledHoursByActivity.get(activityId) ?? 0);
+        const underscheduledHours = Math.max(0, recommendedHours - scheduledHours);
+        if (underscheduledHours <= 0) continue;
+        const durationMismatch =
+            underscheduledHours * COST_WEIGHTS.underDurationShortfallLinear +
+            underscheduledHours * underscheduledHours * COST_WEIGHTS.underDurationShortfallQuadratic;
+        const kind = unassignedSet.has(activityId) ? "unscheduled" : "scheduled";
+        addActivityCostLine(
+            debugById,
+            activityId,
+            kind,
+            "Duration mismatch",
+            durationMismatch,
+            kind === "unscheduled"
+                ? ["Server cost for an unassigned activity: recommended duration is currently unscheduled."]
+                : ["Server cost attribution for the current scheduled plan."]
+        );
+    }
+
+    for (const activityId of preparedMap.keys()) {
+        if (debugById[activityId]) continue;
+        const kind = unassignedSet.has(activityId) ? "unscheduled" : "scheduled";
+        debugById[activityId] = {
+            kind,
+            total: 0,
+            details:
+                kind === "unscheduled"
+                    ? ["Server cost for an unassigned activity: no nonzero penalty is currently attributed."]
+                    : ["Server cost attribution for the current scheduled plan: no nonzero penalty is currently attributed."],
+            lines: [],
+        };
+    }
+
+    for (const value of Object.values(debugById)) {
+        value.total = value.lines.reduce((sum, line) => sum + line.value, 0);
+    }
+
+    return debugById;
+}
 
 function computeAfterHoursMinutes(startMinutes: number, endMinutes: number): number {
     if (endMinutes <= startMinutes) return 0;

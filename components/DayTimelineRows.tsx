@@ -1,8 +1,8 @@
-import { useMemo, useEffect, type DragEvent } from "react";
+import { useMemo, type DragEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Home, AlertTriangle, Utensils } from "lucide-react";
-import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
-import { DayActivityItem, type ActivityGroupingCostBreakdown } from "@/components/DayActivityItem";
+import type { ActivityCostDebug, GroupedDay, SuggestedActivity, TimelineItem as ServerTimelineItem } from "@/lib/api-client";
+import { DayActivityItem } from "@/components/DayActivityItem";
 import {
   type CommuteMode,
   formatHourLabel,
@@ -30,7 +30,6 @@ import {
   COMMUTE_TRANSITION_BUFFER_MINUTES,
   AIRPORT_ARRIVAL_LEAD_MINUTES,
   PRE_DAY_BUFFER_MINUTES,
-  MIN_SCHEDULED_DURATION_RATIO,
   DEFAULT_SUNSET_MINUTES,
   LUNCH_MIN_START_MINUTES,
   LUNCH_TARGET_START_MINUTES,
@@ -39,6 +38,7 @@ import {
   REGULAR_DAY_END_MINUTES,
   OFF_HOURS_ACTIVITY_DISCOUNT
 } from "@/lib/utils/timeline-utils";
+import { computePlannableDurationHours } from "@/lib/planning-flags";
 
 type DayTabKey = number | "unscheduled";
 
@@ -66,15 +66,13 @@ export interface DayTimelineRowsProps {
   // UI preferences and display state
   debugMode?: boolean;
   userPreferences?: string[];
+  activityCostDebugById?: Record<string, ActivityCostDebug>;
   displayGroupedDays: GroupedDay[];
   collapsedActivityCards: Record<string, boolean>;
   movingActivity: { id: string; fromDay: number } | null;
   dragInsertion: { dayNumber: number; index: number } | null;
   draggedActivity: { id: string; dayNumber: number; index: number } | null;
   sourceDayByActivityId: Record<string, number>;
-  activityGroupingCostById?: Record<string, number>;
-  activityGroupingCostBreakdownById?: Record<string, ActivityGroupingCostBreakdown>;
-  onAllocatedHoursChange?: (dayNumber: number, allocatedHoursByActivityId: Record<string, number>) => void;
 
   // Handlers
   onDayDragOver: (event: DragEvent<HTMLDivElement>, dayNumber: number, activitiesLength: number) => void;
@@ -110,15 +108,13 @@ export function DayTimelineRows({
 
   debugMode,
   userPreferences,
+  activityCostDebugById = {},
   displayGroupedDays,
   collapsedActivityCards,
   movingActivity,
   dragInsertion,
   draggedActivity,
   sourceDayByActivityId,
-  activityGroupingCostById = {},
-  activityGroupingCostBreakdownById = {},
-  onAllocatedHoursChange,
 
   onDayDragOver: handleDayDragOver,
   onActivityDrop: handleActivityDrop,
@@ -131,6 +127,139 @@ export function DayTimelineRows({
   onMoveCancel: handleMoveCancel,
   onMoveWithinDay: handleMoveWithinDay,
 }: DayTimelineRowsProps) {
+  const renderTimelineItems = (items: ServerTimelineItem[], activitiesForOrder: SuggestedActivity[]) => (
+    <div className="overflow-x-auto pb-1">
+      <div
+        className="min-w-[640px] space-y-2 pr-2"
+        onDragOver={(event) => handleDayDragOver(event, day.dayNumber, activitiesForOrder.length)}
+        onDrop={(event) => handleActivityDrop(event, day.dayNumber, activitiesForOrder.length)}
+      >
+        {items.map((item, index) => {
+          const isLast = index === items.length - 1;
+          const activity = item.activityId ? day.activities.find((candidate) => candidate.id === item.activityId) : null;
+          const activityIndex = activity ? activitiesForOrder.findIndex((candidate) => candidate.id === activity.id) : -1;
+          const dotClass =
+            item.type === "activity"
+              ? "bg-sky-500 border-sky-600"
+              : item.type === "lunch"
+                ? "bg-amber-400 border-amber-500"
+                : item.type === "free"
+                  ? "bg-emerald-300 border-emerald-400"
+                  : item.type === "continue" || item.type === "warning"
+                    ? "bg-sky-300 border-sky-400"
+                    : item.type === "stay"
+                      ? "bg-emerald-400 border-emerald-500"
+                      : "bg-gray-300 border-gray-400";
+
+          return (
+            <div key={`${item.id}-${index}`} className="flex gap-3">
+              <div className="w-10 shrink-0 relative flex flex-col items-center">
+                <div className={`mt-2 h-3 w-3 rounded-full border-2 ${dotClass}`} />
+                {!isLast ? <div className="w-px flex-1 bg-gray-200 my-1" /> : null}
+              </div>
+              <div className="flex-1 pb-2">
+                {item.type === "activity" && activity ? (
+                  <div
+                    draggable={false}
+                    className={`rounded-md select-none ${draggedActivity?.id === activity.id && draggedActivity.dayNumber === day.dayNumber ? "opacity-50" : ""}`}
+                  >
+                    {dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === activityIndex ? (
+                      <div className="mb-1 h-0.5 rounded bg-primary/70" />
+                    ) : null}
+                    <DayActivityItem
+                      activity={activity}
+                      dayNumber={day.dayNumber}
+                      sourceDayNumber={sourceDayByActivityId[activity.id]}
+                      index={activityIndex >= 0 ? activityIndex : 0}
+                      timeSlotLabel={item.timeRange ?? ""}
+                      affordLabel={item.affordLabel ?? item.detail}
+                      groupingCostDebug={activityCostDebugById[activity.id] ?? null}
+                      isMoving={movingActivity?.id === activity.id}
+                      isCollapsed={collapsedActivityCards[activity.id] ?? true}
+                      debugMode={debugMode ?? false}
+                      userPreferences={userPreferences ?? []}
+                      displayGroupedDays={displayGroupedDays}
+                      canMoveUp={activityIndex > 0}
+                      canMoveDown={activityIndex >= 0 && activityIndex < activitiesForOrder.length - 1}
+                      onToggleCollapse={toggleActivityCollapse}
+                      onMoveStart={handleMoveStart}
+                      onMoveConfirm={handleMoveConfirm}
+                      onMoveCancel={handleMoveCancel}
+                      allowUnscheduledTarget={true}
+                      onMoveUp={() => handleMoveWithinDay(activity.id, day.dayNumber, activityIndex - 1)}
+                      onMoveDown={() => handleMoveWithinDay(activity.id, day.dayNumber, activityIndex + 1)}
+                    />
+                  </div>
+                ) : item.type === "stay" ? (
+                  <div className="flex items-center justify-between gap-3 text-xs text-emerald-800">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Home className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                      <span className="font-medium text-emerald-900">{item.title}</span>
+                      <span className="text-emerald-700 truncate">· {item.detail}</span>
+                    </div>
+                  </div>
+                ) : item.type === "commute" ? (
+                  <div className="flex items-center justify-between gap-3 text-xs text-gray-600">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-medium text-gray-700">{item.title}</span>
+                      <span className="text-gray-500 truncate">· {item.detail}</span>
+                    </div>
+                    {item.timeRange ? (
+                      <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-gray-50 text-gray-600 border-gray-200">
+                        {item.timeRange}
+                      </Badge>
+                    ) : null}
+                  </div>
+                ) : item.type === "lunch" ? (
+                  <div className="flex items-center justify-between gap-3 text-xs text-amber-800">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Utensils className="h-3.5 w-3.5 shrink-0 text-amber-700" />
+                      <span className="font-medium text-amber-900">{item.title}</span>
+                      <span className="text-amber-700 truncate">· {item.detail}</span>
+                    </div>
+                    {item.timeRange ? (
+                      <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-amber-50 text-amber-700 border-amber-200">
+                        {item.timeRange}
+                      </Badge>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div
+                    className={`rounded-md border p-2 text-xs ${item.type === "free"
+                      ? "border-emerald-200 bg-emerald-50/70"
+                      : item.type === "warning"
+                        ? "border-amber-200 bg-amber-50/70"
+                        : item.type === "continue"
+                          ? "border-sky-200 bg-sky-50/60"
+                          : "border-gray-200 bg-gray-50"
+                      }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-gray-800">{item.title}</p>
+                        <p className="text-gray-600">{item.detail}</p>
+                      </div>
+                      {item.timeRange ? (
+                        <Badge variant="outline" className="h-5 shrink-0 whitespace-nowrap bg-gray-50 text-gray-600 border-gray-200">
+                          {item.timeRange}
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === activitiesForOrder.length ? (
+          <div className="h-0.5 rounded bg-primary/70" />
+        ) : null}
+      </div>
+    </div>
+  );
+
+  return renderTimelineItems(day.timelineItems ?? [], day.activities);
+
   const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = DEPARTURE_TRANSFER_MINUTES;
   const availableVisitHours = startContext.availableVisitHours;
   const lunchHours = 1;
@@ -182,7 +311,8 @@ export function DayTimelineRows({
   const totalRequestedHours = sortedActivities.reduce((sum, activity) => {
     const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
     const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
-    return sum + Math.max(estimatedHours, routeFloorHours);
+    const recommendedHours = Math.max(estimatedHours, routeFloorHours);
+    return sum + computePlannableDurationHours(recommendedHours, activity.isDurationFlexible);
   }, 0);
   const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
   const earliestFixedStartMinutes = sortedActivities
@@ -207,7 +337,6 @@ export function DayTimelineRows({
   let scheduledActivityMinutes = 0;
   let effectiveActivityMinutesForOverload = 0;
   let scheduledCommuteMinutes = 0;
-  const allocatedMinutesByActivityId: Record<string, number> = {};
   const formatMinutesLabel = (minutes: number): string => {
     const rounded = Math.max(0, Math.round(minutes));
     if (rounded % 60 === 0) return `${rounded / 60} hr`;
@@ -234,7 +363,7 @@ export function DayTimelineRows({
       ? `${base} (${formatMinutesLabel(bufferMinutes)} buffer)${note ? ` · ${note}` : ""}`
       : `${base}${note ? ` · ${note}` : ""}`;
   };
-  const trackActivityMinutes = (activityId: string, startMinutes: number, endMinutes: number) => {
+  const trackActivityMinutes = (startMinutes: number, endMinutes: number) => {
     const rawMinutes = Math.max(0, endMinutes - startMinutes);
     const inWindowStart = Math.max(startMinutes, REGULAR_DAY_START_MINUTES);
     const inWindowEnd = Math.min(endMinutes, REGULAR_DAY_END_MINUTES);
@@ -242,7 +371,6 @@ export function DayTimelineRows({
     const offWindowMinutes = Math.max(0, rawMinutes - inWindowMinutes);
     scheduledActivityMinutes += rawMinutes;
     effectiveActivityMinutesForOverload += inWindowMinutes + offWindowMinutes * OFF_HOURS_ACTIVITY_DISCOUNT;
-    allocatedMinutesByActivityId[activityId] = (allocatedMinutesByActivityId[activityId] ?? 0) + rawMinutes;
   };
 
   if (sortedActivities.length === 0) {
@@ -305,8 +433,8 @@ export function DayTimelineRows({
       : null;
   const defaultDayStartMinutes =
     recommendedEarlyStartMinutes != null
-      ? Math.min(startContext.dayStartMinutes, recommendedEarlyStartMinutes)
-      : startContext.dayStartMinutes;
+      ? Math.min(Number(startContext.dayStartMinutes ?? 0), recommendedEarlyStartMinutes ?? 0)
+      : Number(startContext.dayStartMinutes ?? 0);
   let cursorMinutes = defaultDayStartMinutes;
   if (dayIndex !== 0 && earliestFixedStartMinutes != null) {
     cursorMinutes = Math.max(0, roundToQuarter(earliestFixedStartMinutes - bufferedStayStartCommuteMinutes - preDayBufferMinutes));
@@ -391,18 +519,10 @@ export function DayTimelineRows({
     const estimatedHours = parseEstimatedHours(activity.estimatedDuration);
     const routeFloorHours = (estimateRouteIntrinsicMinutes(activity) ?? 0) / 60;
     const recommendedHours = Math.max(estimatedHours, routeFloorHours);
-    const requestedHours = recommendedHours;
-    const durationIsFlexible = activity.isDurationFlexible !== false;
-    const minimumScheduledHours = durationIsFlexible
-      ? Math.max(0.75, recommendedHours * MIN_SCHEDULED_DURATION_RATIO)
-      : requestedHours;
-    const allocatedHours = durationIsFlexible
-      ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
-      : requestedHours;
+    const loadHours = computePlannableDurationHours(recommendedHours, activity.isDurationFlexible);
+    const allocatedHours = Math.max(loadHours, loadHours * scaleFactor);
     const timingPolicy = getActivityTimingPolicy(activity);
-    const activityMinutes = durationIsFlexible
-      ? roundToQuarter(allocatedHours * 60 + timingPolicy.settleBufferMinutes)
-      : roundToQuarter(allocatedHours * 60);
+    const activityMinutes = roundToQuarter(allocatedHours * 60 + timingPolicy.settleBufferMinutes);
     const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime);
     const fixedAlignedStartMinutes =
       hasHardFixedStart(activity) && fixedStartMinutes != null ? roundToQuarter(fixedStartMinutes) : null;
@@ -427,17 +547,37 @@ export function DayTimelineRows({
     const uncappedActivityEnd = activityStart + activityMinutes;
     const daylightCapMinutes = daylightEndCapMinutes(activity, eveningCutoffMinutes, sunsetMinutes);
     const departureHardCapMinutes = isFinalDepartureDay ? eveningCutoffMinutes : null;
-    const effectiveCapMinutes = forceScheduleDay
-      ? null
-      : departureHardCapMinutes != null && daylightCapMinutes != null
+    const effectiveCapMinutes =
+      daylightCapMinutes != null
+        ? daylightCapMinutes
+        : forceScheduleDay
+          ? null
+          : departureHardCapMinutes;
+    const cappedActivityEnd =
+      effectiveCapMinutes != null && daylightCapMinutes == null
+        ? Math.min(uncappedActivityEnd, effectiveCapMinutes)
+        : uncappedActivityEnd;
+    const violatesDaylightEnd = daylightCapMinutes != null && uncappedActivityEnd > daylightCapMinutes;
+    if (violatesDaylightEnd && !forceScheduleDay) {
+      droppedForDepartureBuffer.push(activity.name);
+      timelineItems.push({
+        type: "continue",
+        id: `daylight-conflict-${activity.id}`,
+        title: `${activity.name} needs daylight`,
+        detail: `Needs ${formatHourLabel(loadHours)} and must finish by ${toClockLabel(daylightCapMinutes)}. Move it earlier or to another day.`,
+        timeRange: "Cannot fit here",
+      });
+      return;
+    }
+    const displayCapMinutes =
+      departureHardCapMinutes != null && daylightCapMinutes != null
         ? Math.min(departureHardCapMinutes, daylightCapMinutes)
         : (departureHardCapMinutes ?? daylightCapMinutes);
-    const hasHardActivityCap = effectiveCapMinutes != null;
-    const canApplyDaylightCap = hasHardActivityCap && (effectiveCapMinutes as number) > activityStart;
-    const activityEnd =
-      hasHardActivityCap ? Math.min(uncappedActivityEnd, effectiveCapMinutes as number) : uncappedActivityEnd;
+    const hasHardActivityCap = displayCapMinutes != null && !forceScheduleDay;
+    const canApplyDaylightCap = daylightCapMinutes != null && daylightCapMinutes > activityStart;
+    const activityEnd = hasHardActivityCap ? Math.min(cappedActivityEnd, displayCapMinutes as number) : cappedActivityEnd;
     const effectiveScheduledHours = Math.max(0, (activityEnd - activityStart) / 60);
-    const minimumRequiredHours = recommendedHours * MIN_SCHEDULED_DURATION_RATIO;
+    const minimumRequiredHours = loadHours;
     if (!forceScheduleDay && effectiveScheduledHours + 1e-6 < minimumRequiredHours) {
       droppedForDepartureBuffer.push(activity.name);
       return;
@@ -449,11 +589,11 @@ export function DayTimelineRows({
         ? `Late-start risk: recommended ${recommendedWindowLabel || "earlier"}${activity.recommendedStartWindow?.reason ? ` (${activity.recommendedStartWindow.reason})` : ""}.`
         : null;
     const daylightWarning =
-      canApplyDaylightCap && effectiveCapMinutes != null && uncappedActivityEnd > effectiveCapMinutes
-        ? `Ends by ${toClockLabel(effectiveCapMinutes)} to stay on schedule.`
+      canApplyDaylightCap && daylightCapMinutes != null && uncappedActivityEnd > daylightCapMinutes
+        ? `Ends by ${toClockLabel(daylightCapMinutes)} to stay on schedule.`
         : null;
     const daylightConflictWarning =
-      !canApplyDaylightCap && effectiveCapMinutes != null
+      !canApplyDaylightCap && daylightCapMinutes != null
         ? isFinalDepartureDay
           ? `Departure cutoff conflict: no time remains before airport transfer.`
           : `Daylight conflict: no daylight remains for this slot.`
@@ -472,42 +612,18 @@ export function DayTimelineRows({
       return;
     }
 
-    // If a long activity crosses lunch, split it into before-lunch and continue-after-lunch.
     const crossesLunchWindow = !lunchInserted && activityStart < lunchTargetStart && effectiveActivityEnd > lunchTargetStart;
     if (crossesLunchWindow) {
-      const lunchStart = roundToQuarter(Math.max(lunchTargetStart, lunchMinStart));
-      const lunchEnd = lunchStart + lunchMinutes;
-      const beforeLunchEnd = Math.max(activityStart + 30, lunchStart);
-      const afterLunchStart = lunchEnd;
-      const afterLunchEnd = afterLunchStart + Math.max(30, effectiveActivityEnd - beforeLunchEnd);
-      trackActivityMinutes(activity.id, activityStart, beforeLunchEnd);
-      trackActivityMinutes(activity.id, afterLunchStart, afterLunchEnd);
-
+      trackActivityMinutes(activityStart, effectiveActivityEnd);
       timelineItems.push({
         type: "activity",
         id: `activity-${activity.id}`,
         activity,
-        timeRange: toRangeLabel(activityStart, beforeLunchEnd),
+        timeRange: toRangeLabel(activityStart, effectiveActivityEnd),
         affordLabel: `Spend up to ${formatHourLabel(allocatedHours)} here${combinedWarning ? ` • ${combinedWarning}` : ""}`,
       });
-      timelineItems.push({
-        type: "lunch",
-        id: `lunch-${day.dayNumber}`,
-        title: "Lunch break",
-        detail: `About ${formatMinutesLabel(lunchMinutes)}`,
-        timeRange: toRangeLabel(lunchStart, lunchEnd),
-      });
-      timelineItems.push({
-        type: "continue",
-        id: `continue-${activity.id}`,
-        title: `Continue with ${activity.name}`,
-        detail: "Resume after lunch",
-        timeRange: toRangeLabel(afterLunchStart, afterLunchEnd),
-      });
-
-      lunchInserted = true;
       hasScheduledPrimaryActivity = true;
-      cursorMinutes = afterLunchEnd;
+      cursorMinutes = effectiveActivityEnd;
     } else {
       // If it's already afternoon and lunch isn't inserted yet, place lunch before this activity
       // only after at least one activity has started (avoid commute -> lunch -> first activity).
@@ -531,14 +647,20 @@ export function DayTimelineRows({
           ? Math.max(roundToQuarter(cursorMinutes), fixedAlignedStartMinutes, nightStartFloorMinutes ?? 0)
           : Math.max(roundToQuarter(cursorMinutes), nightStartFloorMinutes ?? 0);
       const uncappedNextActivityEnd = nextActivityStart + activityMinutes;
-      const hasHardCapForNext = daylightCapMinutes != null;
-      const nextActivityEndCapped =
-        hasHardCapForNext && daylightCapMinutes != null
-          ? Math.min(uncappedNextActivityEnd, daylightCapMinutes)
-          : uncappedNextActivityEnd;
-      const nextActivityEnd = nextActivityEndCapped;
+      if (!forceScheduleDay && daylightCapMinutes != null && uncappedNextActivityEnd > daylightCapMinutes) {
+        droppedForDepartureBuffer.push(activity.name);
+        timelineItems.push({
+          type: "continue",
+          id: `daylight-conflict-${activity.id}`,
+          title: `${activity.name} needs daylight`,
+          detail: `Needs ${formatHourLabel(loadHours)} and must finish by ${toClockLabel(daylightCapMinutes)}. Move it earlier or to another day.`,
+          timeRange: "Cannot fit here",
+        });
+        return;
+      }
+      const nextActivityEnd = uncappedNextActivityEnd;
       if (nextActivityEnd <= nextActivityStart) return;
-      trackActivityMinutes(activity.id, nextActivityStart, nextActivityEnd);
+      trackActivityMinutes(nextActivityStart, nextActivityEnd);
       timelineItems.push({
         type: "activity",
         id: `activity-${activity.id}`,
@@ -694,14 +816,6 @@ export function DayTimelineRows({
     (effectiveActivityMinutesForOverload + scheduledCommuteMinutes) / 60;
   const isOverloaded = !showFreeSlotNotice && effectivePlannedHoursForOverload > availableVisitHours;
 
-  useEffect(() => {
-    if (!onAllocatedHoursChange) return;
-    const allocatedHoursByActivityId = Object.fromEntries(
-      Object.entries(allocatedMinutesByActivityId).map(([activityId, minutes]) => [activityId, Math.max(0, minutes / 60)])
-    );
-    onAllocatedHoursChange(day.dayNumber, allocatedHoursByActivityId);
-  }, [onAllocatedHoursChange, day.dayNumber, sortedActivities, commuteByLeg]);
-
   return (
     <>
       {showFreeSlotNotice ? (
@@ -777,8 +891,7 @@ export function DayTimelineRows({
                               index={safeActivityIndex}
                               timeSlotLabel={item.timeRange}
                               affordLabel={item.affordLabel}
-                              groupingCostScore={activityGroupingCostById[item.activity.id] ?? null}
-                              groupingCostBreakdown={activityGroupingCostBreakdownById[item.activity.id] ?? null}
+                              groupingCostDebug={activityCostDebugById[item.activity.id] ?? null}
                               isMoving={movingActivity?.id === item.activity.id}
                               isCollapsed={collapsedActivityCards[item.activity.id] ?? true}
                               debugMode={debugMode ?? false}
@@ -859,7 +972,7 @@ export function DayTimelineRows({
               );
             });
           })()}
-          {dragInsertion?.dayNumber === day.dayNumber && dragInsertion.index === sortedActivities.length ? (
+          {dragInsertion?.dayNumber === day.dayNumber && dragInsertion?.index === sortedActivities.length ? (
             <div className="h-0.5 rounded bg-primary/70" />
           ) : null}
         </div>

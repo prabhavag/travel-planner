@@ -9,6 +9,8 @@ import {
     activityCommuteMinutes,
     buildOptimalDayRoute,
     getLoadDurationHours,
+    buildPreparedActivityMap,
+    buildScoredSchedule,
 } from './day-grouping'
 import type { SuggestedActivity } from '@/lib/models/travel-plan'
 import type { PreparedActivity } from './day-grouping'
@@ -150,6 +152,81 @@ describe('day-grouping structural stats', () => {
         const flexibleStats = getDayStructuralStats(['flexible'], flexibleMap, commuteMatrix, capacity);
 
         expect(daylightStats.structuralCost).toBeGreaterThan(flexibleStats.structuralCost);
+    });
+
+    it('moves daylight-only activities to unassigned in hard-constraint auto-placement mode', () => {
+        const pipiwai = {
+            ...mockActivity('pipiwai'),
+            name: 'Pipiwai Trail and Waimoku Falls',
+            type: 'hiking',
+            daylightPreference: 'daylight_only' as const,
+            estimatedDuration: '4.5 hours',
+            isDurationFlexible: false,
+        };
+        const activities = [pipiwai];
+        const preparedMap = buildPreparedActivityMap(activities);
+        const schedule = buildScoredSchedule({
+            dayGroups: [{
+                dayNumber: 1,
+                date: '',
+                theme: 'Arrival day',
+                activityIds: ['pipiwai'],
+                nightStay: null,
+                debugCost: null,
+            }],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities: [{
+                maxHours: 4,
+                slotCapacity: { morning: 0, afternoon: 2, evening: 2 },
+                targetWeight: 0.5,
+            }],
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+            options: { forceSchedule: false },
+        });
+
+        expect(schedule.dayGroups[0].activityIds).toEqual([]);
+        expect(schedule.unassignedActivityIds).toEqual(['pipiwai']);
+        expect(schedule.activityCostDebugById.pipiwai.kind).toBe('unscheduled');
+    });
+
+    it('preserves daylight-only activities when a user or LLM forces placement', () => {
+        const kapalua = {
+            ...mockActivity('kapalua'),
+            name: 'Kapalua Coastal Trail',
+            type: 'hiking',
+            daylightPreference: 'daylight_only' as const,
+            estimatedDuration: '2.5 hours',
+            isDurationFlexible: false,
+        };
+        const activities = [kapalua];
+        const preparedMap = buildPreparedActivityMap(activities);
+        const schedule = buildScoredSchedule({
+            dayGroups: [{
+                dayNumber: 1,
+                date: '',
+                theme: 'Forced day',
+                activityIds: ['kapalua'],
+                nightStay: null,
+                debugCost: null,
+            }],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities: [{
+                maxHours: 2,
+                slotCapacity: { morning: 0, afternoon: 0, evening: 2 },
+                targetWeight: 0.5,
+            }],
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+            options: { forceSchedule: true },
+        });
+
+        expect(schedule.dayGroups[0].activityIds).toEqual(['kapalua']);
+        expect(schedule.unassignedActivityIds).toEqual([]);
+        expect(schedule.activityCostDebugById.kapalua.kind).toBe('scheduled');
+        expect(schedule.dayGroups[0].debugCost?.overallTripCost).toBeGreaterThan(0);
     });
 
     it('penalizes starts outside recommended windows on both early and late sides', () => {
@@ -467,6 +544,31 @@ describe('day-grouping flight timing constraints', () => {
         expect(finalDay.maxHours).toBeCloseTo(4.67, 1);
         expect(finalDay.slotCapacity.evening).toBe(0);
         expect(finalDay.overflowPenaltyMultiplier).toBeGreaterThanOrEqual(5);
+    });
+
+    it('exposes arrival and departure timing constraints for prompt consumers', () => {
+        const tripInfo = {
+            destination: 'Maui',
+            startDate: '2026-03-10',
+            endDate: '2026-03-12',
+            durationDays: 3,
+            arrivalTimePreference: '1:15 PM',
+            departureTimePreference: '6:00 PM',
+            transportMode: 'flight',
+        } as any;
+
+        const capacities = buildDayCapacityProfiles(tripInfo, 3);
+        expect(capacities[0].timingConstraints).toContainEqual(expect.objectContaining({
+            type: 'arrival',
+            sourceTime: '1:15 PM',
+            earliestStartMinutes: 15 * 60 + 15,
+        }));
+        expect(capacities[2].timingConstraints).toContainEqual(expect.objectContaining({
+            type: 'departure',
+            sourceTime: '6:00 PM',
+            latestEndMinutes: 14 * 60 + 10,
+            airportArrivalDeadlineMinutes: 16 * 60,
+        }));
     });
 
     it('applies stricter overflow cost when overflow multiplier increases', () => {

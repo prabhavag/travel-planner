@@ -1,8 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
-import { buildGroupedDays, groupActivitiesByDay } from "@/lib/services/day-grouping";
+import {
+  buildDayCapacityProfiles,
+  buildGroupedDays,
+  buildPreparedActivityMap,
+  buildScoredSchedule,
+  computeActivityCommuteMatrix,
+  groupActivitiesByDay,
+} from "@/lib/services/day-grouping";
 import { assignNightStays } from "@/lib/services/night-stays";
 import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
+
+function sameSelectedIds(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((id) => rightSet.has(id));
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,11 +43,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate state
     const allowedStates = [
       WORKFLOW_STATES.SELECT_ACTIVITIES as string,
       WORKFLOW_STATES.GROUP_DAYS as string,
-      WORKFLOW_STATES.DAY_ITINERARY as string
+      WORKFLOW_STATES.DAY_ITINERARY as string,
     ];
     if (!allowedStates.includes(session.workflowState as string)) {
       return NextResponse.json(
@@ -46,7 +58,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate that all selected IDs exist in suggested activities
     const validIds = new Set(session.suggestedActivities.map((a) => a.id));
     const invalidIds = selectedActivityIds.filter((id: string) => !validIds.has(id));
 
@@ -63,6 +74,7 @@ export async function POST(request: NextRequest) {
     const selectedActivities = session.suggestedActivities.filter((activity) =>
       selectedActivityIds.includes(activity.id)
     );
+
     const dayGroups = await groupActivitiesByDay({
       tripInfo: session.tripInfo,
       activities: selectedActivities,
@@ -71,33 +83,61 @@ export async function POST(request: NextRequest) {
       dayGroups,
       activities: selectedActivities,
     });
+
     const nightStayResult = await assignNightStays({
       tripInfo: session.tripInfo,
       dayGroups,
       groupedDays,
       selectedAccommodation: null,
     });
-    const updatedDayGroups = nightStayResult.dayGroups;
+    let updatedDayGroups = nightStayResult.dayGroups;
     groupedDays = nightStayResult.groupedDays;
+    const dayCapacities = buildDayCapacityProfiles(session.tripInfo, updatedDayGroups.length);
+    const commuteMinutesByPair = await computeActivityCommuteMatrix(selectedActivities);
+    const preparedMap = buildPreparedActivityMap(selectedActivities);
+    let currentSchedule = buildScoredSchedule({
+      dayGroups: updatedDayGroups,
+      activities: selectedActivities,
+      unassignedActivityIds: [],
+      dayCapacities,
+      preparedMap,
+      commuteMinutesByPair,
+      options: { forceSchedule: false, tripInfo: session.tripInfo },
+    });
+    updatedDayGroups = currentSchedule.dayGroups;
+    groupedDays = currentSchedule.groupedDays;
 
-    // Update session with selected activities and regrouped days
+    const selectedIdsChanged = !sameSelectedIds(session.selectedActivityIds || [], selectedActivityIds);
+    const shouldRunTravelSearch =
+      selectedIdsChanged || (session.accommodationStatus === "idle" && session.flightStatus === "idle");
+
     sessionStore.update(sessionId, {
       workflowState: WORKFLOW_STATES.GROUP_DAYS,
-      selectedActivityIds: selectedActivityIds,
-      dayGroups: updatedDayGroups,
-      groupedDays,
-      accommodationStatus: "running",
-      flightStatus: "running",
-      accommodationError: null,
-      flightError: null,
-      accommodationOptions: [],
-      flightOptions: [],
-      selectedAccommodationOptionId: null,
-      selectedFlightOptionId: null,
-      wantsAccommodation: null,
-      wantsFlight: null,
-      accommodationLastSearchedAt: null,
-      flightLastSearchedAt: null,
+      selectedActivityIds,
+      currentSchedule,
+      tentativeSchedule: null,
+      dayGroups: currentSchedule.dayGroups,
+      groupedDays: currentSchedule.groupedDays,
+      activityCostDebugById: currentSchedule.activityCostDebugById,
+      unassignedActivityIds: currentSchedule.unassignedActivityIds,
+      llmRefinementResult: null,
+      llmRefinementPreview: null,
+      ...(shouldRunTravelSearch
+        ? {
+          accommodationStatus: "running" as const,
+          flightStatus: "running" as const,
+          accommodationError: null,
+          flightError: null,
+          accommodationOptions: [],
+          flightOptions: [],
+          selectedAccommodationOptionId: null,
+          selectedFlightOptionId: null,
+          wantsAccommodation: null,
+          wantsFlight: null,
+          accommodationLastSearchedAt: null,
+          flightLastSearchedAt: null,
+        }
+        : {}),
     });
 
     const refreshed = sessionStore.get(sessionId);
@@ -105,24 +145,39 @@ export async function POST(request: NextRequest) {
       throw new Error("Session not found after update");
     }
 
-    const [accommodationResult, flightResult] = await Promise.all([
-      runAccommodationSearch({ session: refreshed }),
-      runFlightSearch({ session: refreshed }),
-    ]);
+    let accommodationResult = {
+      success: refreshed.accommodationStatus !== "error",
+      message: refreshed.accommodationError || "",
+      options: refreshed.accommodationOptions,
+    };
+    let flightResult = {
+      success: refreshed.flightStatus !== "error",
+      message: refreshed.flightError || "",
+      options: refreshed.flightOptions,
+    };
+
+    if (shouldRunTravelSearch) {
+      [accommodationResult, flightResult] = await Promise.all([
+        runAccommodationSearch({ session: refreshed }),
+        runFlightSearch({ session: refreshed }),
+      ]);
+    }
 
     const now = new Date().toISOString();
-    sessionStore.update(sessionId, {
-      accommodationStatus: accommodationResult.success ? "complete" : "error",
-      flightStatus: flightResult.success ? "complete" : "error",
-      accommodationError: accommodationResult.success ? null : accommodationResult.message,
-      flightError: flightResult.success ? null : flightResult.message,
-      accommodationOptions: accommodationResult.options,
-      flightOptions: flightResult.options,
-      accommodationLastSearchedAt: now,
-      flightLastSearchedAt: now,
-    });
+    if (shouldRunTravelSearch) {
+      sessionStore.update(sessionId, {
+        accommodationStatus: accommodationResult.success ? "complete" : "error",
+        flightStatus: flightResult.success ? "complete" : "error",
+        accommodationError: accommodationResult.success ? null : accommodationResult.message,
+        flightError: flightResult.success ? null : flightResult.message,
+        accommodationOptions: accommodationResult.options,
+        flightOptions: flightResult.options,
+        accommodationLastSearchedAt: now,
+        flightLastSearchedAt: now,
+      });
+    }
 
-    if (accommodationResult.success && accommodationResult.options.length > 0) {
+    if (shouldRunTravelSearch && accommodationResult.success && accommodationResult.options.length > 0) {
       const availabilityStayResult = await assignNightStays({
         tripInfo: session.tripInfo,
         dayGroups: updatedDayGroups,
@@ -130,23 +185,32 @@ export async function POST(request: NextRequest) {
         selectedAccommodation: null,
         accommodationOptions: accommodationResult.options,
       });
+      updatedDayGroups = availabilityStayResult.dayGroups;
       groupedDays = availabilityStayResult.groupedDays;
+      currentSchedule = buildScoredSchedule({
+        dayGroups: updatedDayGroups,
+        activities: selectedActivities,
+        unassignedActivityIds: [],
+        dayCapacities,
+        preparedMap,
+        commuteMinutesByPair,
+        options: { forceSchedule: false, tripInfo: session.tripInfo },
+      });
       sessionStore.update(sessionId, {
-        dayGroups: availabilityStayResult.dayGroups,
-        groupedDays,
+        currentSchedule,
+        dayGroups: currentSchedule.dayGroups,
+        groupedDays: currentSchedule.groupedDays,
+        activityCostDebugById: currentSchedule.activityCostDebugById,
+        unassignedActivityIds: currentSchedule.unassignedActivityIds,
       });
     }
 
     const selectedCount = selectedActivityIds.length;
     const message = `Updated ${selectedCount} activit${selectedCount === 1 ? "y" : "ies"} and regrouped your itinerary by day.`;
+
     const updatedSession = sessionStore.get(sessionId);
     if (!updatedSession) {
-      throw new Error("Session not found after sub-agent run");
-    }
-
-    const finalSession = sessionStore.get(sessionId);
-    if (!finalSession) {
-      throw new Error("Session not found after night stay update");
+      throw new Error("Session not found after regrouping");
     }
 
     return NextResponse.json({
@@ -156,8 +220,14 @@ export async function POST(request: NextRequest) {
       message,
       selectedActivityIds,
       selectedCount,
-      dayGroups: finalSession.dayGroups,
-      groupedDays: finalSession.groupedDays,
+      currentSchedule: updatedSession.currentSchedule,
+      tentativeSchedule: updatedSession.tentativeSchedule,
+      dayGroups: updatedSession.dayGroups,
+      groupedDays: updatedSession.groupedDays,
+      activityCostDebugById: updatedSession.activityCostDebugById,
+      unassignedActivityIds: updatedSession.unassignedActivityIds,
+      llmRefinementResult: null,
+      llmRefinementPreview: null,
       accommodationStatus: updatedSession.accommodationStatus,
       flightStatus: updatedSession.flightStatus,
       accommodationError: updatedSession.accommodationError,

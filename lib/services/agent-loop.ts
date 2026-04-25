@@ -20,11 +20,21 @@ import {
   type WorkflowState,
 } from "@/lib/services/session-store";
 import { requiresTravelOfferCompletionForState, validateWorkflowTransition } from "@/lib/services/workflow-transition";
-import { buildGroupedDays, groupActivitiesByDay, generateDayTheme } from "@/lib/services/day-grouping";
+import {
+  buildDayCapacityProfiles,
+  buildGroupedDays,
+  buildPreparedActivityMap,
+  buildScoredSchedule,
+  computeActivityCommuteMatrix,
+  generateDayTheme,
+} from "@/lib/services/day-grouping";
+import { groupActivitiesByDayWithStrategy } from "@/lib/services/day-grouping-server";
+import type { ActivityGroupingStrategy } from "@/lib/services/day-grouping/types";
 import { assignNightStays } from "@/lib/services/night-stays";
 import { getPlacesClient } from "@/lib/services/places-client";
 import type { PlaceResult } from "@/lib/services/places-client";
 import { getPriceRangeSymbol } from "@/lib/utils/currency";
+import { chooseAuthoritativeScheduleBase } from "@/lib/utils/schedule-source";
 import { getLLMClient, PLANNING_AND_REVIEW_TOOLS } from "@/lib/services/llm-client";
 import { mergeResearchBriefAndSelections } from "@/lib/services/card-merging";
 import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
@@ -71,12 +81,13 @@ const negativeCompletionIntentRegex =
 
 const selectActivitiesInputSchema = z.object({
   selectedActivityIds: z.array(z.string()),
+  groupingStrategy: z.enum(["heuristic", "llm"]).optional(),
 });
 
 const adjustDayGroupsInputSchema = z.object({
   activityId: z.string(),
-  fromDay: z.number().int().positive(),
-  toDay: z.number().int().positive(),
+  fromDay: z.number().int().nonnegative(),
+  toDay: z.number().int().nonnegative(),
   targetIndex: z.number().int().nonnegative().optional(),
 });
 
@@ -132,8 +143,13 @@ type TurnResponse = {
   researchOptionSelections: Session["researchOptionSelections"];
   suggestedActivities: Session["suggestedActivities"];
   selectedActivityIds: Session["selectedActivityIds"];
+  currentSchedule: Session["currentSchedule"];
+  tentativeSchedule: Session["tentativeSchedule"];
   dayGroups: Session["dayGroups"];
   groupedDays: Session["groupedDays"];
+  activityCostDebugById: Session["activityCostDebugById"];
+  activityGroupingStrategy: Session["activityGroupingStrategy"];
+  unassignedActivityIds: Session["unassignedActivityIds"];
   restaurantSuggestions: Session["restaurantSuggestions"];
   selectedRestaurantIds: Session["selectedRestaurantIds"];
   wantsRestaurants: Session["wantsRestaurants"];
@@ -165,8 +181,13 @@ function buildSessionSnapshot(session: Session, message: string): TurnResponse {
     researchOptionSelections: session.researchOptionSelections,
     suggestedActivities: session.suggestedActivities,
     selectedActivityIds: session.selectedActivityIds,
+    currentSchedule: session.currentSchedule,
+    tentativeSchedule: session.tentativeSchedule,
     dayGroups: session.dayGroups,
     groupedDays: session.groupedDays,
+    activityCostDebugById: session.activityCostDebugById,
+    activityGroupingStrategy: session.activityGroupingStrategy,
+    unassignedActivityIds: session.unassignedActivityIds,
     restaurantSuggestions: session.restaurantSuggestions,
     selectedRestaurantIds: session.selectedRestaurantIds,
     wantsRestaurants: session.wantsRestaurants,
@@ -189,14 +210,24 @@ function buildSessionSnapshot(session: Session, message: string): TurnResponse {
 }
 
 function buildLoopContext(session: Session): LoopContext {
+  const authoritativeScheduleBase = chooseAuthoritativeScheduleBase({
+    currentSchedule: session.currentSchedule,
+    legacyDayGroups: session.dayGroups || [],
+    legacyUnassignedActivityIds: session.unassignedActivityIds || [],
+  });
+  const authoritativeGroupedDays =
+    authoritativeScheduleBase.source === "currentSchedule"
+      ? session.currentSchedule.groupedDays
+      : session.groupedDays || [];
+
   return {
     workflowState: session.workflowState,
     tripInfo: session.tripInfo,
     researchOptionSelections: session.researchOptionSelections || {},
     suggestedActivities: session.suggestedActivities || [],
     selectedActivityIds: session.selectedActivityIds || [],
-    dayGroups: session.dayGroups || [],
-    groupedDays: session.groupedDays || [],
+    dayGroups: authoritativeScheduleBase.dayGroups,
+    groupedDays: authoritativeGroupedDays,
     restaurantSuggestions: session.restaurantSuggestions || [],
     selectedRestaurantIds: session.selectedRestaurantIds || [],
     accommodationStatus: session.accommodationStatus,
@@ -238,7 +269,17 @@ function routeSupervisor(workflowState: WorkflowState): SupervisorDecision | nul
 }
 
 function getCurrencyFromSession(session: Session): string {
-  for (const day of session.groupedDays || []) {
+  const scheduleBase = chooseAuthoritativeScheduleBase({
+    currentSchedule: session.currentSchedule,
+    legacyDayGroups: session.dayGroups || [],
+    legacyUnassignedActivityIds: session.unassignedActivityIds || [],
+  });
+  const groupedDays =
+    scheduleBase.source === "currentSchedule"
+      ? session.currentSchedule.groupedDays
+      : session.groupedDays || [];
+
+  for (const day of groupedDays) {
     for (const activity of day.activities || []) {
       if (activity.currency) return activity.currency;
     }
@@ -371,8 +412,14 @@ async function runTravelOfferSubAgents({
 
 type WorkingSession = {
   selectedActivityIds: string[];
+  currentSchedule: Session["currentSchedule"];
+  tentativeSchedule: Session["tentativeSchedule"];
   dayGroups: Session["dayGroups"];
   groupedDays: Session["groupedDays"];
+  activityCostDebugById: Session["activityCostDebugById"];
+  activityGroupingStrategy: Session["activityGroupingStrategy"];
+  unassignedActivityIds: Session["unassignedActivityIds"];
+  groupingSnapshots: Session["groupingSnapshots"];
   restaurantSuggestions: Session["restaurantSuggestions"];
   selectedRestaurantIds: Session["selectedRestaurantIds"];
   wantsRestaurants: Session["wantsRestaurants"];
@@ -389,6 +436,35 @@ type WorkingSession = {
   accommodationLastSearchedAt: Session["accommodationLastSearchedAt"];
   flightLastSearchedAt: Session["flightLastSearchedAt"];
 };
+
+async function updateWorkingCurrentSchedule(
+  session: Session,
+  working: WorkingSession,
+  options: { forceSchedule?: boolean } = {}
+): Promise<void> {
+  const selectedActivities = session.suggestedActivities.filter((activity) =>
+    working.selectedActivityIds.includes(activity.id),
+  );
+  const dayCapacities = buildDayCapacityProfiles(session.tripInfo, working.dayGroups.length);
+  const commuteMinutesByPair = await computeActivityCommuteMatrix(selectedActivities);
+  const preparedMap = buildPreparedActivityMap(selectedActivities);
+  const currentSchedule = buildScoredSchedule({
+    dayGroups: working.dayGroups,
+    activities: selectedActivities,
+    unassignedActivityIds: working.unassignedActivityIds || [],
+    dayCapacities,
+    preparedMap,
+    commuteMinutesByPair,
+    options: { forceSchedule: options.forceSchedule ?? false, tripInfo: session.tripInfo },
+  });
+
+  working.currentSchedule = currentSchedule;
+  working.tentativeSchedule = null;
+  working.dayGroups = currentSchedule.dayGroups;
+  working.groupedDays = currentSchedule.groupedDays;
+  working.activityCostDebugById = currentSchedule.activityCostDebugById;
+  working.unassignedActivityIds = currentSchedule.unassignedActivityIds;
+}
 
 async function executeAction({
   action,
@@ -410,29 +486,54 @@ async function executeAction({
     const selectedActivities = session.suggestedActivities.filter((activity) =>
       parsed.selectedActivityIds.includes(activity.id),
     );
-    const dayGroups = await groupActivitiesByDay({
+    const requestedStrategy: ActivityGroupingStrategy =
+      parsed.groupingStrategy || working.activityGroupingStrategy || session.activityGroupingStrategy || "heuristic";
+    const groupingResult = await groupActivitiesByDayWithStrategy({
       tripInfo: session.tripInfo,
       activities: selectedActivities,
+      strategy: requestedStrategy,
     });
-    let groupedDays = buildGroupedDays({
-      dayGroups,
-      activities: selectedActivities,
-    });
+    let dayGroups = groupingResult.schedule.dayGroups;
+    let groupedDays = groupingResult.schedule.groupedDays;
     const selectedAccommodation = session.selectedAccommodationOptionId
       ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
       : null;
-    const nightStayResult = await assignNightStays({
-      tripInfo: session.tripInfo,
-      dayGroups,
-      groupedDays,
-      selectedAccommodation,
-      accommodationOptions: working.accommodationOptions,
-    });
+    const hasPresetNightStays = dayGroups.some((day) => day.nightStay?.label && day.nightStay.label.trim().length > 0);
+    if (groupingResult.appliedStrategy !== "llm" || !hasPresetNightStays) {
+      const nightStayResult = await assignNightStays({
+        tripInfo: session.tripInfo,
+        dayGroups,
+        groupedDays,
+        selectedAccommodation,
+        accommodationOptions: working.accommodationOptions,
+      });
+      dayGroups = nightStayResult.dayGroups;
+      groupedDays = nightStayResult.groupedDays;
+    }
 
     working.selectedActivityIds = parsed.selectedActivityIds;
-    working.dayGroups = nightStayResult.dayGroups;
-    working.groupedDays = nightStayResult.groupedDays;
+    working.dayGroups = dayGroups;
+    working.groupedDays = groupedDays;
+    working.activityGroupingStrategy = groupingResult.appliedStrategy;
+    working.unassignedActivityIds = groupingResult.schedule.unassignedActivityIds;
+    await updateWorkingCurrentSchedule(session, working, {
+      forceSchedule: groupingResult.appliedStrategy !== "heuristic",
+    });
+    working.groupingSnapshots = {
+      ...working.groupingSnapshots,
+      [groupingResult.appliedStrategy]: {
+        selectedActivityIds: [...parsed.selectedActivityIds],
+        dayGroups: working.dayGroups,
+        groupedDays: working.groupedDays,
+        unassignedActivityIds: [...working.unassignedActivityIds],
+        updatedAt: new Date().toISOString(),
+      },
+    };
     await runTravelOfferSubAgents({ session, working });
+    const unassignedCount = groupingResult.unassignedActivityIds.length;
+    if (unassignedCount > 0) {
+      return `Updated ${parsed.selectedActivityIds.length} activities and regrouped your itinerary by day. ${unassignedCount} activities are in Unassigned.`;
+    }
     return `Updated ${parsed.selectedActivityIds.length} activities and regrouped your itinerary by day.`;
   }
 
@@ -446,43 +547,67 @@ async function executeAction({
       ...group,
       activityIds: [...group.activityIds],
     }));
-    const sourceDay = updatedDayGroups.find((day) => day.dayNumber === parsed.fromDay);
-    const targetDay = updatedDayGroups.find((day) => day.dayNumber === parsed.toDay);
-    if (!sourceDay || !targetDay) {
-      throw new Error("Could not find source or target day.");
+    const sourceDay = parsed.fromDay === 0
+      ? null
+      : updatedDayGroups.find((day) => day.dayNumber === parsed.fromDay);
+    const targetDay = parsed.toDay === 0
+      ? null
+      : updatedDayGroups.find((day) => day.dayNumber === parsed.toDay);
+    if (parsed.toDay !== 0 && !targetDay) {
+      throw new Error("Could not find target day.");
     }
-    const activityIndex = sourceDay.activityIds.indexOf(parsed.activityId);
-    if (activityIndex === -1) {
-      throw new Error(`Activity ${parsed.activityId} not found in day ${parsed.fromDay}`);
+    if (parsed.fromDay === 0 && parsed.toDay === 0) {
+      throw new Error("Activity is already unscheduled.");
     }
-
-    sourceDay.activityIds.splice(activityIndex, 1);
-    const insertionIndex =
-      typeof parsed.targetIndex === "number"
-        ? Math.min(Math.max(0, parsed.targetIndex), targetDay.activityIds.length)
-        : targetDay.activityIds.length;
-    targetDay.activityIds.splice(insertionIndex, 0, parsed.activityId);
+    if (parsed.fromDay === 0) {
+      if (!working.unassignedActivityIds.includes(parsed.activityId)) {
+        throw new Error(`Activity ${parsed.activityId} not found in unassigned bucket`);
+      }
+      working.unassignedActivityIds = working.unassignedActivityIds.filter((id) => id !== parsed.activityId);
+    } else {
+      if (!sourceDay) {
+        throw new Error("Could not find source day.");
+      }
+      const activityIndex = sourceDay.activityIds.indexOf(parsed.activityId);
+      if (activityIndex === -1) {
+        throw new Error(`Activity ${parsed.activityId} not found in day ${parsed.fromDay}`);
+      }
+      sourceDay.activityIds.splice(activityIndex, 1);
+    }
+    if (targetDay && targetDay.activityIds.includes(parsed.activityId)) {
+      targetDay.activityIds = targetDay.activityIds.filter((id) => id !== parsed.activityId);
+    }
+    if (parsed.toDay === 0) {
+      if (!working.unassignedActivityIds.includes(parsed.activityId)) {
+        working.unassignedActivityIds = [...working.unassignedActivityIds, parsed.activityId];
+      }
+    } else if (targetDay) {
+      working.unassignedActivityIds = working.unassignedActivityIds.filter((id) => id !== parsed.activityId);
+      const insertionIndex =
+        typeof parsed.targetIndex === "number"
+          ? Math.min(Math.max(0, parsed.targetIndex), targetDay.activityIds.length)
+          : targetDay.activityIds.length;
+      targetDay.activityIds.splice(insertionIndex, 0, parsed.activityId);
+    }
 
     const selectedActivities = session.suggestedActivities.filter((activity) =>
       working.selectedActivityIds.includes(activity.id),
     );
-    sourceDay.theme = generateDayTheme(
-      selectedActivities.filter((activity) => sourceDay.activityIds.includes(activity.id)),
-    );
-    targetDay.theme = generateDayTheme(
-      selectedActivities.filter((activity) => targetDay.activityIds.includes(activity.id)),
-    );
+    if (sourceDay) {
+      sourceDay.theme = generateDayTheme(
+        selectedActivities.filter((activity) => sourceDay.activityIds.includes(activity.id)),
+      );
+    }
+    if (targetDay) {
+      targetDay.theme = generateDayTheme(
+        selectedActivities.filter((activity) => targetDay.activityIds.includes(activity.id)),
+      );
+    }
 
-    const activityMap = new Map(selectedActivities.map((activity) => [activity.id, activity]));
-    let groupedDays = updatedDayGroups.map((day) => ({
-      dayNumber: day.dayNumber,
-      date: day.date,
-      theme: day.theme,
-      activities: day.activityIds
-        .map((id) => activityMap.get(id))
-        .filter((activity): activity is SuggestedActivity => Boolean(activity)),
-      restaurants: [],
-    }));
+    let groupedDays = buildGroupedDays({
+      dayGroups: updatedDayGroups,
+      activities: selectedActivities,
+    });
     const selectedAccommodation = session.selectedAccommodationOptionId
       ? session.accommodationOptions.find((option) => option.id === session.selectedAccommodationOptionId) || null
       : null;
@@ -496,8 +621,22 @@ async function executeAction({
 
     working.dayGroups = nightStayResult.dayGroups;
     working.groupedDays = nightStayResult.groupedDays;
+    await updateWorkingCurrentSchedule(session, working, { forceSchedule: true });
+    working.groupingSnapshots = {
+      ...working.groupingSnapshots,
+      [working.activityGroupingStrategy || "heuristic"]: {
+        selectedActivityIds: [...working.selectedActivityIds],
+        dayGroups: working.dayGroups,
+        groupedDays: working.groupedDays,
+        unassignedActivityIds: [...working.unassignedActivityIds],
+        updatedAt: new Date().toISOString(),
+      },
+    };
     if (parsed.fromDay === parsed.toDay) {
       return "Reordered activity within the day.";
+    }
+    if (parsed.toDay === 0) {
+      return "Moved activity to Unscheduled.";
     }
     return `Moved activity to Day ${parsed.toDay}.`;
   }
@@ -507,6 +646,7 @@ async function executeAction({
     if (parsed.selectedActivityIdsOverride) {
       const keepIds = new Set(parsed.selectedActivityIdsOverride);
       working.selectedActivityIds = working.selectedActivityIds.filter((id) => keepIds.has(id));
+      working.unassignedActivityIds = working.unassignedActivityIds.filter((id) => keepIds.has(id));
       working.groupedDays = working.groupedDays.map((day) => ({
         ...day,
         activities: day.activities.filter((activity) => keepIds.has(activity.id)),
@@ -515,6 +655,7 @@ async function executeAction({
         ...dayGroup,
         activityIds: dayGroup.activityIds.filter((id) => keepIds.has(id)),
       }));
+      await updateWorkingCurrentSchedule(session, working, { forceSchedule: true });
     }
     if (session.workflowState !== WORKFLOW_STATES.GROUP_DAYS) {
       throw new Error("Can only confirm day grouping from GROUP_DAYS state");
@@ -843,11 +984,30 @@ async function runLoop({
   const allowedTools = PLANNING_AND_REVIEW_TOOLS.filter(
     (t) => decision.allowedTools.includes(t.name as ToolAction["tool"])
   );
+  const authoritativeScheduleBase = chooseAuthoritativeScheduleBase({
+    currentSchedule: session.currentSchedule,
+    legacyDayGroups: session.dayGroups || [],
+    legacyUnassignedActivityIds: session.unassignedActivityIds || [],
+  });
+  const authoritativeGroupedDays =
+    authoritativeScheduleBase.source === "currentSchedule"
+      ? session.currentSchedule.groupedDays
+      : session.groupedDays || [];
+  const authoritativeActivityCostDebugById =
+    authoritativeScheduleBase.source === "currentSchedule"
+      ? session.currentSchedule.activityCostDebugById
+      : session.activityCostDebugById || {};
 
   const working: WorkingSession = {
     selectedActivityIds: structuredClone(session.selectedActivityIds || []),
-    dayGroups: structuredClone(session.dayGroups || []),
-    groupedDays: structuredClone(session.groupedDays || []),
+    currentSchedule: structuredClone(session.currentSchedule),
+    tentativeSchedule: structuredClone(session.tentativeSchedule),
+    dayGroups: structuredClone(authoritativeScheduleBase.dayGroups),
+    groupedDays: structuredClone(authoritativeGroupedDays),
+    activityCostDebugById: structuredClone(authoritativeActivityCostDebugById),
+    activityGroupingStrategy: session.activityGroupingStrategy || "heuristic",
+    unassignedActivityIds: structuredClone(authoritativeScheduleBase.unassignedActivityIds),
+    groupingSnapshots: structuredClone(session.groupingSnapshots || { heuristic: null, llm: null }),
     restaurantSuggestions: structuredClone(session.restaurantSuggestions || []),
     selectedRestaurantIds: structuredClone(session.selectedRestaurantIds || []),
     wantsRestaurants: session.wantsRestaurants,
@@ -992,8 +1152,14 @@ async function runLoop({
 
   sessionStore.update(session.sessionId, {
     selectedActivityIds: working.selectedActivityIds,
+    currentSchedule: working.currentSchedule,
+    tentativeSchedule: working.tentativeSchedule,
     dayGroups: working.dayGroups,
     groupedDays: working.groupedDays,
+    activityCostDebugById: working.activityCostDebugById,
+    activityGroupingStrategy: working.activityGroupingStrategy,
+    unassignedActivityIds: working.unassignedActivityIds,
+    groupingSnapshots: working.groupingSnapshots,
     restaurantSuggestions: working.restaurantSuggestions,
     selectedRestaurantIds: working.selectedRestaurantIds,
     wantsRestaurants: working.wantsRestaurants,
@@ -1072,8 +1238,19 @@ async function runInfoGatheringTurn({
       researchOptionSelections: {},
       suggestedActivities: [],
       selectedActivityIds: [],
+      currentSchedule: {
+        dayGroups: [],
+        groupedDays: [],
+        unassignedActivityIds: [],
+        activityCostDebugById: {},
+      },
+      tentativeSchedule: null,
       dayGroups: [],
       groupedDays: [],
+      activityCostDebugById: {},
+      activityGroupingStrategy: "heuristic",
+      unassignedActivityIds: [],
+      groupingSnapshots: { heuristic: null, llm: null },
       restaurantSuggestions: [],
       selectedRestaurantIds: [],
       accommodationStatus: "idle",
@@ -1287,8 +1464,18 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
       researchOptionSelections: {},
       suggestedActivities: [],
       selectedActivityIds: [],
+      currentSchedule: {
+        dayGroups: [],
+        groupedDays: [],
+        unassignedActivityIds: [],
+        activityCostDebugById: {},
+      },
+      tentativeSchedule: null,
       dayGroups: [],
       groupedDays: [],
+      activityCostDebugById: {},
+      activityGroupingStrategy: "heuristic",
+      unassignedActivityIds: [],
       restaurantSuggestions: [],
       selectedRestaurantIds: [],
       wantsRestaurants: null,
@@ -1340,8 +1527,18 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
       researchOptionSelections: {},
       suggestedActivities: [],
       selectedActivityIds: [],
+      currentSchedule: {
+        dayGroups: [],
+        groupedDays: [],
+        unassignedActivityIds: [],
+        activityCostDebugById: {},
+      },
+      tentativeSchedule: null,
       dayGroups: [],
       groupedDays: [],
+      activityCostDebugById: {},
+      activityGroupingStrategy: "heuristic",
+      unassignedActivityIds: [],
       restaurantSuggestions: [],
       selectedRestaurantIds: [],
       wantsRestaurants: null,
@@ -1395,6 +1592,15 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
     const payload = request.uiAction?.payload || {};
 
     if (uiType === "run_ai_check") {
+      const scheduleBase = chooseAuthoritativeScheduleBase({
+        currentSchedule: session.currentSchedule,
+        legacyDayGroups: session.dayGroups || [],
+        legacyUnassignedActivityIds: session.unassignedActivityIds || [],
+      });
+      const groupedDays =
+        scheduleBase.source === "currentSchedule"
+          ? session.currentSchedule.groupedDays
+          : session.groupedDays || [];
       const llmClient = getLLMClient();
       const checkedAt = new Date().toISOString();
       const selectedAccommodation =
@@ -1410,8 +1616,8 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
         tripInfo: session.tripInfo,
         suggestedActivities: session.suggestedActivities || [],
         selectedActivityIds: session.selectedActivityIds || [],
-        dayGroups: session.dayGroups || [],
-        groupedDays: session.groupedDays || [],
+        dayGroups: scheduleBase.dayGroups,
+        groupedDays,
         restaurantSuggestions: (session.restaurantSuggestions || []).map((restaurant) => ({
           id: restaurant.id,
           name: restaurant.name,
@@ -1449,7 +1655,13 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
 
     if (uiType === "reorganize_selection") {
       toolName = "select_activities";
-      input = { selectedActivityIds: payload.selectedActivityIds || [] };
+      input = {
+        selectedActivityIds: payload.selectedActivityIds || [],
+        groupingStrategy:
+          payload.groupingStrategy === "llm" || payload.groupingStrategy === "heuristic"
+            ? payload.groupingStrategy
+            : undefined,
+      };
       proposedTransition = WORKFLOW_STATES.GROUP_DAYS;
       fallbackMessage = "I've regrouped your itinerary based on your selections.";
     } else if (uiType === "move_activity") {
@@ -1512,10 +1724,29 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
     }
 
     if (toolName) {
+      const authoritativeScheduleBase = chooseAuthoritativeScheduleBase({
+        currentSchedule: session.currentSchedule,
+        legacyDayGroups: session.dayGroups || [],
+        legacyUnassignedActivityIds: session.unassignedActivityIds || [],
+      });
+      const authoritativeGroupedDays =
+        authoritativeScheduleBase.source === "currentSchedule"
+          ? session.currentSchedule.groupedDays
+          : session.groupedDays || [];
+      const authoritativeActivityCostDebugById =
+        authoritativeScheduleBase.source === "currentSchedule"
+          ? session.currentSchedule.activityCostDebugById
+          : session.activityCostDebugById || {};
       const working: WorkingSession = {
         selectedActivityIds: structuredClone(session.selectedActivityIds || []),
-        dayGroups: structuredClone(session.dayGroups || []),
-        groupedDays: structuredClone(session.groupedDays || []),
+        currentSchedule: structuredClone(session.currentSchedule),
+        tentativeSchedule: structuredClone(session.tentativeSchedule),
+        dayGroups: structuredClone(authoritativeScheduleBase.dayGroups),
+        groupedDays: structuredClone(authoritativeGroupedDays),
+        activityCostDebugById: structuredClone(authoritativeActivityCostDebugById),
+        activityGroupingStrategy: session.activityGroupingStrategy || "heuristic",
+        unassignedActivityIds: structuredClone(authoritativeScheduleBase.unassignedActivityIds),
+        groupingSnapshots: structuredClone(session.groupingSnapshots || { heuristic: null, llm: null }),
         restaurantSuggestions: structuredClone(session.restaurantSuggestions || []),
         selectedRestaurantIds: structuredClone(session.selectedRestaurantIds || []),
         wantsRestaurants: session.wantsRestaurants,
@@ -1539,8 +1770,14 @@ export async function runAgentTurn(rawRequest: unknown): Promise<TurnResponse> {
 
         sessionStore.update(session.sessionId, {
           selectedActivityIds: working.selectedActivityIds,
+          currentSchedule: working.currentSchedule,
+          tentativeSchedule: working.tentativeSchedule,
           dayGroups: working.dayGroups,
           groupedDays: working.groupedDays,
+          activityCostDebugById: working.activityCostDebugById,
+          activityGroupingStrategy: working.activityGroupingStrategy,
+          unassignedActivityIds: working.unassignedActivityIds,
+          groupingSnapshots: working.groupingSnapshots,
           restaurantSuggestions: working.restaurantSuggestions,
           selectedRestaurantIds: working.selectedRestaurantIds,
           wantsRestaurants: working.wantsRestaurants,

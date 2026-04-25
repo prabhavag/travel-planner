@@ -14,6 +14,21 @@ import type {
   LoopId,
   LoopResult,
 } from "@/lib/models/travel-plan";
+import type { ActivityGroupingStrategy } from "@/lib/services/day-grouping/types";
+import type { ActivityCostDebug } from "@/lib/services/day-grouping/scoring";
+import type { ScheduleState } from "@/lib/services/day-grouping";
+import type { LlmRefinementResult } from "@/lib/services/day-grouping-refinement";
+
+const DEFAULT_SESSION_TTL_HOURS = 24;
+const HOUR_MS = 60 * 60 * 1000;
+
+function resolveSessionTtlMs(): number {
+  const configuredHours = Number(process.env.SESSION_TTL_HOURS);
+  const ttlHours = Number.isFinite(configuredHours) && configuredHours > 0
+    ? configuredHours
+    : DEFAULT_SESSION_TTL_HOURS;
+  return ttlHours * HOUR_MS;
+}
 
 export const WORKFLOW_STATES = {
   INFO_GATHERING: "INFO_GATHERING",
@@ -40,6 +55,27 @@ export interface AiCheckResult {
   checkedAt: string;
 }
 
+export interface GroupingSnapshot {
+  selectedActivityIds: string[];
+  dayGroups: DayGroup[];
+  groupedDays: GroupedDay[];
+  unassignedActivityIds: string[];
+  updatedAt: string;
+}
+
+export interface LlmRefinementPreviewSnapshot {
+  hasCandidate: boolean;
+  recommendedByCost: boolean;
+  beforeGroupedDays: GroupedDay[];
+  afterGroupedDays: GroupedDay[] | null;
+  beforeUnassignedActivityIds: string[];
+  afterUnassignedActivityIds: string[] | null;
+  candidateDayGroups: DayGroup[] | null;
+  candidateUnassignedActivityIds: string[] | null;
+  currentSchedule?: ScheduleState;
+  tentativeSchedule?: ScheduleState | null;
+}
+
 export interface Session {
   sessionId: string;
   createdAt: number;
@@ -58,8 +94,16 @@ export interface Session {
   // Activity-first flow fields
   suggestedActivities: SuggestedActivity[];
   selectedActivityIds: string[];
+  currentSchedule: ScheduleState;
+  tentativeSchedule: ScheduleState | null;
   dayGroups: DayGroup[];
   groupedDays: GroupedDay[];
+  activityCostDebugById: Record<string, ActivityCostDebug>;
+  activityGroupingStrategy: ActivityGroupingStrategy;
+  unassignedActivityIds: string[];
+  llmRefinementResult: LlmRefinementResult | null;
+  llmRefinementPreview: LlmRefinementPreviewSnapshot | null;
+  groupingSnapshots: Record<ActivityGroupingStrategy, GroupingSnapshot | null>;
   restaurantSuggestions: RestaurantSuggestion[];
   selectedRestaurantIds: string[];
   wantsRestaurants: boolean | null;
@@ -80,7 +124,7 @@ export interface Session {
 
 class SessionStore {
   private sessions = new Map<string, Session>();
-  private SESSION_TTL = 30 * 60 * 1000; // 30 minutes
+  private SESSION_TTL = resolveSessionTtlMs();
   private CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
   constructor() {
@@ -126,8 +170,24 @@ class SessionStore {
       // Activity-first flow fields
       suggestedActivities: [],
       selectedActivityIds: [],
+      currentSchedule: {
+        dayGroups: [],
+        groupedDays: [],
+        unassignedActivityIds: [],
+        activityCostDebugById: {},
+      },
+      tentativeSchedule: null,
       dayGroups: [],
       groupedDays: [],
+      activityCostDebugById: {},
+      activityGroupingStrategy: "heuristic",
+      unassignedActivityIds: [],
+      llmRefinementResult: null,
+      llmRefinementPreview: null,
+      groupingSnapshots: {
+        heuristic: null,
+        llm: null,
+      },
       restaurantSuggestions: [],
       selectedRestaurantIds: [],
       wantsRestaurants: null,

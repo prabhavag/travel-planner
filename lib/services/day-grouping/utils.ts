@@ -97,6 +97,7 @@ export function buildDayCapacityProfiles(tripInfo: TripInfo, dayCount: number): 
         slotCapacity: cloneDefaultSlotCapacity(),
         targetWeight: 1,
         overflowPenaltyMultiplier: 1,
+        timingConstraints: [],
     }));
 
     if (dayCount === 0) return capacities;
@@ -113,6 +114,15 @@ export function buildDayCapacityProfiles(tripInfo: TripInfo, dayCount: number): 
             const hardArrivalCapacityHours = Math.max(0, (REGULAR_DAY_END_MINUTES - earliestUsableMinutes) / 60);
             first.maxHours = Math.min(first.maxHours, hardArrivalCapacityHours);
             first.overflowPenaltyMultiplier = Math.max(first.overflowPenaltyMultiplier ?? 1, 2.25);
+            first.timingConstraints = [
+                ...(first.timingConstraints ?? []),
+                {
+                    type: "arrival",
+                    sourceTime: tripInfo.arrivalTimePreference ?? null,
+                    earliestStartMinutes: earliestUsableMinutes,
+                    reason: `Arrival day activities should start only after the arrival time plus ${ARRIVAL_RECOVERY_BUFFER_MINUTES} minutes for airport exit and recovery.`,
+                },
+            ];
         }
         if (arrivalMinutes < 11 * 60) {
             first.maxHours = Math.min(first.maxHours, 7);
@@ -150,6 +160,16 @@ export function buildDayCapacityProfiles(tripInfo: TripInfo, dayCount: number): 
             last.slotCapacity.evening = 0;
             last.targetWeight = Math.min(last.targetWeight, 0.45);
             last.overflowPenaltyMultiplier = Math.max(last.overflowPenaltyMultiplier ?? 1, 5);
+            last.timingConstraints = [
+                ...(last.timingConstraints ?? []),
+                {
+                    type: "departure",
+                    sourceTime: tripInfo.departureTimePreference ?? null,
+                    latestEndMinutes: latestActivityEndMinutes,
+                    airportArrivalDeadlineMinutes,
+                    reason: `Departure day activities should end before airport transfer, commute buffer, and ${DEPARTURE_AIRPORT_LEAD_MINUTES} minutes of pre-departure airport time.`,
+                },
+            ];
         }
         if (departureMinutes <= 11 * 60) {
             last.maxHours = Math.min(last.maxHours, 3.5);

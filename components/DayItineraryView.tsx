@@ -19,7 +19,8 @@ import type {
   AccommodationOption,
   FlightOption,
 } from "@/lib/api-client";
-import { MIN_SCHEDULED_DURATION_RATIO } from "@/lib/utils/timeline-utils";
+import { parseEstimatedHours } from "@/lib/utils/timeline-utils";
+import { computePlannableDurationHours } from "@/lib/planning-flags";
 import { getDayBadgeColors, getDayColor } from "@/lib/constants";
 import { ActivityCard } from "@/components/ActivityCard";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
@@ -591,33 +592,6 @@ export function DayItineraryView({
     );
   };
 
-  const parseEstimatedHours = (duration?: string | null): number => {
-    if (!duration) return 2;
-    const text = duration.toLowerCase().trim();
-    if (!text) return 2;
-
-    const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
-    if (rangeMatch) {
-      const min = Number(rangeMatch[1]);
-      const max = Number(rangeMatch[2]);
-      if (Number.isFinite(min) && Number.isFinite(max) && max >= min) {
-        return (min + max) / 2;
-      }
-    }
-
-    const singleHourMatch = text.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)/);
-    if (singleHourMatch) {
-      const value = Number(singleHourMatch[1]);
-      if (Number.isFinite(value)) return value;
-    }
-
-    if (/half\s*day/.test(text)) return 4;
-    if (/full\s*day|all\s*day/.test(text)) return 7;
-    if (/30\s*min/.test(text)) return 0.5;
-    if (/45\s*min/.test(text)) return 0.75;
-    if (/meal|restaurant|lunch|dinner|breakfast/.test(text)) return 1.25;
-    return 2;
-  };
   function parseFixedStartTimeMinutes(value?: string | null): number | null {
     if (!value) return null;
     const text = value.trim().toLowerCase();
@@ -869,7 +843,7 @@ export function DayItineraryView({
       (totalCommuteMinutesEstimate + stayStartCommuteMinutes + endOfDayCommuteMinutes) / 60;
     const remainingForActivities = Math.max(availableVisitHours - lunchHours - totalCommuteHoursEstimate, 0);
     const totalRequestedHours = day.activities.reduce(
-      (sum, activity) => sum + parseEstimatedHours(activity.estimatedDuration),
+      (sum, activity) => sum + computePlannableDurationHours(parseEstimatedHours(activity.estimatedDuration), activity.isDurationFlexible),
       0
     );
     const freeActivityHours = Math.max(0, remainingForActivities - totalRequestedHours);
@@ -957,14 +931,8 @@ export function DayItineraryView({
 
     sortedActivities.forEach((activity, index) => {
       const recommendedHours = parseEstimatedHours(activity.estimatedDuration);
-      const requestedHours = recommendedHours;
-      const durationIsFlexible = activity.isDurationFlexible !== false;
-      const minimumScheduledHours = durationIsFlexible
-        ? Math.max(0.75, recommendedHours * MIN_SCHEDULED_DURATION_RATIO)
-        : requestedHours;
-      const allocatedHours = durationIsFlexible
-        ? Math.max(minimumScheduledHours, requestedHours * scaleFactor)
-        : requestedHours;
+      const loadHours = computePlannableDurationHours(recommendedHours, activity.isDurationFlexible);
+      const allocatedHours = Math.max(loadHours, loadHours * scaleFactor);
       const recommendedStartWindowLabel = formatRecommendedStartWindowLabel(activity);
       const recommendedStartSuffix =
         !activity.isFixedStartTime && recommendedStartWindowLabel

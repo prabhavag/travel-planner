@@ -30,6 +30,8 @@ import { getPlacesClient } from "./places-client";
 import { getGeocodingService } from "./geocoding-service";
 import { mergeResearchBriefAndSelections } from "./card-merging";
 import { formatTripPreferenceSummary, getTripFoodPreferences } from "@/lib/utils/trip-preferences";
+import { buildDayCapacityProfiles } from "@/lib/services/day-grouping/utils";
+import { toClockLabel } from "@/lib/utils/timeline-utils";
 
 const DEFAULT_MODEL = "gpt-4o";
 const DEFAULT_TEMPERATURE = 0.5;
@@ -188,6 +190,61 @@ const NIGHT_STAY_RESPONSE_SCHEMA = z.object({
     })
   ),
 });
+
+const DAY_GROUPING_RESPONSE_SCHEMA = z.object({
+  days: z.array(
+    z.object({
+      dayNumber: z.number().int().positive(),
+      theme: z.string().optional().nullable(),
+      activityIds: z.array(z.string()).default([]),
+      nightStay: z
+        .object({
+          label: z.string().min(1),
+          notes: z.string().optional().nullable(),
+        })
+        .optional()
+        .nullable(),
+    })
+  ),
+  unassignedActivityIds: z.array(z.string()).default([]),
+});
+
+const DAY_GROUP_REFINEMENT_OPERATION_SCHEMA = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("move"),
+    dayNumber: z.number().int().positive(),
+    activityIds: z.array(z.string()).min(1),
+    insertIndex: z.number().int().nonnegative().optional(),
+    reason: z.string().optional().nullable(),
+  }),
+  z.object({
+    type: z.literal("unschedule"),
+    activityIds: z.array(z.string()).min(1),
+    reason: z.string().optional().nullable(),
+  }),
+  z.object({
+    type: z.literal("set_night_stay"),
+    dayNumber: z.number().int().positive(),
+    label: z.string().min(1),
+    notes: z.string().optional().nullable(),
+    reason: z.string().optional().nullable(),
+  }),
+  z.object({
+    type: z.literal("no_op"),
+    reason: z.string().optional().nullable(),
+  }),
+]);
+
+const DAY_GROUP_REFINEMENT_RESPONSE_SCHEMA = z.union([
+  z.object({
+    operations: z.array(DAY_GROUP_REFINEMENT_OPERATION_SCHEMA).min(1).max(8),
+  }),
+  z.object({
+    operation: DAY_GROUP_REFINEMENT_OPERATION_SCHEMA,
+  }),
+]);
+
+export type DayGroupingRefinementOperation = z.infer<typeof DAY_GROUP_REFINEMENT_OPERATION_SCHEMA>;
 
 const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -3398,6 +3455,332 @@ ${JSON.stringify({ wantsFlight, flightStatus }, null, 2)}`,
         status: "ERROR",
         assessment: "AI quality check failed. Please try again.",
       };
+    }
+  }
+
+  async groupActivitiesIntoDays({
+    tripInfo,
+    activities,
+    dayCount,
+    dates,
+  }: {
+    tripInfo: TripInfo;
+    activities: SuggestedActivity[];
+    dayCount: number;
+    dates: string[];
+  }): Promise<{ success: boolean; dayGroups: DayGroup[]; unassignedActivityIds: string[] }> {
+    if (dayCount <= 0) {
+      return { success: false, dayGroups: [], unassignedActivityIds: [] };
+    }
+
+    const normalizedDates =
+      dates.length >= dayCount ? dates.slice(0, dayCount) : [
+        ...dates,
+        ...Array.from({ length: dayCount - dates.length }, (_, i) => `Day-${dates.length + i + 1}`),
+      ];
+    const activityPayload = activities.map((activity) => ({
+      id: activity.id,
+      name: activity.name,
+      type: activity.type,
+      estimatedDuration: activity.estimatedDuration,
+      isDurationFlexible: activity.isDurationFlexible !== false,
+      bestTimeOfDay: activity.bestTimeOfDay,
+      daylightPreference: activity.daylightPreference || "flexible",
+      isFixedStartTime: Boolean(activity.isFixedStartTime),
+      fixedStartTime: activity.fixedStartTime || null,
+      recommendedStartWindow: activity.recommendedStartWindow || null,
+      neighborhood: activity.neighborhood || null,
+      locationMode: activity.locationMode || "point",
+      coordinates: activity.coordinates || null,
+      startCoordinates: activity.startCoordinates || null,
+      endCoordinates: activity.endCoordinates || null,
+    }));
+
+    const groupingSystemPrompt = `You are a travel scheduling assistant.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "days": [
+    {
+      "dayNumber": 1,
+      "theme": "string",
+      "activityIds": ["activity-id-1", "activity-id-2"],
+      "nightStay": { "label": "short area name", "notes": "optional reason or null" }
+    }
+  ],
+  "unassignedActivityIds": ["activity-id-x"]
+}
+
+Rules:
+- Always output exactly ${dayCount} entries in "days", with dayNumber from 1..${dayCount}.
+- Assign each activity ID at most once.
+- If an activity does not fit, put it in "unassignedActivityIds".
+- Preserve fixed-time or narrow-window activities when possible.
+- Keep daily load realistic; do not overpack.
+- Keep nearby activities on the same day when practical.
+- Provide a short nightStay label for each day.
+- Do not invent activity IDs.`;
+
+    const messages: Array<{ role: "system" | "user"; content: string }> = [
+      { role: "system", content: groupingSystemPrompt },
+      {
+        role: "user",
+        content: `Trip info:
+${JSON.stringify({
+          destination: tripInfo.destination,
+          startDate: tripInfo.startDate,
+          endDate: tripInfo.endDate,
+          durationDays: tripInfo.durationDays,
+          activityLevel: tripInfo.activityLevel,
+          preferences: tripInfo.preferences || [],
+        }, null, 2)}
+
+Target day count: ${dayCount}
+Day dates: ${JSON.stringify(normalizedDates)}
+
+Activities:
+${JSON.stringify(activityPayload, null, 2)}`,
+      },
+    ];
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      });
+      const response = this._parseJsonResponse(completion);
+      const parsed = DAY_GROUPING_RESPONSE_SCHEMA.safeParse(response);
+      if (!parsed.success) {
+        return { success: false, dayGroups: [], unassignedActivityIds: [] };
+      }
+
+      const activityById = new Map(activities.map((activity) => [activity.id, activity]));
+      const assignedIds = new Set<string>();
+      const dayByNumber = new Map<number, DayGroup>();
+
+      for (let i = 0; i < dayCount; i += 1) {
+        dayByNumber.set(i + 1, {
+          dayNumber: i + 1,
+          date: normalizedDates[i] || normalizedDates[normalizedDates.length - 1] || "",
+          theme: `Day ${i + 1} Highlights`,
+          activityIds: [],
+          nightStay: null,
+          debugCost: null,
+        });
+      }
+
+      for (const day of parsed.data.days) {
+        const entry = dayByNumber.get(day.dayNumber);
+        if (!entry) continue;
+
+        const dedupedActivityIds: string[] = [];
+        for (const id of day.activityIds || []) {
+          if (!activityById.has(id) || assignedIds.has(id)) continue;
+          assignedIds.add(id);
+          dedupedActivityIds.push(id);
+        }
+
+        entry.activityIds = dedupedActivityIds;
+        if (typeof day.theme === "string" && day.theme.trim()) {
+          entry.theme = day.theme.trim();
+        }
+        if (day.nightStay?.label?.trim()) {
+          entry.nightStay = {
+            label: day.nightStay.label.trim(),
+            notes: day.nightStay.notes ?? null,
+            coordinates: null,
+          };
+        }
+      }
+
+      const unassignedSet = new Set<string>();
+      for (const id of parsed.data.unassignedActivityIds || []) {
+        if (!activityById.has(id) || assignedIds.has(id)) continue;
+        unassignedSet.add(id);
+      }
+      for (const id of activityById.keys()) {
+        if (!assignedIds.has(id)) {
+          unassignedSet.add(id);
+        }
+      }
+
+      return {
+        success: true,
+        dayGroups: [...dayByNumber.values()].sort((a, b) => a.dayNumber - b.dayNumber),
+        unassignedActivityIds: [...unassignedSet],
+      };
+    } catch (error) {
+      console.error("Error in groupActivitiesIntoDays:", error);
+      return { success: false, dayGroups: [], unassignedActivityIds: [] };
+    }
+  }
+
+  async proposeDayGroupingRefinementStep({
+    tripInfo,
+    activities,
+    dayGroups,
+    unassignedActivityIds,
+    currentCost,
+    allowDurationShrinking,
+  }: {
+    tripInfo: TripInfo;
+    activities: SuggestedActivity[];
+    dayGroups: DayGroup[];
+    unassignedActivityIds: string[];
+    currentCost: number;
+    allowDurationShrinking: boolean;
+  }): Promise<{
+    success: boolean;
+    operations: DayGroupingRefinementOperation[] | null;
+  }> {
+    const activityPayload = activities.map((activity) => ({
+      id: activity.id,
+      name: activity.name,
+      type: activity.type,
+      estimatedDuration: activity.estimatedDuration,
+      isDurationFlexible: activity.isDurationFlexible !== false,
+      bestTimeOfDay: activity.bestTimeOfDay,
+      daylightPreference: activity.daylightPreference || "flexible",
+      isFixedStartTime: Boolean(activity.isFixedStartTime),
+      fixedStartTime: activity.fixedStartTime || null,
+      recommendedStartWindow: activity.recommendedStartWindow || null,
+      neighborhood: activity.neighborhood || null,
+    }));
+    const activityById = new Map(activityPayload.map((activity) => [activity.id, activity]));
+    const dayCapacityProfiles = buildDayCapacityProfiles(tripInfo, dayGroups.length);
+    const dayConstraintsPayload = dayGroups.map((day, index) => {
+      const capacity = dayCapacityProfiles[index];
+      return {
+        dayNumber: day.dayNumber,
+        date: day.date,
+        maxSchedulableHours: capacity?.maxHours ?? null,
+        slotCapacityHours: capacity?.slotCapacity ?? null,
+        timingConstraints: (capacity?.timingConstraints ?? []).map((constraint) => ({
+          type: constraint.type,
+          sourceTime: constraint.sourceTime,
+          earliestStart: typeof constraint.earliestStartMinutes === "number"
+            ? toClockLabel(constraint.earliestStartMinutes)
+            : null,
+          latestEnd: typeof constraint.latestEndMinutes === "number"
+            ? toClockLabel(constraint.latestEndMinutes)
+            : null,
+          airportArrivalDeadline: typeof constraint.airportArrivalDeadlineMinutes === "number"
+            ? toClockLabel(constraint.airportArrivalDeadlineMinutes)
+            : null,
+          reason: constraint.reason,
+        })),
+      };
+    });
+    const dayPayload = dayGroups.map((day) => ({
+      dayNumber: day.dayNumber,
+      date: day.date,
+      theme: day.theme,
+      activityIds: day.activityIds,
+      activities: day.activityIds
+        .map((id) => activityById.get(id))
+        .filter((activity): activity is NonNullable<typeof activityPayload[number]> => activity !== undefined),
+      nightStayLabel: day.nightStay?.label || null,
+    }));
+    const unassignedActivitiesPayload = unassignedActivityIds
+      .map((id) => activityById.get(id))
+      .filter((activity): activity is NonNullable<typeof activityPayload[number]> => activity !== undefined);
+
+    const systemPrompt = `You are optimizing a travel itinerary using a small batch of edits.
+
+Return ONLY JSON:
+{
+  "operations": [
+    {
+      "type": "move | unschedule | set_night_stay | no_op",
+      "...": "operation fields"
+    }
+  ]
+}
+
+Allowed operations:
+1) move(dayNumber, activityIds, insertIndex?)
+   - Moves each activity from wherever it currently is into the target day.
+2) unschedule(activityIds)
+   - Moves listed activities from whichever day they are in to Unassigned.
+3) set_night_stay(dayNumber, label, notes?)
+4) no_op(reason?)
+
+Rules:
+- Prefer 2-4 operations when that can improve cost more than a single move.
+- Keep the operation list short and coherent.
+- Do not include the same activity ID in more than one operation.
+- no_op should appear only when no meaningful improvement is likely.
+- Never invent activity IDs.
+- Use activity IDs from the payload as references; names are provided only for readability.
+- Only use day numbers that exist.
+- Goal: lower the trip cost score.
+- Treat day timing/capacity constraints as hard feasibility signals, not optional preferences.
+- On an arrival day, do not move activities that would need to start before the earliestStart constraint; unschedule them or choose no_op if they cannot fit.
+- On a departure day, do not move activities that would need to end after the latestEnd constraint; unschedule them or choose no_op if they cannot fit.
+- Preserve fixed-time or narrow-window activities only when the target day can honor their time window.
+- If allowDurationShrinking is false, do not rely on shortening visit durations; keep visits near recommended durations.
+- If no likely improvement exists, return one operation: [{"type":"no_op","reason":"..."}].`;
+
+    const messages: Array<{ role: "system" | "user"; content: string }> = [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: `Trip info:
+${JSON.stringify({
+          destination: tripInfo.destination,
+          startDate: tripInfo.startDate,
+          endDate: tripInfo.endDate,
+          durationDays: tripInfo.durationDays,
+          activityLevel: tripInfo.activityLevel,
+          transportMode: tripInfo.transportMode,
+          arrivalAirport: tripInfo.arrivalAirport,
+          departureAirport: tripInfo.departureAirport,
+          arrivalTimePreference: tripInfo.arrivalTimePreference,
+          departureTimePreference: tripInfo.departureTimePreference,
+          allowDurationShrinking,
+        }, null, 2)}
+
+Current cost: ${currentCost}
+
+Day timing/capacity constraints:
+${JSON.stringify(dayConstraintsPayload, null, 2)}
+
+Days:
+${JSON.stringify(dayPayload, null, 2)}
+
+Unassigned activity IDs:
+${JSON.stringify(unassignedActivityIds, null, 2)}
+
+Unassigned activities:
+${JSON.stringify(unassignedActivitiesPayload, null, 2)}
+
+Activities:
+${JSON.stringify(activityPayload, null, 2)}`,
+      },
+    ];
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+      });
+      const response = this._parseJsonResponse(completion);
+      const parsed = DAY_GROUP_REFINEMENT_RESPONSE_SCHEMA.safeParse(response);
+      if (!parsed.success) {
+        return { success: false, operations: null };
+      }
+      const operations = "operations" in parsed.data ? parsed.data.operations : [parsed.data.operation];
+      return {
+        success: true,
+        operations,
+      };
+    } catch (error) {
+      console.error("Error in proposeDayGroupingRefinementStep:", error);
+      return { success: false, operations: null };
     }
   }
 

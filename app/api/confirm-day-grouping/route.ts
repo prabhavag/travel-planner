@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
+import { chooseAuthoritativeScheduleBase } from "@/lib/utils/schedule-source";
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,8 +32,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const authoritativeScheduleBase = chooseAuthoritativeScheduleBase({
+      currentSchedule: session.currentSchedule,
+      legacyDayGroups: session.dayGroups,
+      legacyUnassignedActivityIds: session.unassignedActivityIds || [],
+    });
+    const authoritativeGroupedDays =
+      authoritativeScheduleBase.source === "currentSchedule"
+        ? session.currentSchedule.groupedDays
+        : session.groupedDays;
+    const authoritativeActivityCostDebugById =
+      authoritativeScheduleBase.source === "currentSchedule"
+        ? session.currentSchedule.activityCostDebugById
+        : session.activityCostDebugById;
+
     // Validate we have grouped days
-    if (!session.groupedDays || session.groupedDays.length === 0) {
+    if (!authoritativeGroupedDays || authoritativeGroupedDays.length === 0) {
       return NextResponse.json(
         { success: false, message: "No grouped days to confirm" },
         { status: 400 }
@@ -42,9 +57,13 @@ export async function POST(request: NextRequest) {
     // Transition to DAY_ITINERARY state
     sessionStore.update(sessionId, {
       workflowState: WORKFLOW_STATES.DAY_ITINERARY,
+      dayGroups: authoritativeScheduleBase.dayGroups,
+      groupedDays: authoritativeGroupedDays,
+      activityCostDebugById: authoritativeActivityCostDebugById,
+      unassignedActivityIds: authoritativeScheduleBase.unassignedActivityIds,
     });
 
-    const message = `Your ${session.groupedDays.length}-day itinerary is set! Would you like to add restaurants to your trip?`;
+    const message = `Your ${authoritativeGroupedDays.length}-day itinerary is set! Would you like to add restaurants to your trip?`;
 
     sessionStore.addToConversation(sessionId, "assistant", message);
 
@@ -53,7 +72,12 @@ export async function POST(request: NextRequest) {
       sessionId,
       workflowState: WORKFLOW_STATES.DAY_ITINERARY,
       message,
-      groupedDays: session.groupedDays,
+      currentSchedule: session.currentSchedule,
+      tentativeSchedule: session.tentativeSchedule,
+      dayGroups: authoritativeScheduleBase.dayGroups,
+      groupedDays: authoritativeGroupedDays,
+      activityCostDebugById: authoritativeActivityCostDebugById,
+      unassignedActivityIds: authoritativeScheduleBase.unassignedActivityIds,
     });
   } catch (error) {
     console.error("Error in confirmDayGrouping:", error);

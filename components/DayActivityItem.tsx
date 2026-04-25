@@ -5,17 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { ActivityCard } from "@/components/ActivityCard";
 import { ResearchOptionCard } from "@/components/ResearchOptionCard";
-import type { GroupedDay, SuggestedActivity } from "@/lib/api-client";
-
-export interface ActivityGroupingCostBreakdown {
-    kind: "scheduled" | "unscheduled";
-    total: number;
-    details: string[];
-    lines: Array<{
-        label: string;
-        value: number;
-    }>;
-}
+import type { ActivityCostDebug, GroupedDay, SuggestedActivity } from "@/lib/api-client";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -48,8 +38,7 @@ interface DayActivityItemProps {
     onMoveUp?: (activityId: string) => void;
     onMoveDown?: (activityId: string) => void;
     allowUnscheduledTarget?: boolean;
-    groupingCostScore?: number | null;
-    groupingCostBreakdown?: ActivityGroupingCostBreakdown | null;
+    groupingCostDebug?: ActivityCostDebug | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,15 +72,14 @@ export function DayActivityItem({
     onMoveUp,
     onMoveDown,
     allowUnscheduledTarget = false,
-    groupingCostScore = null,
-    groupingCostBreakdown = null,
+    groupingCostDebug = null,
 }: DayActivityItemProps) {
     const sourceDay = sourceDayNumber ?? dayNumber;
     const [showCostBreakdown, setShowCostBreakdown] = useState(false);
     const groupingCostLabel =
-        groupingCostScore == null
+        groupingCostDebug == null
             ? null
-            : `Cost score ${groupingCostScore.toFixed(2)}`;
+            : `Cost score ${groupingCostDebug.total.toFixed(2)}`;
 
     // ── "Change Day" button shown in the card header ────────────────────────
     const cardHeaderActions = (
@@ -226,20 +214,20 @@ export function DayActivityItem({
                     </Button>
                 </div>
             ) : null}
-            {debugMode && showCostBreakdown && groupingCostBreakdown ? (
+            {debugMode && showCostBreakdown && groupingCostDebug ? (
                 <div className="mt-3 space-y-1 rounded-md border border-slate-300 bg-slate-50 p-2 text-[11px] leading-4 text-slate-700">
                     <p className="font-semibold uppercase tracking-wide text-slate-800">
-                        Cost Breakdown ({groupingCostBreakdown.kind})
+                        Cost Breakdown ({groupingCostDebug.kind})
                     </p>
-                    {groupingCostBreakdown.details.map((detail, detailIndex) => (
+                    {groupingCostDebug.details.map((detail, detailIndex) => (
                         <p key={`cost-breakdown-detail-${activity.id}-${detailIndex}`}>{detail}</p>
                     ))}
-                    {groupingCostBreakdown.lines.map((line, lineIndex) => (
+                    {groupingCostDebug.lines.map((line, lineIndex) => (
                         <p key={`cost-breakdown-line-${activity.id}-${lineIndex}`}>
                             {line.label}: {line.value.toFixed(2)}
                         </p>
                     ))}
-                    <p className="font-semibold text-slate-800">Total: {groupingCostBreakdown.total.toFixed(2)}</p>
+                    <p className="font-semibold text-slate-800">Total: {groupingCostDebug.total.toFixed(2)}</p>
                 </div>
             ) : null}
 

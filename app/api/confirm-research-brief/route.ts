@@ -2,7 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import type { ResearchOptionPreference, ResearchOption, SuggestedActivity } from "@/lib/models/travel-plan";
 import { mergeSuggestedActivities } from "@/lib/services/card-merging";
-import { buildGroupedDays, groupActivitiesByDay } from "@/lib/services/day-grouping";
+import {
+  buildDayCapacityProfiles,
+  buildGroupedDays,
+  buildPreparedActivityMap,
+  buildScoredSchedule,
+  computeActivityCommuteMatrix,
+  groupActivitiesByDay,
+} from "@/lib/services/day-grouping";
 import { assignNightStays } from "@/lib/services/night-stays";
 import { runAccommodationSearch, runFlightSearch } from "@/lib/services/sub-agent-search";
 
@@ -179,30 +186,46 @@ export async function POST(request: NextRequest) {
       .filter(Boolean);
 
     const selectedActivities = suggestedActivities.filter((activity) => selectedActivityIds.includes(activity.id));
-    const dayGroups = await groupActivitiesByDay({
+    let updatedDayGroups = await groupActivitiesByDay({
       tripInfo: session.tripInfo,
       activities: selectedActivities,
     });
     let groupedDays = buildGroupedDays({
-      dayGroups,
+      dayGroups: updatedDayGroups,
       activities: selectedActivities,
     });
+
     const nightStayResult = await assignNightStays({
       tripInfo: session.tripInfo,
-      dayGroups,
+      dayGroups: updatedDayGroups,
       groupedDays,
       selectedAccommodation: null,
     });
-    const updatedDayGroups = nightStayResult.dayGroups;
+    updatedDayGroups = nightStayResult.dayGroups;
     groupedDays = nightStayResult.groupedDays;
+    const currentSchedule = buildScoredSchedule({
+      dayGroups: updatedDayGroups,
+      activities: selectedActivities,
+      unassignedActivityIds: [],
+      dayCapacities: buildDayCapacityProfiles(session.tripInfo, updatedDayGroups.length),
+      preparedMap: buildPreparedActivityMap(selectedActivities),
+      commuteMinutesByPair: await computeActivityCommuteMatrix(selectedActivities),
+      options: { forceSchedule: false, tripInfo: session.tripInfo },
+    });
 
     sessionStore.update(sessionId, {
       workflowState: WORKFLOW_STATES.GROUP_DAYS,
       researchOptionSelections: parsedSelections,
       suggestedActivities,
       selectedActivityIds,
-      dayGroups: updatedDayGroups,
-      groupedDays,
+      currentSchedule,
+      tentativeSchedule: null,
+      dayGroups: currentSchedule.dayGroups,
+      groupedDays: currentSchedule.groupedDays,
+      activityCostDebugById: currentSchedule.activityCostDebugById,
+      unassignedActivityIds: currentSchedule.unassignedActivityIds,
+      llmRefinementResult: null,
+      llmRefinementPreview: null,
       accommodationStatus: "running",
       flightStatus: "running",
       accommodationError: null,
@@ -270,8 +293,14 @@ export async function POST(request: NextRequest) {
       researchOptionSelections: parsedSelections,
       suggestedActivities,
       selectedActivityIds,
+      currentSchedule: updatedSession.currentSchedule,
+      tentativeSchedule: updatedSession.tentativeSchedule,
       dayGroups: updatedSession.dayGroups,
       groupedDays: updatedSession.groupedDays,
+      activityCostDebugById: updatedSession.activityCostDebugById,
+      unassignedActivityIds: updatedSession.unassignedActivityIds,
+      llmRefinementResult: null,
+      llmRefinementPreview: null,
       accommodationStatus: updatedSession.accommodationStatus,
       flightStatus: updatedSession.flightStatus,
       accommodationError: updatedSession.accommodationError,

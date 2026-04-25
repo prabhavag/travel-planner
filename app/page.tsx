@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -29,11 +29,18 @@ import {
   deepResearchOption,
   deepResearchSelectedOptions,
   enrichResearchPhotos,
+  applyLlmRefinementCandidate,
+  runLlmRefinementStep,
+  resolveLlmRefinementPreview,
   suggestAirport,
   type SessionResponse,
   type AiCheckResult,
+  type LlmRefinementResult,
+  type LlmRefinementPreview,
   type TripInfo,
   type SuggestedActivity,
+  type ActivityCostDebug,
+  type ScheduleState,
   type GroupedDay,
   type TripResearchBrief,
   type RestaurantSuggestion,
@@ -47,6 +54,7 @@ import {
   type TimelineAnalysisResponse,
   type TimelineMapView,
 } from "@/lib/timeline";
+import { chooseScheduleBackedRefinementTotals } from "@/lib/utils/schedule-cost";
 
 // Workflow states
 const WORKFLOW_STATES = {
@@ -281,6 +289,103 @@ function defaultTimelineView(result: TimelineAnalysisResponse | null | undefined
   return "countries";
 }
 
+function buildActivityNameLookup(
+  activities: SuggestedActivity[],
+  groupedDays: GroupedDay[]
+): Map<string, string> {
+  const byId = new Map<string, string>();
+  activities.forEach((activity) => {
+    if (activity.id && activity.name) {
+      byId.set(activity.id, activity.name);
+    }
+  });
+  groupedDays.forEach((day) => {
+    day.activities.forEach((activity) => {
+      if (activity.id && activity.name && !byId.has(activity.id)) {
+        byId.set(activity.id, activity.name);
+      }
+    });
+  });
+  return byId;
+}
+
+function mapLlmSuggestedOperationsWithNames(
+  operations: Array<Record<string, unknown>>,
+  activityNameById: Map<string, string>
+): Array<Record<string, unknown>> {
+  return operations.map((operation) => {
+    const activityIds = Array.isArray(operation.activityIds)
+      ? operation.activityIds.filter((id): id is string => typeof id === "string")
+      : [];
+    if (activityIds.length === 0) {
+      return operation;
+    }
+    const activityLabels = activityIds.map((id) => {
+      const name = activityNameById.get(id);
+      return name ? `${name} (${id})` : `(unknown activity: ${id})`;
+    });
+    return {
+      ...operation,
+      activityLabels,
+    };
+  });
+}
+
+function extractOverallDebugCostFromDays(days: GroupedDay[] | null | undefined): number | null {
+  if (!Array.isArray(days)) return null;
+  for (const day of days) {
+    const value = day.debugCost?.overallTripCost;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function extractGlobalDebugCostSummary(days: GroupedDay[] | null | undefined): {
+  total: number | null;
+  base: number | null;
+  commuteImbalance: number | null;
+  nearbySplit: number | null;
+  durationMismatch: number | null;
+} {
+  if (!Array.isArray(days) || days.length === 0) {
+    return {
+      total: null,
+      base: null,
+      commuteImbalance: null,
+      nearbySplit: null,
+      durationMismatch: null,
+    };
+  }
+  const debugCost = days.find((day) => day.debugCost)?.debugCost;
+  if (!debugCost) {
+    return {
+      total: null,
+      base: null,
+      commuteImbalance: null,
+      nearbySplit: null,
+      durationMismatch: null,
+    };
+  }
+  return {
+    total: debugCost.overallTripCost ?? null,
+    base: debugCost.baseCost ?? null,
+    commuteImbalance: debugCost.commuteImbalancePenalty ?? null,
+    nearbySplit: debugCost.nearbySplitPenalty ?? null,
+    durationMismatch: debugCost.durationMismatchPenalty ?? null,
+  };
+}
+
+function uniqueOrderedIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  ids.forEach((id) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    ordered.push(id);
+  });
+  return ordered;
+}
+
 export default function PlannerPage() {
   // Session state
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -295,6 +400,14 @@ export default function PlannerPage() {
   const [suggestedActivities, setSuggestedActivities] = useState<SuggestedActivity[]>([]);
   const [selectedActivityIds, setSelectedActivityIds] = useState<string[]>([]);
   const [groupedDays, setGroupedDays] = useState<GroupedDay[]>([]);
+  const [unassignedActivityIds, setUnassignedActivityIds] = useState<string[]>([]);
+  const [activityCostDebugById, setActivityCostDebugById] = useState<Record<string, ActivityCostDebug>>({});
+  const [currentSchedule, setCurrentSchedule] = useState<ScheduleState | null>(null);
+  const [tentativeSchedule, setTentativeSchedule] = useState<ScheduleState | null>(null);
+  const [llmRefinementResult, setLlmRefinementResult] = useState<LlmRefinementResult | null>(null);
+  const [llmRefinementPreview, setLlmRefinementPreview] = useState<LlmRefinementPreview | null>(null);
+  const [llmRefinementDiffOpen, setLlmRefinementDiffOpen] = useState(false);
+  const [groupingDebugTotalCost, setGroupingDebugTotalCost] = useState<number | null>(null);
   const [restaurantSuggestions, setRestaurantSuggestions] = useState<RestaurantSuggestion[]>([]);
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState<string[]>([]);
   const [accommodationStatus, setAccommodationStatus] = useState<SubAgentStatus>("idle");
@@ -314,8 +427,7 @@ export default function PlannerPage() {
   const [isAiCheckCollapsed, setIsAiCheckCollapsed] = useState(true);
   const [maxReachedState, setMaxReachedState] = useState(WORKFLOW_STATES.INFO_GATHERING);
   const [lastGroupedActivityIds, setLastGroupedActivityIds] = useState<string[]>([]);
-  const [groupingScheduledActivityIds, setGroupingScheduledActivityIds] = useState<string[] | null>(null);
-  const [groupingMapPreviewDays, setGroupingMapPreviewDays] = useState<GroupedDay[] | null>(null);
+  const [llmRefinementDiffOffset, setLlmRefinementDiffOffset] = useState({ x: 0, y: 0 });
 
   // Timeline State
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -347,6 +459,11 @@ export default function PlannerPage() {
   const chatInputRef = useRef<HTMLInputElement>(null);
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
   const aiInsightPopupRef = useRef<HTMLDivElement>(null);
+  const llmRefinementDiffOffsetRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    llmRefinementDiffOffsetRef.current = llmRefinementDiffOffset;
+  }, [llmRefinementDiffOffset]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -680,7 +797,26 @@ export default function PlannerPage() {
     }
     if (response.suggestedActivities !== undefined) setSuggestedActivities(response.suggestedActivities);
     if (response.selectedActivityIds !== undefined) setSelectedActivityIds(response.selectedActivityIds);
-    if (response.groupedDays !== undefined) setGroupedDays(response.groupedDays);
+    if (response.currentSchedule !== undefined) {
+      const schedule = response.currentSchedule;
+      setCurrentSchedule(schedule);
+      setGroupedDays(schedule.groupedDays);
+      setUnassignedActivityIds(schedule.unassignedActivityIds);
+      setActivityCostDebugById(schedule.activityCostDebugById);
+    } else if (response.groupedDays !== undefined) {
+      setGroupedDays(response.groupedDays);
+    }
+    if (response.tentativeSchedule !== undefined) setTentativeSchedule(response.tentativeSchedule);
+    if (response.currentSchedule === undefined && response.unassignedActivityIds !== undefined) {
+      setUnassignedActivityIds(response.unassignedActivityIds);
+    }
+    if (response.currentSchedule === undefined && response.activityCostDebugById !== undefined) setActivityCostDebugById(response.activityCostDebugById);
+    if (response.llmRefinementResult !== undefined) setLlmRefinementResult(response.llmRefinementResult ?? null);
+    if (response.llmRefinementPreview !== undefined) {
+      const preview = response.llmRefinementPreview ?? null;
+      setLlmRefinementPreview(preview);
+      setLlmRefinementDiffOpen(Boolean(preview));
+    }
     if (response.restaurantSuggestions !== undefined) setRestaurantSuggestions(response.restaurantSuggestions);
     if (response.selectedRestaurantIds !== undefined) setSelectedRestaurantIds(response.selectedRestaurantIds);
     if (response.accommodationStatus !== undefined) setAccommodationStatus(response.accommodationStatus);
@@ -936,6 +1072,9 @@ export default function PlannerPage() {
         throw new Error(selectResponse.message);
       }
       applySessionResponse(selectResponse, true);
+      setLlmRefinementResult(null);
+      setLlmRefinementPreview(null);
+      setLlmRefinementDiffOpen(false);
       setLastGroupedActivityIds([...ids]);
     } catch (error) {
       console.error("Group days error:", error);
@@ -1054,7 +1193,7 @@ export default function PlannerPage() {
     try {
       const response = await adjustDayGroups(sessionId, activityId, fromDay, toDay, targetIndex);
       if (response.success) {
-        setGroupedDays(response.groupedDays || []);
+        applySessionResponse(response, false);
       }
     } catch (error) {
       console.error("Move activity error:", error);
@@ -1070,9 +1209,13 @@ export default function PlannerPage() {
     setLoading(true);
 
     try {
-      const selectedActivityIdsOverride =
-        groupingScheduledActivityIds ??
-        groupedDays.flatMap((day) => day.activities.map((activity) => activity.id));
+      const scheduleForConfirmation = currentSchedule;
+      const selectedActivityIdsOverride = uniqueOrderedIds([
+        ...(scheduleForConfirmation?.dayGroups ?? groupedDays).flatMap((day) =>
+          "activityIds" in day ? day.activityIds : day.activities.map((activity) => activity.id)
+        ),
+        ...(scheduleForConfirmation?.unassignedActivityIds ?? unassignedActivityIds),
+      ]);
       const response = await agentTurn(sessionId, "ui_action", undefined, {
         type: "confirm_grouping",
         payload: {
@@ -1090,19 +1233,142 @@ export default function PlannerPage() {
     }
   };
 
-  const handleGroupingSchedulingPlanChange = useCallback(
-    ({ scheduledActivityIds }: { scheduledActivityIds: string[]; unscheduledActivityIds: string[] }) => {
-      const scheduledIdsSet = new Set(scheduledActivityIds);
-      setGroupingScheduledActivityIds(scheduledActivityIds);
-      setGroupingMapPreviewDays(
-        groupedDays.map((day) => ({
-          ...day,
-          activities: day.activities.filter((activity) => scheduledIdsSet.has(activity.id)),
-        }))
+  const llmRefinementRequestBaseGroupedDays = currentSchedule?.groupedDays ?? groupedDays;
+  const llmRefinementRequestBaseUnassignedIds = useMemo(() => {
+    return uniqueOrderedIds(currentSchedule?.unassignedActivityIds ?? unassignedActivityIds);
+  }, [currentSchedule, unassignedActivityIds]);
+
+  const handleLlmRefineStep = async () => {
+    if (!sessionId) return;
+    if (llmRefinementPreview) {
+      setLlmRefinementDiffOpen(true);
+      return;
+    }
+    setLoading(true);
+    try {
+      setLlmRefinementDiffOffset({ x: 0, y: 0 });
+      const response = await runLlmRefinementStep(sessionId);
+      if (response.success) {
+        if (response.llmRefinementResult) {
+          const namedSuggestions = mapLlmSuggestedOperationsWithNames(
+            Array.isArray(response.llmRefinementResult.suggestedOperations)
+              ? response.llmRefinementResult.suggestedOperations
+              : [],
+            buildActivityNameLookup(suggestedActivities, llmRefinementRequestBaseGroupedDays)
+          );
+          console.debug("[LLM Refine] Operation summary:", response.llmRefinementResult.operationSummary);
+          console.debug("[LLM Refine] Suggested operations (named):", namedSuggestions);
+        }
+        applySessionResponse(response, true);
+      }
+    } catch (error) {
+      console.error("LLM refine step error:", error);
+      alert("Failed to run LLM refinement step. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCloseLlmRefinementPreview = () => {
+    setLlmRefinementDiffOpen(false);
+  };
+
+  const handleRejectLlmRefinementPreview = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await resolveLlmRefinementPreview(sessionId, "reject");
+      if (response.success) {
+        applySessionResponse(response, false);
+        setLlmRefinementDiffOpen(false);
+      }
+    } catch (error) {
+      console.error("LLM refinement reject error:", error);
+      alert("Failed to reject LLM refinement preview. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDiscardLlmRefinementPreview = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const response = await resolveLlmRefinementPreview(sessionId, "discard");
+      if (response.success) {
+        applySessionResponse(response, false);
+        setLlmRefinementDiffOpen(false);
+        setLlmRefinementDiffOffset({ x: 0, y: 0 });
+      }
+    } catch (error) {
+      console.error("LLM refinement discard error:", error);
+      alert("Failed to discard LLM refinement preview. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAcceptLlmRefinementPreview = async () => {
+    const scheduleToAccept = llmRefinementPreview?.tentativeSchedule ?? tentativeSchedule;
+    const candidateDayGroups = scheduleToAccept?.dayGroups ?? llmRefinementPreview?.candidateDayGroups;
+    const candidateUnassignedActivityIds = scheduleToAccept?.unassignedActivityIds ?? llmRefinementPreview?.candidateUnassignedActivityIds;
+    if (!sessionId || !candidateDayGroups || !candidateUnassignedActivityIds) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await applyLlmRefinementCandidate(
+        sessionId,
+        candidateDayGroups,
+        candidateUnassignedActivityIds,
+        llmRefinementResult
+          ? {
+            ...llmRefinementResult,
+            accepted: true,
+          }
+          : null
       );
-    },
-    [groupedDays]
-  );
+      if (response.success) {
+        applySessionResponse(response, true);
+        setLlmRefinementPreview(null);
+        setLlmRefinementDiffOpen(false);
+        setLlmRefinementDiffOffset({ x: 0, y: 0 });
+      }
+    } catch (error) {
+      console.error("LLM refinement apply error:", error);
+      alert("Failed to apply LLM refinement candidate. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGroupingDebugTotalCostChange = useCallback((totalCost: number | null) => {
+    setGroupingDebugTotalCost(totalCost);
+  }, []);
+
+  const handleLlmRefinementDiffDragStart = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button")) return;
+    event.preventDefault();
+
+    const origin = llmRefinementDiffOffsetRef.current;
+    const startX = event.clientX;
+    const startY = event.clientY;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextX = origin.x + (moveEvent.clientX - startX);
+      const nextY = origin.y + (moveEvent.clientY - startY);
+      setLlmRefinementDiffOffset({ x: nextX, y: nextY });
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }, []);
 
   const handleRefreshAccommodationSearch = async () => {
     if (!sessionId) return;
@@ -1560,6 +1826,111 @@ export default function PlannerPage() {
 
   const activeTimelineLocations = timelineAnalysis?.mapPoints?.[activeTimelineView] || [];
   const isFinalized = workflowState === WORKFLOW_STATES.FINALIZE;
+  const selectedActivitiesForGrouping = useMemo(
+    () => suggestedActivities.filter((activity) => selectedActivityIds.includes(activity.id)),
+    [suggestedActivities, selectedActivityIds]
+  );
+  const activityNameById = useMemo(
+    () => buildActivityNameLookup(suggestedActivities, groupedDays),
+    [suggestedActivities, groupedDays]
+  );
+  const llmRefineSuggestedOperationsWithNames = useMemo(() => {
+    const rawSuggestions = Array.isArray(llmRefinementResult?.suggestedOperations)
+      ? llmRefinementResult.suggestedOperations
+      : [];
+    return mapLlmSuggestedOperationsWithNames(rawSuggestions, activityNameById);
+  }, [llmRefinementResult, activityNameById]);
+  const llmRefinementBeforeDays = llmRefinementPreview?.currentSchedule?.groupedDays ?? llmRefinementPreview?.beforeGroupedDays ?? groupedDays;
+  const llmRefinementAfterDays = llmRefinementPreview?.tentativeSchedule?.groupedDays ?? llmRefinementPreview?.afterGroupedDays ?? null;
+  const llmRefinementBeforeTotal =
+    extractOverallDebugCostFromDays(llmRefinementBeforeDays)
+    ?? groupingDebugTotalCost;
+  const llmRefinementCandidateTotal =
+    extractOverallDebugCostFromDays(llmRefinementAfterDays);
+  const {
+    beforeTotal: llmRefinementDisplayedBeforeTotal,
+    candidateTotal: llmRefinementDisplayedCandidateTotal,
+  } = chooseScheduleBackedRefinementTotals({
+    beforeScheduleTotal: llmRefinementBeforeTotal,
+    candidateScheduleTotal: llmRefinementCandidateTotal,
+    resultBeforeTotal: llmRefinementResult?.beforeTotalCost,
+    resultCandidateTotal: llmRefinementResult?.candidateTotalCost,
+  });
+  const llmRefinementTotalDelta =
+    llmRefinementDisplayedBeforeTotal != null && llmRefinementDisplayedCandidateTotal != null
+      ? llmRefinementDisplayedCandidateTotal - llmRefinementDisplayedBeforeTotal
+      : null;
+  const llmRefinementImproves = llmRefinementTotalDelta != null
+    ? llmRefinementTotalDelta < 0
+    : false;
+  const llmRefinementBeforeUnassignedIds = useMemo(() => {
+    return uniqueOrderedIds(
+      llmRefinementPreview?.currentSchedule?.unassignedActivityIds
+      ?? llmRefinementPreview?.beforeUnassignedActivityIds
+      ?? llmRefinementRequestBaseUnassignedIds
+    );
+  }, [llmRefinementPreview, llmRefinementRequestBaseUnassignedIds]);
+  const llmRefinementAfterUnassignedIds = useMemo(() => {
+    return uniqueOrderedIds(
+      llmRefinementPreview?.tentativeSchedule?.unassignedActivityIds
+      ?? llmRefinementPreview?.afterUnassignedActivityIds
+      ?? []
+    );
+  }, [llmRefinementPreview]);
+  const llmRefinementBeforeUnassignedNames = useMemo(
+    () => llmRefinementBeforeUnassignedIds.map((id) => activityNameById.get(id) ?? id),
+    [llmRefinementBeforeUnassignedIds, activityNameById]
+  );
+  const llmRefinementAfterUnassignedNames = useMemo(
+    () => llmRefinementAfterUnassignedIds.map((id) => activityNameById.get(id) ?? id),
+    [llmRefinementAfterUnassignedIds, activityNameById]
+  );
+  const llmRefinementDayRows = useMemo(() => {
+    if (!llmRefinementBeforeDays || !llmRefinementAfterDays) return [];
+    const beforeByDay = new Map(llmRefinementBeforeDays.map((day) => [day.dayNumber, day]));
+    const afterByDay = new Map(llmRefinementAfterDays.map((day) => [day.dayNumber, day]));
+    const dayNumbers = Array.from(new Set([...beforeByDay.keys(), ...afterByDay.keys()])).sort((a, b) => a - b);
+    return dayNumbers.map((dayNumber) => {
+      const beforeDay = beforeByDay.get(dayNumber);
+      const afterDay = afterByDay.get(dayNumber);
+      const beforeIds = beforeDay ? beforeDay.activities.map((activity) => activity.id) : [];
+      const afterIds = afterDay ? afterDay.activities.map((activity) => activity.id) : [];
+      const beforeSet = new Set(beforeIds);
+      const afterSet = new Set(afterIds);
+      const addedIds = afterIds.filter((id) => !beforeSet.has(id));
+      const removedIds = beforeIds.filter((id) => !afterSet.has(id));
+      const addedNames = addedIds.map((id) => activityNameById.get(id) ?? id);
+      const removedNames = removedIds.map((id) => activityNameById.get(id) ?? id);
+      const beforeActivityNames = beforeIds.map((id) => activityNameById.get(id) ?? id);
+      const afterActivityNames = afterIds.map((id) => activityNameById.get(id) ?? id);
+      const beforeNightStay = beforeDay?.nightStay?.label ?? null;
+      const afterNightStay = afterDay?.nightStay?.label ?? null;
+      const nightStayChanged = beforeNightStay !== afterNightStay;
+      const hasChanges = addedNames.length > 0 || removedNames.length > 0 || nightStayChanged;
+      return {
+        dayNumber,
+        beforeActivityNames,
+        afterActivityNames,
+        addedNames,
+        removedNames,
+        beforeNightStay,
+        afterNightStay,
+        nightStayChanged,
+        beforeDayCost: beforeDay?.debugCost?.dayCost ?? null,
+        afterDayCost: afterDay?.debugCost?.dayCost ?? null,
+        hasChanges,
+        unchanged: !hasChanges,
+      };
+    });
+  }, [llmRefinementBeforeDays, llmRefinementAfterDays, activityNameById]);
+  const llmRefinementBeforeCostSummary = useMemo(
+    () => extractGlobalDebugCostSummary(llmRefinementBeforeDays),
+    [llmRefinementBeforeDays]
+  );
+  const llmRefinementAfterCostSummary = useMemo(
+    () => extractGlobalDebugCostSummary(llmRefinementAfterDays),
+    [llmRefinementAfterDays]
+  );
 
   // Render left panel content based on state
   const renderLeftPanelContent = () => {
@@ -1939,9 +2310,66 @@ export default function PlannerPage() {
                       onMoveActivity={handleMoveActivity}
                       onConfirm={handleConfirmDayGrouping}
                       onDayChange={setActiveDay}
-                      onSchedulingPlanChange={handleGroupingSchedulingPlanChange}
+                      onOverallDebugCostChange={handleGroupingDebugTotalCostChange}
                       isLoading={loading}
-                      headerActions={aiInlineActions}
+                      availableActivities={selectedActivitiesForGrouping}
+                      initialUnscheduledActivityIds={unassignedActivityIds}
+                      activityCostDebugById={activityCostDebugById}
+                      headerActions={
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={handleLlmRefineStep}
+                            disabled={loading || !sessionId}
+                            className="h-8 px-3 text-xs"
+                          >
+                            {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+                            LLM Refine
+                          </Button>
+                          {llmRefinementResult ? (
+                            <div
+                              className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
+                                llmRefinementResult.accepted
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                                  : "border-amber-200 bg-amber-50 text-amber-800"
+                              }`}
+                              title={llmRefinementResult.reason || llmRefinementResult.operationSummary || ""}
+                            >
+                              Total trip cost: {llmRefinementDisplayedBeforeTotal != null ? llmRefinementDisplayedBeforeTotal.toFixed(2) : "N/A"}
+                              {" → "}
+                              {llmRefinementDisplayedCandidateTotal != null ? llmRefinementDisplayedCandidateTotal.toFixed(2) : "N/A"}
+                              {llmRefinementDisplayedBeforeTotal != null && llmRefinementDisplayedCandidateTotal != null
+                                ? ` (${(llmRefinementDisplayedCandidateTotal - llmRefinementDisplayedBeforeTotal).toFixed(2)})`
+                                : ""}
+                              {" · "}
+                              {llmRefinementResult.operationCount > 0 ? `${llmRefinementResult.operationCount} op${llmRefinementResult.operationCount === 1 ? "" : "s"}` : "0 ops"}
+                              {" · "}
+                              {llmRefinementPreview ? "Pending" : llmRefinementResult.accepted ? "Accepted" : "Rejected"}
+                              {llmRefinementResult.candidateTotalCost != null ? (
+                                <span className="block">
+                                  Candidate: {llmRefinementResult.candidateTotalCost.toFixed(2)}
+                                </span>
+                              ) : null}
+                              {llmRefinementResult.operationSummary ? (
+                                <span className="block">
+                                  LLM plan: {llmRefinementResult.operationSummary}
+                                </span>
+                              ) : null}
+                              {llmRefineSuggestedOperationsWithNames.length > 0 ? (
+                                <details open className="mt-1 text-[10px] leading-4">
+                                  <summary className="cursor-pointer">LLM suggestions</summary>
+                                  <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap rounded border border-black/10 bg-white/70 p-1">
+                                    {JSON.stringify(llmRefineSuggestedOperationsWithNames, null, 2)}
+                                  </pre>
+                                </details>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {aiInlineActions}
+                        </div>
+                      }
                     />
                   </div>
                 );
@@ -2215,7 +2643,7 @@ export default function PlannerPage() {
                     workflowState === WORKFLOW_STATES.MEAL_PREFERENCES ||
                     workflowState === WORKFLOW_STATES.REVIEW ||
                     workflowState === WORKFLOW_STATES.FINALIZE
-                    ? (workflowState === WORKFLOW_STATES.GROUP_DAYS && groupingMapPreviewDays ? groupingMapPreviewDays : groupedDays)
+                    ? groupedDays
                     : undefined
                 }
                 onActivityClick={handleMapActivityClick}
@@ -2360,6 +2788,198 @@ export default function PlannerPage() {
             </div>
           </div>
         </div>
+
+        {llmRefinementDiffOpen && llmRefinementPreview ? (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4">
+            <div
+              className="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl"
+              style={{ transform: `translate(${llmRefinementDiffOffset.x}px, ${llmRefinementDiffOffset.y}px)` }}
+            >
+              <div
+                className="flex cursor-move items-start justify-between gap-3 border-b border-gray-200 px-4 py-3 select-none"
+                onMouseDown={handleLlmRefinementDiffDragStart}
+              >
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">LLM Refine Diff</h3>
+                  <p className="text-xs text-gray-600">
+                    Review the proposed itinerary changes and choose whether to apply them.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={handleCloseLlmRefinementPreview}
+                  disabled={loading}
+                  aria-label="Close refinement diff"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="max-h-[calc(85vh-8.5rem)] overflow-y-auto px-4 py-3">
+                <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800">
+                  <p>
+                    Recommendation:{" "}
+                    <span className={llmRefinementImproves ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
+                      {llmRefinementImproves
+                        ? "Accept (total trip cost decreases)"
+                        : "Review carefully (total trip cost does not decrease)"}
+                    </span>
+                  </p>
+                  <p>
+                    Total trip cost:{" "}
+                    {llmRefinementDisplayedBeforeTotal != null ? llmRefinementDisplayedBeforeTotal.toFixed(2) : "N/A"}
+                    {" → "}
+                    {llmRefinementDisplayedCandidateTotal != null ? llmRefinementDisplayedCandidateTotal.toFixed(2) : "N/A"}
+                    {llmRefinementTotalDelta != null ? ` (${llmRefinementTotalDelta.toFixed(2)})` : ""}
+                  </p>
+                  {llmRefinementResult?.reason ? (
+                    <p className="text-xs text-gray-600">Note: {llmRefinementResult.reason}</p>
+                  ) : null}
+                </div>
+
+                {Array.isArray(llmRefineSuggestedOperationsWithNames) && llmRefineSuggestedOperationsWithNames.length > 0 ? (
+                  <div className="mt-3 rounded-md border border-gray-200 px-3 py-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-700">LLM Suggestions</p>
+                    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded border border-gray-100 bg-gray-50 p-2 text-xs text-gray-700">
+                      {JSON.stringify(llmRefineSuggestedOperationsWithNames, null, 2)}
+                    </pre>
+                  </div>
+                ) : null}
+
+                {llmRefinementPreview.afterGroupedDays ? (
+                  <div className="mt-3 space-y-3">
+                    {llmRefinementDayRows.length > 0 ? (
+                      llmRefinementDayRows.map((row) => (
+                        <div key={row.dayNumber} className="rounded-md border border-gray-200 px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-gray-900">Day {row.dayNumber}</p>
+                            <span className={`text-xs font-medium ${row.unchanged ? "text-gray-500" : "text-blue-700"}`}>
+                              {row.unchanged ? "Unchanged" : "Changed"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-700">
+                            Before: {row.beforeActivityNames.length > 0 ? row.beforeActivityNames.join(", ") : "None"}
+                          </p>
+                          <p className="text-xs text-gray-700">
+                            After: {row.afterActivityNames.length > 0 ? row.afterActivityNames.join(", ") : "None"}
+                          </p>
+                          {row.addedNames.length > 0 ? (
+                            <p className="text-xs text-emerald-700">Added: {row.addedNames.join(", ")}</p>
+                          ) : null}
+                          {row.removedNames.length > 0 ? (
+                            <p className="text-xs text-rose-700">Removed: {row.removedNames.join(", ")}</p>
+                          ) : null}
+                          {row.nightStayChanged ? (
+                            <p className="text-xs text-blue-700">
+                              Night stay: {row.beforeNightStay || "None"} → {row.afterNightStay || "None"}
+                            </p>
+                          ) : null}
+                          {row.unchanged ? (
+                            <p className="text-xs text-gray-500">No itinerary changes for this day.</p>
+                          ) : null}
+                          {debugMode ? (
+                            <p className="text-xs text-gray-600">
+                              Day cost: {row.beforeDayCost != null ? row.beforeDayCost.toFixed(2) : "N/A"} →{" "}
+                              {row.afterDayCost != null ? row.afterDayCost.toFixed(2) : "N/A"}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                        No itinerary differences were detected.
+                      </div>
+                    )}
+
+                    <div className="rounded-md border border-gray-200 px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-700">Unscheduled</p>
+                      <p className="text-xs text-gray-700">
+                        Before: {llmRefinementBeforeUnassignedNames.length > 0 ? llmRefinementBeforeUnassignedNames.join(", ") : "None"}
+                      </p>
+                      <p className="text-xs text-gray-700">
+                        After: {llmRefinementAfterUnassignedNames.length > 0 ? llmRefinementAfterUnassignedNames.join(", ") : "None"}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    No applicable candidate itinerary was produced in this iteration.
+                  </div>
+                )}
+
+                {debugMode ? (
+                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                      <p className="font-semibold text-slate-900">Before Costs</p>
+                      <p>Total: {llmRefinementBeforeCostSummary.total != null ? llmRefinementBeforeCostSummary.total.toFixed(2) : "N/A"}</p>
+                      <p>Base: {llmRefinementBeforeCostSummary.base != null ? llmRefinementBeforeCostSummary.base.toFixed(2) : "N/A"}</p>
+                      <p>Commute imbalance: {llmRefinementBeforeCostSummary.commuteImbalance != null ? llmRefinementBeforeCostSummary.commuteImbalance.toFixed(2) : "N/A"}</p>
+                      <p>Nearby split: {llmRefinementBeforeCostSummary.nearbySplit != null ? llmRefinementBeforeCostSummary.nearbySplit.toFixed(2) : "N/A"}</p>
+                      <p>Duration mismatch: {llmRefinementBeforeCostSummary.durationMismatch != null ? llmRefinementBeforeCostSummary.durationMismatch.toFixed(2) : "N/A"}</p>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                      <p className="font-semibold text-slate-900">After Costs</p>
+                      <p>Total: {llmRefinementAfterCostSummary.total != null ? llmRefinementAfterCostSummary.total.toFixed(2) : "N/A"}</p>
+                      <p>Base: {llmRefinementAfterCostSummary.base != null ? llmRefinementAfterCostSummary.base.toFixed(2) : "N/A"}</p>
+                      <p>Commute imbalance: {llmRefinementAfterCostSummary.commuteImbalance != null ? llmRefinementAfterCostSummary.commuteImbalance.toFixed(2) : "N/A"}</p>
+                      <p>Nearby split: {llmRefinementAfterCostSummary.nearbySplit != null ? llmRefinementAfterCostSummary.nearbySplit.toFixed(2) : "N/A"}</p>
+                      <p>Duration mismatch: {llmRefinementAfterCostSummary.durationMismatch != null ? llmRefinementAfterCostSummary.durationMismatch.toFixed(2) : "N/A"}</p>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 md:col-span-2">
+                      <p className="font-semibold text-slate-900">Per-day Debug Costs (Before → After)</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2">
+                          {JSON.stringify(
+                            llmRefinementBeforeDays.map((day) => ({ dayNumber: day.dayNumber, debugCost: day.debugCost })),
+                            null,
+                            2
+                          )}
+                        </pre>
+                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2">
+                          {JSON.stringify(
+                            (llmRefinementAfterDays ?? []).map((day) => ({ dayNumber: day.dayNumber, debugCost: day.debugCost })),
+                            null,
+                            2
+                          )}
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-4 py-3">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={handleDiscardLlmRefinementPreview}
+                  disabled={loading}
+                >
+                  Discard
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleRejectLlmRefinementPreview}
+                  disabled={loading}
+                >
+                  Reject
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleAcceptLlmRefinementPreview}
+                  disabled={loading || !llmRefinementPreview.hasCandidate}
+                >
+                  {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Accept
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
