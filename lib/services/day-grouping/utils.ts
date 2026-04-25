@@ -9,6 +9,7 @@ import {
     SOFT_DAY_START_MINUTES,
     SLOT_CAPACITY_HOURS,
     DayCapacityProfile,
+    DayTimingConstraint,
     PreparedActivity,
 } from "./types";
 
@@ -269,6 +270,37 @@ export function parseFixedStartTimeMinutes(value: string | null | undefined): nu
     }
 
     return null;
+}
+
+export function getConstrainedDayStartMinutes({
+    activities,
+    baseDayStartMinutes,
+    timingConstraints = [],
+}: {
+    activities: SuggestedActivity[];
+    baseDayStartMinutes: number;
+    timingConstraints?: DayTimingConstraint[];
+}): number {
+    const earliestFixedStartMinutes = activities.reduce<number | null>((earliest, activity) => {
+        if (!activity.isFixedStartTime) return earliest;
+        const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+        if (fixedStartMinutes == null) return earliest;
+        return earliest == null ? fixedStartMinutes : Math.min(earliest, fixedStartMinutes);
+    }, null);
+
+    const anchoredDayStartMinutes = earliestFixedStartMinutes != null
+        ? Math.min(baseDayStartMinutes, earliestFixedStartMinutes)
+        : baseDayStartMinutes;
+    const arrivalEarliestStartMinutes = timingConstraints.reduce<number | null>((earliest, constraint) => {
+        if (constraint.type !== "arrival" || constraint.earliestStartMinutes == null) return earliest;
+        return earliest == null
+            ? constraint.earliestStartMinutes
+            : Math.max(earliest, constraint.earliestStartMinutes);
+    }, null);
+
+    return arrivalEarliestStartMinutes != null
+        ? Math.max(anchoredDayStartMinutes, arrivalEarliestStartMinutes)
+        : anchoredDayStartMinutes;
 }
 
 export function recommendedWindowLatestStartMinutes(activity: SuggestedActivity): number | null {

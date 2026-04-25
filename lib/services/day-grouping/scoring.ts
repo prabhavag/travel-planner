@@ -287,39 +287,74 @@ export function buildOptimalDayRoute(
 ): SuggestedActivity[] {
     if (activities.length <= 1) return [...activities];
 
+    const FIXED_START_MISS_WEIGHT = COST_WEIGHTS.daylightViolation * 2;
+
+    const computeRouteOrderingCost = (route: SuggestedActivity[]): number => {
+        const earliestRecommendedMidpointMinutes = route.reduce<number | null>((earliest, activity) => {
+            const midpoint = recommendedWindowMidpointMinutes(activity);
+            if (midpoint == null) return earliest;
+            return earliest == null ? midpoint : Math.min(earliest, midpoint);
+        }, null);
+        let cursorMinutes =
+            earliestRecommendedMidpointMinutes != null
+                ? Math.min(SOFT_DAY_START_MINUTES, earliestRecommendedMidpointMinutes)
+                : SOFT_DAY_START_MINUTES;
+        let cost = 0;
+
+        for (let i = 0; i < route.length; i += 1) {
+            const activity = route[i];
+            if (i > 0) {
+                const commuteMinutes = activityCommuteMinutes(route[i - 1], activity, commuteMinutesByPair);
+                cost += commuteMinutes * COST_WEIGHTS.commute;
+                cursorMinutes += commuteMinutes;
+            }
+
+            const loadDuration = getLoadDurationHours(preparedMap, activity.id);
+            const durationMinutes = Math.round(loadDuration * 60);
+            const fixedStartMinutes = activity.isFixedStartTime
+                ? parseFixedStartTimeMinutes(activity.fixedStartTime || null)
+                : null;
+            const activityStartMinutes =
+                fixedStartMinutes != null
+                    ? Math.max(cursorMinutes, fixedStartMinutes)
+                    : cursorMinutes;
+            const activityEndMinutes = activityStartMinutes + durationMinutes;
+            const activityMidpointHour = (activityStartMinutes + durationMinutes / 2) / 60;
+            const assignedSlot = slotForHour(activityMidpointHour);
+
+            if (activity.bestTimeOfDay !== "any") {
+                cost += slotDistance(activity.bestTimeOfDay, assignedSlot) * loadDuration * COST_WEIGHTS.slotMismatch;
+            }
+
+            if (fixedStartMinutes != null && cursorMinutes > fixedStartMinutes) {
+                cost += ((cursorMinutes - fixedStartMinutes) / 60) * FIXED_START_MISS_WEIGHT;
+            }
+
+            const recommendedWindowStartMinutes = parseFixedStartTimeMinutes(activity.recommendedStartWindow?.start || null);
+            const recommendedWindowEndMinutes = recommendedWindowLatestStartMinutes(activity);
+            if (recommendedWindowStartMinutes != null && activityStartMinutes < recommendedWindowStartMinutes) {
+                cost += ((recommendedWindowStartMinutes - activityStartMinutes) / 60) * COST_WEIGHTS.recommendedStartMiss;
+            } else if (recommendedWindowEndMinutes != null && activityStartMinutes > recommendedWindowEndMinutes) {
+                cost += ((activityStartMinutes - recommendedWindowEndMinutes) / 60) * COST_WEIGHTS.recommendedStartMiss;
+            }
+
+            if (activity.daylightPreference === "daylight_only") {
+                cost += Math.max(0, (activityEndMinutes - DEFAULT_DAYLIGHT_END_MINUTES) / 60) * COST_WEIGHTS.daylightViolation;
+            }
+
+            cursorMinutes = activityEndMinutes;
+        }
+
+        return cost;
+    };
+
     if (activities.length <= 6) {
         const perms = getPermutations(activities);
         let bestCost = Number.POSITIVE_INFINITY;
         let bestRoute = [...activities];
 
         for (const route of perms) {
-            let cost = 0;
-            let currentHour = 0;
-
-            for (let i = 0; i < route.length; i++) {
-                const activity = route[i];
-
-                if (i > 0) {
-                    cost += activityCommuteMinutes(route[i - 1], activity, commuteMinutesByPair) * COST_WEIGHTS.commute;
-                }
-
-                const loadDuration = getLoadDurationHours(preparedMap, activity.id);
-                const midHour = SOFT_DAY_START_MINUTES / 60 + currentHour + loadDuration / 2;
-                const assignedSlot = slotForHour(midHour);
-                if (activity.bestTimeOfDay !== "any") {
-                    cost += slotDistance(activity.bestTimeOfDay, assignedSlot) * loadDuration * COST_WEIGHTS.slotMismatch;
-                }
-
-                currentHour += loadDuration;
-            }
-
-            let tieBreaker = 0;
-            for (let i = 0; i < route.length; i++) {
-                const orderValue = 0; // Simplified for this context
-                tieBreaker += orderValue * 1e-4 * i;
-            }
-
-            const totalCost = cost + tieBreaker;
+            const totalCost = computeRouteOrderingCost(route);
 
             if (totalCost < bestCost) {
                 bestCost = totalCost;
@@ -335,19 +370,19 @@ export function buildOptimalDayRoute(
     for (let startIndex = 0; startIndex < activities.length; startIndex += 1) {
         const used = new Set<string>();
         const ordered: SuggestedActivity[] = [];
-        let current = activities[startIndex];
-        ordered.push(current);
-        used.add(current.id);
+        ordered.push(activities[startIndex]);
+        used.add(activities[startIndex].id);
 
         while (ordered.length < activities.length) {
             let bestNext: SuggestedActivity | null = null;
-            let bestNextDistance = Number.POSITIVE_INFINITY;
+            let bestNextCost = Number.POSITIVE_INFINITY;
 
             for (const candidate of activities) {
                 if (used.has(candidate.id)) continue;
-                const distance = activityCommuteMinutes(current, candidate, commuteMinutesByPair);
-                if (distance < bestNextDistance) {
-                    bestNextDistance = distance;
+                const candidateRoute = [...ordered, candidate];
+                const candidateCost = computeRouteOrderingCost(candidateRoute);
+                if (candidateCost < bestNextCost) {
+                    bestNextCost = candidateCost;
                     bestNext = candidate;
                 }
             }
@@ -355,7 +390,6 @@ export function buildOptimalDayRoute(
             if (bestNext) {
                 ordered.push(bestNext);
                 used.add(bestNext.id);
-                current = bestNext;
             } else {
                 break;
             }
@@ -450,7 +484,9 @@ export function getDayStructuralStats(
     for (let i = 0; i < activities.length; i += 1) {
         const activity = activities[i];
         const durationMinutes = Math.round(getLoadDurationHours(preparedMap, activity.id) * 60);
-        const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+        const fixedStartMinutes = activity.isFixedStartTime
+            ? parseFixedStartTimeMinutes(activity.fixedStartTime || null)
+            : null;
         const activityStartMinutes =
             fixedStartMinutes != null
                 ? Math.max(timelineCursorMinutes, fixedStartMinutes)
@@ -472,7 +508,9 @@ export function getDayStructuralStats(
         const activity = activities[i];
         const duration = getLoadDurationHours(preparedMap, activity.id);
         const durationMinutes = Math.round(duration * 60);
-        const fixedStartMinutes = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
+        const fixedStartMinutes = activity.isFixedStartTime
+            ? parseFixedStartTimeMinutes(activity.fixedStartTime || null)
+            : null;
         const effectiveStartMinutes =
             fixedStartMinutes != null
                 ? Math.max(timingCursorMinutes, fixedStartMinutes)

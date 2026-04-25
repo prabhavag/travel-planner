@@ -8,6 +8,7 @@ import {
     computeTotalCost,
     activityCommuteMinutes,
     buildOptimalDayRoute,
+    orderDayActivityIds,
     getLoadDurationHours,
     buildPreparedActivityMap,
     buildScoredSchedule,
@@ -227,6 +228,352 @@ describe('day-grouping structural stats', () => {
         expect(schedule.unassignedActivityIds).toEqual([]);
         expect(schedule.activityCostDebugById.kapalua.kind).toBe('scheduled');
         expect(schedule.dayGroups[0].debugCost?.overallTripCost).toBeGreaterThan(0);
+    });
+
+    it('anchors non-arrival day timelines to an earlier fixed sunrise start', () => {
+        const sunriseHike = {
+            ...mockActivity('sunrise-hike'),
+            name: 'Sunrise Hike',
+            type: 'hiking',
+            estimatedDuration: '2 hours',
+            bestTimeOfDay: 'morning' as const,
+            isFixedStartTime: true,
+            fixedStartTime: 'sunrise',
+        };
+        const activities = [sunriseHike];
+        const preparedMap = buildPreparedActivityMap(activities);
+        const dayCapacities = Array.from({ length: 2 }, () => ({
+            maxHours: 8,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1,
+        }));
+
+        const schedule = buildScoredSchedule({
+            dayGroups: [
+                {
+                    dayNumber: 1,
+                    date: '',
+                    theme: 'Arrival',
+                    activityIds: [],
+                    nightStay: null,
+                    debugCost: null,
+                },
+                {
+                    dayNumber: 2,
+                    date: '',
+                    theme: 'Sunrise',
+                    activityIds: ['sunrise-hike'],
+                    nightStay: null,
+                    debugCost: null,
+                },
+            ],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities,
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+        });
+
+        const sunriseTimelineItem = schedule.groupedDays[1]?.timelineItems?.find(
+            (item) => item.activityId === 'sunrise-hike'
+        );
+
+        expect(sunriseTimelineItem?.timeRange).toBe('6 AM-8 AM');
+    });
+
+
+    it('does not treat non-fixed timing hints as hard schedule anchors', () => {
+        const softHint = {
+            ...mockActivity('soft-hint'),
+            name: 'Soft Hint Activity',
+            estimatedDuration: '2 hours',
+            isFixedStartTime: false,
+            fixedStartTime: '6:00 PM',
+            bestTimeOfDay: 'afternoon' as const,
+        };
+        const activities = [softHint];
+        const preparedMap = buildPreparedActivityMap(activities);
+
+        const schedule = buildScoredSchedule({
+            dayGroups: [
+                {
+                    dayNumber: 1,
+                    date: '',
+                    theme: 'Hints',
+                    activityIds: [],
+                    nightStay: null,
+                    debugCost: null,
+                },
+                {
+                    dayNumber: 2,
+                    date: '',
+                    theme: 'Hinted Day',
+                    activityIds: ['soft-hint'],
+                    nightStay: null,
+                    debugCost: null,
+                },
+            ],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities: [
+                {
+                    maxHours: 8,
+                    slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+                    targetWeight: 1,
+                },
+                {
+                    maxHours: 8,
+                    slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+                    targetWeight: 1,
+                },
+            ],
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+            options: { forceSchedule: true },
+        });
+
+        const hintTimelineItem = schedule.groupedDays[1]?.timelineItems?.find(
+            (item) => item.activityId === 'soft-hint'
+        );
+
+        expect(hintTimelineItem?.timeRange).toBe('9:30 AM-11:30 AM');
+    });
+
+    it('uses the previous day night stay as the next day start stay', () => {
+        const sunriseHike = {
+            ...mockActivity('hana-sunrise'),
+            name: 'Haleakala Sunrise Hike',
+            type: 'hiking',
+            estimatedDuration: '2 hours',
+            bestTimeOfDay: 'morning' as const,
+            isFixedStartTime: true,
+            fixedStartTime: '6:00 AM',
+        };
+        const activities = [sunriseHike];
+        const preparedMap = buildPreparedActivityMap(activities);
+        const dayCapacities = Array.from({ length: 2 }, () => ({
+            maxHours: 8,
+            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+            targetWeight: 1,
+        }));
+
+        const schedule = buildScoredSchedule({
+            dayGroups: [
+                {
+                    dayNumber: 1,
+                    date: '',
+                    theme: 'Road to Hana',
+                    activityIds: [],
+                    nightStay: { label: 'Hana' } as any,
+                    debugCost: null,
+                },
+                {
+                    dayNumber: 2,
+                    date: '',
+                    theme: 'Summit Day',
+                    activityIds: ['hana-sunrise'],
+                    nightStay: { label: 'Kula' } as any,
+                    debugCost: null,
+                },
+            ],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities,
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+        });
+
+        const stayStartItem = schedule.groupedDays[1]?.timelineItems?.find(
+            (item) => item.id === 'stay-start-2'
+        );
+
+        expect(stayStartItem).toMatchObject({
+            title: 'Start from stay',
+            detail: 'Hana',
+        });
+    });
+
+    it('always includes the fixed departure on an empty final day timeline', () => {
+        const activities: SuggestedActivity[] = [];
+        const preparedMap = buildPreparedActivityMap(activities);
+        const tripInfo = {
+            source: null,
+            destination: 'Maui',
+            startDate: '2026-04-25',
+            endDate: '2026-04-26',
+            durationDays: 2,
+            preferences: [],
+            foodPreferences: [],
+            visitedDestinations: [],
+            activityLevel: 'moderate',
+            travelers: 1,
+            budget: null,
+            transportMode: 'flight',
+            arrivalAirport: 'OGG',
+            departureAirport: 'OGG',
+            arrivalTimePreference: '12:00 PM',
+            departureTimePreference: '6:00 PM',
+        };
+        const dayCapacities = buildDayCapacityProfiles(tripInfo as any, 2);
+
+        const schedule = buildScoredSchedule({
+            dayGroups: [
+                {
+                    dayNumber: 1,
+                    date: '2026-04-25',
+                    theme: 'Arrival',
+                    activityIds: [],
+                    nightStay: { label: 'Kula' } as any,
+                    debugCost: null,
+                },
+                {
+                    dayNumber: 2,
+                    date: '2026-04-26',
+                    theme: 'Flexible Exploration Day',
+                    activityIds: [],
+                    nightStay: { label: 'Haiku' } as any,
+                    debugCost: null,
+                },
+            ],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities,
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+            options: { tripInfo: tripInfo as any },
+        });
+
+        expect(schedule.groupedDays[1]?.timelineItems).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    title: 'Start from stay',
+                    detail: 'Kula',
+                }),
+                expect.objectContaining({
+                    title: 'Airport transfer',
+                }),
+                expect.objectContaining({
+                    title: 'Departure prep',
+                    detail: expect.stringContaining('OGG'),
+                }),
+            ])
+        );
+        expect(schedule.groupedDays[1]?.timelineItems?.some((item) => item.title === 'End at night stay')).toBe(false);
+    });
+
+    it('reorders persisted day activity ids to match the timing-aware optimal route', () => {
+        const activities = [
+            {
+                ...mockActivity('ceremony'),
+                name: 'Black Rock Cliff Dive Ceremony',
+                type: 'culture',
+                estimatedDuration: '1 hour',
+                bestTimeOfDay: 'evening' as const,
+                isFixedStartTime: true,
+                fixedStartTime: '6:00 PM',
+            },
+            {
+                ...mockActivity('beach'),
+                name: 'Kaanapali Beach',
+                type: 'relaxation',
+                estimatedDuration: '2 hours',
+                bestTimeOfDay: 'afternoon' as const,
+                daylightPreference: 'daylight_only' as const,
+            },
+            {
+                ...mockActivity('trail'),
+                name: 'Lahaina Historic Trail',
+                type: 'culture',
+                estimatedDuration: '2.5 hours',
+                bestTimeOfDay: 'morning' as const,
+                daylightPreference: 'daylight_only' as const,
+            },
+        ];
+        const preparedMap = buildPreparedActivityMap(activities);
+
+        const orderedIds = orderDayActivityIds({
+            activityIds: ['ceremony', 'beach', 'trail'],
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+        });
+
+        expect(orderedIds).toEqual(['trail', 'beach', 'ceremony']);
+    });
+
+    it('still enforces arrival as a hard constraint for an early fixed start', () => {
+        const sunriseHike = {
+            ...mockActivity('arrival-sunrise-hike'),
+            name: 'Arrival Sunrise Hike',
+            type: 'hiking',
+            estimatedDuration: '2 hours',
+            bestTimeOfDay: 'morning' as const,
+            isFixedStartTime: true,
+            fixedStartTime: 'sunrise',
+        };
+        const activities = [sunriseHike];
+        const preparedMap = buildPreparedActivityMap(activities);
+        const dayCapacities = buildDayCapacityProfiles({
+            source: null,
+            destination: null,
+            startDate: '2026-04-25',
+            endDate: '2026-04-25',
+            durationDays: 1,
+            preferences: [],
+            foodPreferences: [],
+            visitedDestinations: [],
+            activityLevel: 'moderate',
+            travelers: 1,
+            budget: null,
+            transportMode: 'flight',
+            arrivalAirport: 'OGG',
+            departureAirport: 'OGG',
+            arrivalTimePreference: '12:00 PM',
+            departureTimePreference: '6:00 PM',
+        }, 1);
+
+        const schedule = buildScoredSchedule({
+            dayGroups: [
+                {
+                    dayNumber: 1,
+                    date: '2026-04-25',
+                    theme: 'Arrival',
+                    activityIds: ['arrival-sunrise-hike'],
+                    nightStay: null,
+                    debugCost: null,
+                },
+            ],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities,
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+            options: {
+                tripInfo: {
+                    source: null,
+                    destination: null,
+                    startDate: '2026-04-25',
+                    endDate: '2026-04-25',
+                    durationDays: 1,
+                    preferences: [],
+                    foodPreferences: [],
+                    visitedDestinations: [],
+                    activityLevel: 'moderate',
+                    travelers: 1,
+                    budget: null,
+                    transportMode: 'flight',
+                    arrivalAirport: 'OGG',
+                    departureAirport: 'OGG',
+                    arrivalTimePreference: '12:00 PM',
+                    departureTimePreference: '6:00 PM',
+                },
+            },
+        });
+
+        const arrivalTimelineItem = schedule.groupedDays[0]?.timelineItems?.find(
+            (item) => item.activityId === 'arrival-sunrise-hike'
+        );
+
+        expect(arrivalTimelineItem?.timeRange).toBe('2 PM-4 PM');
     });
 
     it('penalizes starts outside recommended windows on both early and late sides', () => {

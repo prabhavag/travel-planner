@@ -209,30 +209,39 @@ const DAY_GROUPING_RESPONSE_SCHEMA = z.object({
   unassignedActivityIds: z.array(z.string()).default([]),
 });
 
+const MOVE_DAY_GROUP_REFINEMENT_OPERATION_SCHEMA = z.object({
+  type: z.literal("move"),
+  dayNumber: z.number().int().nonnegative(),
+  activityIds: z.array(z.string()).min(1),
+  insertIndex: z.number().int().nonnegative().optional(),
+  reason: z.string().optional().nullable(),
+});
+
+const REORDER_ACTIVITIES_DAY_GROUP_REFINEMENT_OPERATION_SCHEMA = z.object({
+  type: z.literal("reorder_activities"),
+  dayNumber: z.number().int().positive(),
+  activityIds: z.array(z.string()).min(1),
+  reason: z.string().optional().nullable(),
+});
+
+const SET_NIGHT_STAY_DAY_GROUP_REFINEMENT_OPERATION_SCHEMA = z.object({
+  type: z.literal("set_night_stay"),
+  dayNumber: z.number().int().positive(),
+  label: z.string().min(1),
+  notes: z.string().optional().nullable(),
+  reason: z.string().optional().nullable(),
+});
+
+const NO_OP_DAY_GROUP_REFINEMENT_OPERATION_SCHEMA = z.object({
+  type: z.literal("no_op"),
+  reason: z.string().optional().nullable(),
+});
+
 const DAY_GROUP_REFINEMENT_OPERATION_SCHEMA = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("move"),
-    dayNumber: z.number().int().positive(),
-    activityIds: z.array(z.string()).min(1),
-    insertIndex: z.number().int().nonnegative().optional(),
-    reason: z.string().optional().nullable(),
-  }),
-  z.object({
-    type: z.literal("unschedule"),
-    activityIds: z.array(z.string()).min(1),
-    reason: z.string().optional().nullable(),
-  }),
-  z.object({
-    type: z.literal("set_night_stay"),
-    dayNumber: z.number().int().positive(),
-    label: z.string().min(1),
-    notes: z.string().optional().nullable(),
-    reason: z.string().optional().nullable(),
-  }),
-  z.object({
-    type: z.literal("no_op"),
-    reason: z.string().optional().nullable(),
-  }),
+  MOVE_DAY_GROUP_REFINEMENT_OPERATION_SCHEMA,
+  REORDER_ACTIVITIES_DAY_GROUP_REFINEMENT_OPERATION_SCHEMA,
+  SET_NIGHT_STAY_DAY_GROUP_REFINEMENT_OPERATION_SCHEMA,
+  NO_OP_DAY_GROUP_REFINEMENT_OPERATION_SCHEMA,
 ]);
 
 const DAY_GROUP_REFINEMENT_RESPONSE_SCHEMA = z.union([
@@ -245,6 +254,13 @@ const DAY_GROUP_REFINEMENT_RESPONSE_SCHEMA = z.union([
 ]);
 
 export type DayGroupingRefinementOperation = z.infer<typeof DAY_GROUP_REFINEMENT_OPERATION_SCHEMA>;
+export type DayGroupingRefinementMessage = { role: "system" | "user"; content: string };
+type DayGroupingRefinementPayload = {
+  allActivities: Array<Record<string, unknown>>;
+  dayConstraintsPayload: Array<Record<string, unknown>>;
+  dayPayload: Array<Record<string, unknown>>;
+  unassignedActivitiesPayload: Array<Record<string, unknown>>;
+};
 
 const ADDITIONAL_RESEARCH_OPTIONS_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -910,7 +926,7 @@ class LLMClient {
       (activity as SuggestedActivity & { daylightPreference?: unknown }).daylightPreference
     );
     const normalizedFixedStartTime = this._normalizeFixedStartTime(activity.fixedStartTime);
-    const isFixedStartTime = Boolean(activity.isFixedStartTime || normalizedFixedStartTime);
+    const isFixedStartTime = Boolean(activity.isFixedStartTime);
     const recommendedStartWindow = this._normalizeRecommendedStartWindow(activity.recommendedStartWindow);
     const inferredDurationFlexibility = this._inferDurationFlexibility({
       title: activity.name || "",
@@ -2474,8 +2490,7 @@ class LLMClient {
           });
           const fixedStartTimeFromModel = this._normalizeFixedStartTime(opt.fixedStartTime);
           const recommendedStartWindowFromModel = this._normalizeRecommendedStartWindow(opt.recommendedStartWindow);
-          const rawIsFixedStartTime = opt.isFixedStartTime === true;
-          const isFixedStartTime = rawIsFixedStartTime || Boolean(fixedStartTimeFromModel) || Boolean(inferredFixedStartTime);
+          const isFixedStartTime = opt.isFixedStartTime === true;
           const fixedStartTime = isFixedStartTime
             ? fixedStartTimeFromModel || inferredFixedStartTime || this._fallbackFixedStartFromBestTime(bestTimeOfDay)
             : null;
@@ -3277,7 +3292,7 @@ class LLMClient {
             anchorMinutes >= REGULAR_DAY_START_MINUTES && anchorMinutes <= REGULAR_DAY_END_MINUTES;
           const effectiveHours = this._roundToSingleDecimal(
             estimatedHours *
-              (inRegularWindow ? 1 : OFF_HOURS_ACTIVITY_DISCOUNT)
+            (inRegularWindow ? 1 : OFF_HOURS_ACTIVITY_DISCOUNT)
           );
           return {
             id: activity.id,
@@ -3621,21 +3636,116 @@ ${JSON.stringify(activityPayload, null, 2)}`,
     tripInfo,
     activities,
     dayGroups,
+    groupedDays,
     unassignedActivityIds,
     currentCost,
     allowDurationShrinking,
+    manualResponseText,
   }: {
     tripInfo: TripInfo;
     activities: SuggestedActivity[];
     dayGroups: DayGroup[];
+    groupedDays: GroupedDay[];
     unassignedActivityIds: string[];
     currentCost: number;
     allowDurationShrinking: boolean;
+    manualResponseText?: string | null;
   }): Promise<{
     success: boolean;
     operations: DayGroupingRefinementOperation[] | null;
+    requestMessages: DayGroupingRefinementMessage[];
+    rawResponseText: string | null;
+    source: "openai" | "manual";
   }> {
-    const activityPayload = activities.map((activity) => ({
+    const payload = this.buildDayGroupingRefinementPayload({
+      tripInfo,
+      activities,
+      dayGroups,
+      groupedDays,
+      unassignedActivityIds,
+    });
+    const messages = this.buildDayGroupingRefinementMessages({
+      tripInfo,
+      payload,
+      unassignedActivityIds,
+      currentCost,
+      allowDurationShrinking,
+    });
+    console.debug("[LLM Refine] Exact prompt payload sent to model:");
+    console.debug(JSON.stringify(messages, null, 2));
+
+    if (typeof manualResponseText === "string" && manualResponseText.trim().length > 0) {
+      const parsedOperations = this.parseDayGroupingRefinementOperationsFromText(manualResponseText);
+      if (!parsedOperations) {
+        return {
+          success: false,
+          operations: null,
+          requestMessages: messages,
+          rawResponseText: manualResponseText,
+          source: "manual",
+        };
+      }
+      return {
+        success: true,
+        operations: parsedOperations,
+        requestMessages: messages,
+        rawResponseText: manualResponseText,
+        source: "manual",
+      };
+    }
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+      });
+      const rawResponseText = completion.choices?.[0]?.message?.content ?? null;
+      const response = this._parseJsonResponse(completion);
+      const parsedOperations = this.parseDayGroupingRefinementOperations(response);
+      if (!parsedOperations) {
+        return {
+          success: false,
+          operations: null,
+          requestMessages: messages,
+          rawResponseText,
+          source: "openai",
+        };
+      }
+      return {
+        success: true,
+        operations: parsedOperations,
+        requestMessages: messages,
+        rawResponseText,
+        source: "openai",
+      };
+    } catch (error) {
+      console.error("Error in proposeDayGroupingRefinementStep:", error);
+      return {
+        success: false,
+        operations: null,
+        requestMessages: messages,
+        rawResponseText: null,
+        source: "openai",
+      };
+    }
+  }
+
+  private buildDayGroupingRefinementPayload({
+    tripInfo,
+    activities,
+    dayGroups,
+    groupedDays,
+    unassignedActivityIds,
+  }: {
+    tripInfo: TripInfo;
+    activities: SuggestedActivity[];
+    dayGroups: DayGroup[];
+    groupedDays: GroupedDay[];
+    unassignedActivityIds: string[];
+  }): DayGroupingRefinementPayload {
+    const allActivities = activities.map((activity) => ({
       id: activity.id,
       name: activity.name,
       type: activity.type,
@@ -3648,7 +3758,8 @@ ${JSON.stringify(activityPayload, null, 2)}`,
       recommendedStartWindow: activity.recommendedStartWindow || null,
       neighborhood: activity.neighborhood || null,
     }));
-    const activityById = new Map(activityPayload.map((activity) => [activity.id, activity]));
+    const activityById = new Map(allActivities.map((activity) => [activity.id, activity]));
+    const groupedDayByNumber = new Map(groupedDays.map((day) => [day.dayNumber, day]));
     const dayCapacityProfiles = buildDayCapacityProfiles(tripInfo, dayGroups.length);
     const dayConstraintsPayload = dayGroups.map((day, index) => {
       const capacity = dayCapacityProfiles[index];
@@ -3656,7 +3767,6 @@ ${JSON.stringify(activityPayload, null, 2)}`,
         dayNumber: day.dayNumber,
         date: day.date,
         maxSchedulableHours: capacity?.maxHours ?? null,
-        slotCapacityHours: capacity?.slotCapacity ?? null,
         timingConstraints: (capacity?.timingConstraints ?? []).map((constraint) => ({
           type: constraint.type,
           sourceTime: constraint.sourceTime,
@@ -3673,27 +3783,56 @@ ${JSON.stringify(activityPayload, null, 2)}`,
         })),
       };
     });
-    const dayPayload = dayGroups.map((day) => ({
-      dayNumber: day.dayNumber,
-      date: day.date,
-      theme: day.theme,
-      activityIds: day.activityIds,
-      activities: day.activityIds
-        .map((id) => activityById.get(id))
-        .filter((activity): activity is NonNullable<typeof activityPayload[number]> => activity !== undefined),
-      nightStayLabel: day.nightStay?.label || null,
-    }));
+    const dayPayload = dayGroups.map((day) => {
+      const groupedDay = groupedDayByNumber.get(day.dayNumber);
+      const scheduledActivityRows = (groupedDay?.timelineItems ?? [])
+        .filter((item) => item.type === "activity" && typeof item.activityId === "string")
+        .map((item, orderIndex) => {
+          return {
+            order: orderIndex,
+            activityId: item.activityId,
+            title: item.title,
+            timeRange: item.timeRange ?? null,
+          };
+        });
+      return {
+        dayNumber: day.dayNumber,
+        date: day.date,
+        theme: day.theme,
+        scheduledActivities: scheduledActivityRows,
+        nightStayLabel: day.nightStay?.label || null,
+      };
+    });
     const unassignedActivitiesPayload = unassignedActivityIds
       .map((id) => activityById.get(id))
-      .filter((activity): activity is NonNullable<typeof activityPayload[number]> => activity !== undefined);
+      .filter((activity): activity is NonNullable<typeof allActivities[number]> => activity !== undefined);
+    return {
+      allActivities,
+      dayConstraintsPayload,
+      dayPayload,
+      unassignedActivitiesPayload,
+    };
+  }
 
-    const systemPrompt = `You are optimizing a travel itinerary using a small batch of edits.
-
+  private buildDayGroupingRefinementMessages({
+    tripInfo,
+    payload,
+    unassignedActivityIds,
+    currentCost,
+    allowDurationShrinking,
+  }: {
+    tripInfo: TripInfo;
+    payload: DayGroupingRefinementPayload;
+    unassignedActivityIds: string[];
+    currentCost: number;
+    allowDurationShrinking: boolean;
+  }): DayGroupingRefinementMessage[] {
+    const systemPrompt = `You are improving upon a travel itinerary that might be suboptimal in several ways, including empty days without a plan, overloaded days, too much driving, activies that can be scheduled but are not, etc. Please use your judgement to suggest some logical improvements to the itinerary using the operations and guidelines below.
 Return ONLY JSON:
 {
   "operations": [
     {
-      "type": "move | unschedule | set_night_stay | no_op",
+      "type": "move | reorder_activities | set_night_stay | no_op",
       "...": "operation fields"
     }
   ]
@@ -3702,28 +3841,31 @@ Return ONLY JSON:
 Allowed operations:
 1) move(dayNumber, activityIds, insertIndex?)
    - Moves each activity from wherever it currently is into the target day.
-2) unschedule(activityIds)
-   - Moves listed activities from whichever day they are in to Unassigned.
+   - Use dayNumber: 0 to move activities into the Unassigned bucket.
+2) reorder_activities(dayNumber, activityIds)
+   - Reorders the activities already scheduled on that day.
+   - activityIds must be the full ordered list for that day after reordering.
+   - Do not use this to move activities between days or to/from Unassigned.
 3) set_night_stay(dayNumber, label, notes?)
 4) no_op(reason?)
 
 Rules:
-- Prefer 2-4 operations when that can improve cost more than a single move.
-- Keep the operation list short and coherent.
-- Do not include the same activity ID in more than one operation.
 - no_op should appear only when no meaningful improvement is likely.
 - Never invent activity IDs.
 - Use activity IDs from the payload as references; names are provided only for readability.
 - Only use day numbers that exist.
-- Goal: lower the trip cost score.
+- dayNumber 0 is reserved for the Unassigned bucket.
 - Treat day timing/capacity constraints as hard feasibility signals, not optional preferences.
-- On an arrival day, do not move activities that would need to start before the earliestStart constraint; unschedule them or choose no_op if they cannot fit.
-- On a departure day, do not move activities that would need to end after the latestEnd constraint; unschedule them or choose no_op if they cannot fit.
+- Use scheduledActivities as the authoritative current intra-day order and timing for the existing plan.
+- When only the order inside one day should change, prefer reorder_activities over move.
+- Consider intraday reordering when it can reduce commute, fix timing conflicts, or better respect fixed starts and recommended windows.
+- On an arrival day, do not move activities that would need to start before the earliestStart constraint; move them to dayNumber 0 or choose no_op if they cannot fit.
+- On a departure day, do not move activities that would need to end after the latestEnd constraint; move them to dayNumber 0 or choose no_op if they cannot fit.
 - Preserve fixed-time or narrow-window activities only when the target day can honor their time window.
 - If allowDurationShrinking is false, do not rely on shortening visit durations; keep visits near recommended durations.
 - If no likely improvement exists, return one operation: [{"type":"no_op","reason":"..."}].`;
 
-    const messages: Array<{ role: "system" | "user"; content: string }> = [
+    return [
       { role: "system", content: systemPrompt },
       {
         role: "user",
@@ -3745,42 +3887,46 @@ ${JSON.stringify({
 Current cost: ${currentCost}
 
 Day timing/capacity constraints:
-${JSON.stringify(dayConstraintsPayload, null, 2)}
+${JSON.stringify(payload.dayConstraintsPayload, null, 2)}
 
 Days:
-${JSON.stringify(dayPayload, null, 2)}
+${JSON.stringify(payload.dayPayload, null, 2)}
 
 Unassigned activity IDs:
 ${JSON.stringify(unassignedActivityIds, null, 2)}
 
 Unassigned activities:
-${JSON.stringify(unassignedActivitiesPayload, null, 2)}
+${JSON.stringify(payload.unassignedActivitiesPayload, null, 2)}
 
-Activities:
-${JSON.stringify(activityPayload, null, 2)}`,
+All activities:
+${JSON.stringify(payload.allActivities, null, 2)}`,
       },
     ];
+  }
 
+  private parseDayGroupingRefinementOperations(
+    response: unknown
+  ): DayGroupingRefinementOperation[] | null {
+    const parsed = DAY_GROUP_REFINEMENT_RESPONSE_SCHEMA.safeParse(response);
+    if (!parsed.success) {
+      return null;
+    }
+    return "operations" in parsed.data ? parsed.data.operations : [parsed.data.operation];
+  }
+
+  private parseDayGroupingRefinementOperationsFromText(
+    responseText: string
+  ): DayGroupingRefinementOperation[] | null {
     try {
-      const completion = await this.openai.chat.completions.create({
-        messages,
-        model: this.model,
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-      });
-      const response = this._parseJsonResponse(completion);
-      const parsed = DAY_GROUP_REFINEMENT_RESPONSE_SCHEMA.safeParse(response);
-      if (!parsed.success) {
-        return { success: false, operations: null };
-      }
-      const operations = "operations" in parsed.data ? parsed.data.operations : [parsed.data.operation];
-      return {
-        success: true,
-        operations,
-      };
-    } catch (error) {
-      console.error("Error in proposeDayGroupingRefinementStep:", error);
-      return { success: false, operations: null };
+      const normalized = responseText
+        .trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/```$/i, "")
+        .trim();
+      const parsedResponse = JSON.parse(normalized);
+      return this.parseDayGroupingRefinementOperations(parsedResponse);
+    } catch {
+      return null;
     }
   }
 

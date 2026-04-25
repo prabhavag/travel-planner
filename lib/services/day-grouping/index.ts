@@ -24,6 +24,7 @@ import {
     normalizeType,
     cloneDefaultSlotCapacity,
     parseFixedStartTimeMinutes,
+    getConstrainedDayStartMinutes,
     recommendedWindowLatestStartMinutes,
 } from "./utils";
 import {
@@ -38,6 +39,7 @@ import {
     getDayStructuralStats,
     computeTotalCost,
     computeTotalCostBreakdown,
+    buildOptimalDayRoute,
     buildPreparedActivityMap,
     computeActivityCostDebug,
     type ActivityCostDebug,
@@ -52,6 +54,7 @@ export interface ScheduleState {
 
 export interface BuildScoredScheduleOptions {
     forceSchedule?: boolean;
+    forceSource?: "llm" | "manual";
     tripInfo?: TripInfo;
 }
 
@@ -315,17 +318,157 @@ function formatHoursLabel(hours: number): string {
     return `${roundedMinutes} min`;
 }
 
+function appendDayEndTimelineItems({
+    items,
+    day,
+    dayIndex,
+    dayGroups,
+    cursorMinutes,
+    tripInfo,
+    airportArrivalDeadlineMinutes,
+}: {
+    items: TimelineItem[];
+    day: DayGroup;
+    dayIndex: number;
+    dayGroups: DayGroup[];
+    cursorMinutes: number;
+    tripInfo?: TripInfo;
+    airportArrivalDeadlineMinutes: number | null;
+}): void {
+    const isFinalDepartureDay = dayIndex === dayGroups.length - 1;
+    if (isFinalDepartureDay) {
+        const departureTime = tripInfo?.departureTimePreference || "6:00 PM";
+        const transferMinutes = 90;
+        const transferStartMinutes =
+            airportArrivalDeadlineMinutes != null
+                ? Math.max(cursorMinutes, airportArrivalDeadlineMinutes - transferMinutes)
+                : cursorMinutes;
+        items.push({
+            type: "commute",
+            id: `airport-transfer-outbound-${day.dayNumber}`,
+            title: "Airport transfer",
+            detail: `Estimated transfer ~${transferMinutes} min`,
+            timeRange: formatTimeRange(transferStartMinutes, transferStartMinutes + transferMinutes),
+        });
+        items.push({
+            type: "stay",
+            id: `departure-${day.dayNumber}`,
+            title: "Departure prep",
+            detail:
+                airportArrivalDeadlineMinutes != null
+                    ? `Head to ${tripInfo?.departureAirport || "the airport"} for ${departureTime} departure. Target airport arrival by ${formatClockLabel(airportArrivalDeadlineMinutes)}.`
+                    : `Head to ${tripInfo?.departureAirport || "the airport"} for ${departureTime} departure.`,
+        });
+        return;
+    }
+
+    if (day.nightStay?.label) {
+        items.push({
+            type: "stay",
+            id: `stay-end-${day.dayNumber}`,
+            title: "End at night stay",
+            detail: day.nightStay.label,
+        });
+    }
+}
+
+export function orderDayActivityIds({
+    activityIds,
+    preparedMap,
+    commuteMinutesByPair,
+}: {
+    activityIds: string[];
+    preparedMap: Map<string, PreparedActivity>;
+    commuteMinutesByPair: ActivityCommuteMatrix;
+}): string[] {
+    if (activityIds.length <= 1) return [...activityIds];
+
+    const orderedActivities = buildOptimalDayRoute(
+        activityIds
+            .map((id) => preparedMap.get(id)?.activity)
+            .filter((activity): activity is SuggestedActivity => activity !== undefined),
+        preparedMap,
+        commuteMinutesByPair
+    );
+
+    const orderedIds = orderedActivities.map((activity: SuggestedActivity) => activity.id);
+    const seen = new Set(orderedIds);
+    for (const id of activityIds) {
+        if (seen.has(id)) continue;
+        orderedIds.push(id);
+        seen.add(id);
+    }
+
+    return orderedIds;
+}
+
+type PackedDayActivityTiming = {
+    activityId: string;
+    fixedStartMinutes: number | null;
+    startMinutes: number;
+    endMinutes: number;
+    commuteToNextMinutes: number;
+};
+
+function buildPackedDayActivityTimings({
+    activityIds,
+    preparedMap,
+    commuteMinutesByPair,
+    dayStartMinutes,
+}: {
+    activityIds: string[];
+    preparedMap: Map<string, PreparedActivity>;
+    commuteMinutesByPair: ActivityCommuteMatrix;
+    dayStartMinutes: number;
+}): PackedDayActivityTiming[] {
+    const timings: PackedDayActivityTiming[] = [];
+    let cursorMinutes = dayStartMinutes;
+
+    for (let index = 0; index < activityIds.length; index += 1) {
+        const activityId = activityIds[index];
+        const prepared = preparedMap.get(activityId);
+        const activity = prepared?.activity;
+        if (!prepared || !activity) continue;
+
+        const fixedStartMinutes = activity.isFixedStartTime
+            ? parseFixedStartTimeMinutes(activity.fixedStartTime || null)
+            : null;
+        const startMinutes = fixedStartMinutes != null ? Math.max(cursorMinutes, fixedStartMinutes) : cursorMinutes;
+        const durationMinutes = Math.round(prepared.loadDurationHours * 60);
+        const endMinutes = startMinutes + durationMinutes;
+        const nextPrepared = activityIds[index + 1] ? preparedMap.get(activityIds[index + 1]) : null;
+        const commuteToNextMinutes = nextPrepared
+            ? Math.round(activityCommuteMinutes(activity, nextPrepared.activity, commuteMinutesByPair))
+            : 0;
+
+        timings.push({
+            activityId,
+            fixedStartMinutes,
+            startMinutes,
+            endMinutes,
+            commuteToNextMinutes,
+        });
+        cursorMinutes = endMinutes + commuteToNextMinutes;
+    }
+
+
+
+    return timings;
+}
+
 function buildScheduleTimelineItems({
     dayGroups,
     preparedMap,
     commuteMinutesByPair,
     dayCapacities,
+    forceSource,
     tripInfo,
 }: {
     dayGroups: DayGroup[];
     preparedMap: Map<string, PreparedActivity>;
     commuteMinutesByPair: ActivityCommuteMatrix;
     dayCapacities: DayCapacityProfile[];
+    forceSource?: "llm" | "manual";
     tripInfo?: TripInfo;
 }): Record<number, TimelineItem[]> {
     const timelineItemsByDayNumber: Record<number, TimelineItem[]> = {};
@@ -336,10 +479,19 @@ function buildScheduleTimelineItems({
             slotCapacity: cloneDefaultSlotCapacity(),
             targetWeight: 1,
         };
-        const dayStartMinutes =
+        const departureConstraint = capacity.timingConstraints?.find((constraint) => constraint.type === "departure");
+        const baseDayStartMinutes =
             capacity.maxHours < MAX_DAY_HOURS
                 ? Math.max(SOFT_DAY_START_MINUTES, DEFAULT_DAYLIGHT_END_MINUTES - Math.round(capacity.maxHours * 60))
                 : SOFT_DAY_START_MINUTES;
+        const dayActivities = day.activityIds
+            .map((activityId) => preparedMap.get(activityId)?.activity)
+            .filter((activity): activity is SuggestedActivity => activity != null);
+        const dayStartMinutes = getConstrainedDayStartMinutes({
+            activities: dayActivities,
+            baseDayStartMinutes,
+            timingConstraints: capacity.timingConstraints,
+        });
         let cursorMinutes = dayStartMinutes;
         let lunchInserted = false;
         let scheduledMinutes = 0;
@@ -370,19 +522,35 @@ function buildScheduleTimelineItems({
                 detail: day.nightStay?.label || "At your stay",
             });
             cursorMinutes = Math.max(cursorMinutes, arrivalMinutes + transferMinutes);
-        } else if (day.nightStay?.label) {
-            items.push({
-                type: "stay",
-                id: `stay-start-${day.dayNumber}`,
-                title: "Start from stay",
-                detail: day.nightStay.label,
-            });
+        } else {
+            const previousNightStayLabel = dayGroups[dayIndex - 1]?.nightStay?.label;
+            const startStayLabel = previousNightStayLabel || day.nightStay?.label;
+            if (startStayLabel) {
+                items.push({
+                    type: "stay",
+                    id: `stay-start-${day.dayNumber}`,
+                    title: "Start from stay",
+                    detail: startStayLabel,
+                });
+            }
         }
+        const packedTimings = buildPackedDayActivityTimings({
+            activityIds: day.activityIds,
+            preparedMap,
+            commuteMinutesByPair,
+            dayStartMinutes: cursorMinutes,
+        });
+        const packedTimingByActivityId = new Map(packedTimings.map((timing) => [timing.activityId, timing]));
 
         day.activityIds.forEach((activityId, index) => {
             const prepared = preparedMap.get(activityId);
             const activity = prepared?.activity;
             if (!prepared || !activity) return;
+            const packedTiming = packedTimingByActivityId.get(activityId);
+            if (!packedTiming) return;
+            const startMinutes = packedTiming.startMinutes;
+            const endMinutes = packedTiming.endMinutes;
+            const fixedStart = packedTiming.fixedStartMinutes;
 
             if (!lunchInserted && cursorMinutes >= 12 * 60) {
                 const lunchStart = cursorMinutes;
@@ -397,25 +565,49 @@ function buildScheduleTimelineItems({
                 cursorMinutes = lunchEnd;
                 lunchInserted = true;
             }
-
-            const fixedStart = parseFixedStartTimeMinutes(activity.fixedStartTime || null);
-            const startMinutes = fixedStart != null ? Math.max(cursorMinutes, fixedStart) : cursorMinutes;
-            const durationMinutes = Math.round(prepared.loadDurationHours * 60);
-            const endMinutes = startMinutes + durationMinutes;
+            if (!lunchInserted && cursorMinutes < 12 * 60 && startMinutes >= 12 * 60) {
+                const lunchStart = Math.max(cursorMinutes, 12 * 60);
+                const lunchEnd = lunchStart + 60;
+                if (lunchEnd <= startMinutes) {
+                    items.push({
+                        type: "lunch",
+                        id: `lunch-${day.dayNumber}`,
+                        title: "Lunch break",
+                        detail: "About 1 hr",
+                        timeRange: formatTimeRange(lunchStart, lunchEnd),
+                    });
+                    cursorMinutes = lunchEnd;
+                    lunchInserted = true;
+                }
+            }
             const warnings: string[] = [];
-            if (fixedStart != null && cursorMinutes > fixedStart) {
-                warnings.push(`Fixed start conflict: earliest available start is ${formatClockLabel(cursorMinutes)}.`);
+            const hardConstraintWarnings: string[] = [];
+            if (fixedStart != null && startMinutes > fixedStart) {
+                const warning = `Fixed start conflict: earliest available start is ${formatClockLabel(startMinutes)}.`;
+                warnings.push(warning);
+                hardConstraintWarnings.push(warning);
             }
             const latestRecommendedStart = recommendedWindowLatestStartMinutes(activity);
             if (latestRecommendedStart != null && startMinutes > latestRecommendedStart) {
                 warnings.push(`Late-start risk: recommended by ${formatClockLabel(latestRecommendedStart)}.`);
             }
             if (activity.daylightPreference === "daylight_only" && endMinutes > DEFAULT_DAYLIGHT_END_MINUTES) {
-                warnings.push(`Daylight warning: finishes after ${formatClockLabel(DEFAULT_DAYLIGHT_END_MINUTES)}.`);
+                const warning = `Daylight warning: finishes after ${formatClockLabel(DEFAULT_DAYLIGHT_END_MINUTES)}.`;
+                warnings.push(warning);
+                hardConstraintWarnings.push(warning);
             }
             const dayEndMinutes = dayStartMinutes + Math.round(capacity.maxHours * 60);
             if (endMinutes > dayEndMinutes) {
                 warnings.push(`Over capacity: scheduled past ${formatClockLabel(dayEndMinutes)}.`);
+            }
+            if (forceSource === "llm" && hardConstraintWarnings.length > 0) {
+                items.push({
+                    type: "warning",
+                    id: `forced-infeasible-${day.dayNumber}-${activity.id}`,
+                    title: "LLM forced infeasible placement",
+                    detail: `Accepted as an explicit LLM override, but this placement is infeasible under normal constraints. ${hardConstraintWarnings.join(" ")}`,
+                    timeRange: "Forced",
+                });
             }
 
             items.push({
@@ -432,14 +624,14 @@ function buildScheduleTimelineItems({
 
             const nextPrepared = day.activityIds[index + 1] ? preparedMap.get(day.activityIds[index + 1]) : null;
             if (nextPrepared) {
-                const commuteMinutes = activityCommuteMinutes(activity, nextPrepared.activity, commuteMinutesByPair);
+                const commuteMinutes = packedTiming.commuteToNextMinutes;
                 const commuteStart = cursorMinutes;
-                const commuteEnd = commuteStart + Math.round(commuteMinutes);
+                const commuteEnd = commuteStart + commuteMinutes;
                 items.push({
                     type: "commute",
                     id: `commute-${activity.id}-${nextPrepared.activity.id}`,
                     title: "Commute",
-                    detail: `Estimated travel ~${Math.round(commuteMinutes)} min`,
+                    detail: `Estimated travel ~${commuteMinutes} min`,
                     timeRange: formatTimeRange(commuteStart, commuteEnd),
                 });
                 cursorMinutes = commuteEnd;
@@ -466,14 +658,15 @@ function buildScheduleTimelineItems({
                 timeRange: formatTimeRange(lunchStart, lunchStart + 60),
             });
         }
-        if (day.nightStay?.label) {
-            items.push({
-                type: "stay",
-                id: `stay-end-${day.dayNumber}`,
-                title: "End at night stay",
-                detail: day.nightStay.label,
-            });
-        }
+        appendDayEndTimelineItems({
+            items,
+            day,
+            dayIndex,
+            dayGroups,
+            cursorMinutes,
+            tripInfo,
+            airportArrivalDeadlineMinutes: departureConstraint?.airportArrivalDeadlineMinutes ?? null,
+        });
 
         timelineItemsByDayNumber[day.dayNumber] = items;
     });
@@ -581,10 +774,18 @@ export function buildScoredSchedule({
     if (!forceSchedule) {
         normalizedDayGroups.forEach((day, dayIndex) => {
             const capacity = dayCapacities[dayIndex];
-            const dayStartMinutes =
+            const baseDayStartMinutes =
                 capacity && capacity.maxHours < MAX_DAY_HOURS
                     ? Math.max(SOFT_DAY_START_MINUTES, NIGHT_AFTER_HOURS_START_MINUTES - Math.round(capacity.maxHours * 60))
                     : SOFT_DAY_START_MINUTES;
+            const dayActivities = day.activityIds
+                .map((activityId) => activityById.get(activityId))
+                .filter((activity): activity is SuggestedActivity => activity != null);
+            const dayStartMinutes = getConstrainedDayStartMinutes({
+                activities: dayActivities,
+                baseDayStartMinutes,
+                timingConstraints: capacity?.timingConstraints,
+            });
             let cursorMinutes = dayStartMinutes;
             const keptActivityIds: string[] = [];
             for (const activityId of day.activityIds) {
@@ -639,6 +840,7 @@ export function buildScoredSchedule({
         preparedMap,
         commuteMinutesByPair,
         dayCapacities,
+        forceSource: options?.forceSource,
         tripInfo,
     });
 
@@ -699,7 +901,12 @@ export async function groupActivitiesByDay(
     optimizeByMovesAndSwaps(days, preparedMap, commuteMinutesByPair, dayCapacities);
 
     const result: DayGroup[] = days.map((day, i) => {
-        const dayActivities = day.activityIds
+        const orderedActivityIds = orderDayActivityIds({
+            activityIds: day.activityIds,
+            preparedMap,
+            commuteMinutesByPair,
+        });
+        const dayActivities = orderedActivityIds
             .map((id) => preparedMap.get(id)?.activity)
             .filter((a): a is SuggestedActivity => a !== undefined);
 
@@ -709,7 +916,7 @@ export async function groupActivitiesByDay(
             dayNumber: i + 1,
             date: dates[i],
             theme: generateDayTheme(dayActivities),
-            activityIds: day.activityIds,
+            activityIds: orderedActivityIds,
             nightStay: {
                 label: "Nearby Accommodation",
                 coordinates: centroid,

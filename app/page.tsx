@@ -47,6 +47,7 @@ import {
   type SubAgentStatus,
   type AccommodationOption,
   type FlightOption,
+  type DayGroup,
 } from "@/lib/api-client";
 import { InterestsPreferencesView } from "@/components/InterestsPreferencesView";
 import {
@@ -331,6 +332,50 @@ function mapLlmSuggestedOperationsWithNames(
   });
 }
 
+function formatLlmRefinementPromptMessages(
+  messages: Array<{ role: "system" | "user"; content: string }> | undefined
+): string {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return "";
+  }
+  return messages
+    .map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
+    .join("\n\n---\n\n");
+}
+
+function parseManualJsonInput(value: string): unknown {
+  const normalized = value
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  return JSON.parse(normalized);
+}
+
+function extractManualSchedulePayload(
+  payload: unknown
+): { dayGroups: DayGroup[]; unassignedActivityIds: string[] | null } | null {
+  if (!payload || typeof payload !== "object") return null;
+  const source = payload as Record<string, unknown>;
+  const dayGroups = Array.isArray(source.dayGroups)
+    ? source.dayGroups
+    : Array.isArray(source.candidateDayGroups)
+      ? source.candidateDayGroups
+      : null;
+  if (!Array.isArray(dayGroups) || dayGroups.length === 0) return null;
+  const unassigned = Array.isArray(source.unassignedActivityIds)
+    ? source.unassignedActivityIds
+    : Array.isArray(source.candidateUnassignedActivityIds)
+      ? source.candidateUnassignedActivityIds
+      : null;
+  return {
+    dayGroups: dayGroups as DayGroup[],
+    unassignedActivityIds: Array.isArray(unassigned)
+      ? unassigned.filter((id): id is string => typeof id === "string")
+      : null,
+  };
+}
+
 function extractOverallDebugCostFromDays(days: GroupedDay[] | null | undefined): number | null {
   if (!Array.isArray(days)) return null;
   for (const day of days) {
@@ -407,6 +452,8 @@ export default function PlannerPage() {
   const [llmRefinementResult, setLlmRefinementResult] = useState<LlmRefinementResult | null>(null);
   const [llmRefinementPreview, setLlmRefinementPreview] = useState<LlmRefinementPreview | null>(null);
   const [llmRefinementDiffOpen, setLlmRefinementDiffOpen] = useState(false);
+  const [llmRefinementManualResponse, setLlmRefinementManualResponse] = useState("");
+  const [llmRefinementPromptDebug, setLlmRefinementPromptDebug] = useState("");
   const [groupingDebugTotalCost, setGroupingDebugTotalCost] = useState<number | null>(null);
   const [restaurantSuggestions, setRestaurantSuggestions] = useState<RestaurantSuggestion[]>([]);
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState<string[]>([]);
@@ -811,7 +858,11 @@ export default function PlannerPage() {
       setUnassignedActivityIds(response.unassignedActivityIds);
     }
     if (response.currentSchedule === undefined && response.activityCostDebugById !== undefined) setActivityCostDebugById(response.activityCostDebugById);
-    if (response.llmRefinementResult !== undefined) setLlmRefinementResult(response.llmRefinementResult ?? null);
+    if (response.llmRefinementResult !== undefined) {
+      const result = response.llmRefinementResult ?? null;
+      setLlmRefinementResult(result);
+      setLlmRefinementPromptDebug(formatLlmRefinementPromptMessages(result?.llmRequestMessages));
+    }
     if (response.llmRefinementPreview !== undefined) {
       const preview = response.llmRefinementPreview ?? null;
       setLlmRefinementPreview(preview);
@@ -1247,7 +1298,10 @@ export default function PlannerPage() {
     setLoading(true);
     try {
       setLlmRefinementDiffOffset({ x: 0, y: 0 });
-      const response = await runLlmRefinementStep(sessionId);
+      const response = await runLlmRefinementStep(
+        sessionId,
+        llmRefinementManualResponse.trim() ? llmRefinementManualResponse : null
+      );
       if (response.success) {
         if (response.llmRefinementResult) {
           const namedSuggestions = mapLlmSuggestedOperationsWithNames(
@@ -1258,12 +1312,90 @@ export default function PlannerPage() {
           );
           console.debug("[LLM Refine] Operation summary:", response.llmRefinementResult.operationSummary);
           console.debug("[LLM Refine] Suggested operations (named):", namedSuggestions);
+          if (response.llmRefinementResult.llmRequestMessages) {
+            console.debug(
+              "[LLM Refine] Exact prompt payload sent to model:",
+              JSON.stringify(response.llmRefinementResult.llmRequestMessages, null, 2)
+            );
+          }
         }
         applySessionResponse(response, true);
       }
     } catch (error) {
       console.error("LLM refine step error:", error);
       alert("Failed to run LLM refinement step. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUseManualLlmJson = async () => {
+    if (!sessionId || !llmRefinementManualResponse.trim()) return;
+    setLoading(true);
+    try {
+      const parsedManualPayload = parseManualJsonInput(llmRefinementManualResponse);
+      const manualSchedule = extractManualSchedulePayload(parsedManualPayload);
+
+      if (manualSchedule) {
+        const response = await applyLlmRefinementCandidate(
+          sessionId,
+          manualSchedule.dayGroups,
+          manualSchedule.unassignedActivityIds
+            ?? uniqueOrderedIds(currentSchedule?.unassignedActivityIds ?? unassignedActivityIds),
+          llmRefinementResult
+            ? {
+              ...llmRefinementResult,
+              accepted: true,
+              reason: llmRefinementResult.reason ?? "Applied from manual JSON schedule.",
+            }
+            : null
+        );
+        if (response.success) {
+          applySessionResponse(response, true);
+          setLlmRefinementPreview(null);
+          setLlmRefinementDiffOpen(false);
+          setLlmRefinementDiffOffset({ x: 0, y: 0 });
+        }
+        return;
+      }
+
+      const refineResponse = await runLlmRefinementStep(sessionId, llmRefinementManualResponse);
+      if (!refineResponse.success) {
+        throw new Error(refineResponse.message || "Manual JSON refinement failed.");
+      }
+      const scheduleToAccept = refineResponse.llmRefinementPreview?.tentativeSchedule ?? refineResponse.tentativeSchedule;
+      const candidateDayGroups = scheduleToAccept?.dayGroups ?? refineResponse.llmRefinementPreview?.candidateDayGroups;
+      const candidateUnassignedActivityIds =
+        scheduleToAccept?.unassignedActivityIds
+        ?? refineResponse.llmRefinementPreview?.candidateUnassignedActivityIds;
+
+      if (!candidateDayGroups || !candidateUnassignedActivityIds) {
+        applySessionResponse(refineResponse, true);
+        alert("Manual JSON was parsed but did not produce a candidate schedule to apply.");
+        return;
+      }
+
+      const applyResponse = await applyLlmRefinementCandidate(
+        sessionId,
+        candidateDayGroups,
+        candidateUnassignedActivityIds,
+        refineResponse.llmRefinementResult
+          ? {
+            ...refineResponse.llmRefinementResult,
+            accepted: true,
+            reason: refineResponse.llmRefinementResult.reason ?? "Applied from manual JSON response.",
+          }
+          : null
+      );
+      if (applyResponse.success) {
+        applySessionResponse(applyResponse, true);
+        setLlmRefinementPreview(null);
+        setLlmRefinementDiffOpen(false);
+        setLlmRefinementDiffOffset({ x: 0, y: 0 });
+      }
+    } catch (error) {
+      console.error("Manual LLM JSON apply error:", error);
+      alert("Failed to apply manual JSON. Ensure it is valid JSON for either schedule or operations payload.");
     } finally {
       setLoading(false);
     }
@@ -1285,24 +1417,6 @@ export default function PlannerPage() {
     } catch (error) {
       console.error("LLM refinement reject error:", error);
       alert("Failed to reject LLM refinement preview. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDiscardLlmRefinementPreview = async () => {
-    if (!sessionId) return;
-    setLoading(true);
-    try {
-      const response = await resolveLlmRefinementPreview(sessionId, "discard");
-      if (response.success) {
-        applySessionResponse(response, false);
-        setLlmRefinementDiffOpen(false);
-        setLlmRefinementDiffOffset({ x: 0, y: 0 });
-      }
-    } catch (error) {
-      console.error("LLM refinement discard error:", error);
-      alert("Failed to discard LLM refinement preview. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -2316,7 +2430,7 @@ export default function PlannerPage() {
                       initialUnscheduledActivityIds={unassignedActivityIds}
                       activityCostDebugById={activityCostDebugById}
                       headerActions={
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-start gap-2">
                           <Button
                             type="button"
                             size="sm"
@@ -2328,6 +2442,43 @@ export default function PlannerPage() {
                             {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
                             LLM Refine
                           </Button>
+                          <details className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-700">
+                            <summary className="cursor-pointer font-medium text-gray-800">LLM Debug</summary>
+                            <div className="mt-2 space-y-2">
+                              <label className="block text-[11px] font-medium text-gray-700">
+                                Manual LLM response (JSON)
+                                <textarea
+                                  value={llmRefinementManualResponse}
+                                  onChange={(event) => setLlmRefinementManualResponse(event.target.value)}
+                                  placeholder='{"operations":[{"type":"no_op","reason":"..."}]}'
+                                  className="mt-1 h-24 w-[360px] rounded border border-gray-300 px-2 py-1 font-mono text-[10px] leading-4 text-gray-900"
+                                />
+                              </label>
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-[10px] text-gray-500">
+                                  When this field is non-empty, refinement uses this JSON instead of calling the LLM.
+                                </p>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={handleUseManualLlmJson}
+                                  disabled={loading || !sessionId || !llmRefinementManualResponse.trim()}
+                                  className="h-7 px-2 text-[10px]"
+                                >
+                                  Use Manual JSON
+                                </Button>
+                              </div>
+                              <label className="block text-[11px] font-medium text-gray-700">
+                                Last prompt sent to LLM
+                                <textarea
+                                  value={llmRefinementPromptDebug}
+                                  readOnly
+                                  className="mt-1 h-28 w-[360px] rounded border border-gray-300 bg-gray-50 px-2 py-1 font-mono text-[10px] leading-4 text-gray-900"
+                                />
+                              </label>
+                            </div>
+                          </details>
                           {llmRefinementResult ? (
                             <div
                               className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
@@ -2952,14 +3103,6 @@ export default function PlannerPage() {
               </div>
 
               <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-4 py-3">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={handleDiscardLlmRefinementPreview}
-                  disabled={loading}
-                >
-                  Discard
-                </Button>
                 <Button
                   type="button"
                   variant="outline"

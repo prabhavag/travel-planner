@@ -440,7 +440,7 @@ type WorkingSession = {
 async function updateWorkingCurrentSchedule(
   session: Session,
   working: WorkingSession,
-  options: { forceSchedule?: boolean } = {}
+  options: { forceSchedule?: boolean; forceSource?: "llm" | "manual" } = {}
 ): Promise<void> {
   const selectedActivities = session.suggestedActivities.filter((activity) =>
     working.selectedActivityIds.includes(activity.id),
@@ -455,7 +455,11 @@ async function updateWorkingCurrentSchedule(
     dayCapacities,
     preparedMap,
     commuteMinutesByPair,
-    options: { forceSchedule: options.forceSchedule ?? false, tripInfo: session.tripInfo },
+    options: {
+      forceSchedule: options.forceSchedule ?? false,
+      forceSource: options.forceSource,
+      tripInfo: session.tripInfo,
+    },
   });
 
   working.currentSchedule = currentSchedule;
@@ -518,6 +522,7 @@ async function executeAction({
     working.unassignedActivityIds = groupingResult.schedule.unassignedActivityIds;
     await updateWorkingCurrentSchedule(session, working, {
       forceSchedule: groupingResult.appliedStrategy !== "heuristic",
+      forceSource: groupingResult.appliedStrategy === "llm" ? "llm" : undefined,
     });
     working.groupingSnapshots = {
       ...working.groupingSnapshots,

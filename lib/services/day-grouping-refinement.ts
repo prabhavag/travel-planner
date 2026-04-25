@@ -8,9 +8,11 @@ import {
 } from "@/lib/services/day-grouping";
 import { getLLMClient, type DayGroupingRefinementOperation } from "@/lib/services/llm-client";
 import type { ActivityCommuteMatrix, DayCapacityProfile, PreparedActivity } from "@/lib/services/day-grouping/types";
+import { parseFixedStartTimeMinutes } from "@/lib/services/day-grouping/utils";
 import { ALLOW_DURATION_SHRINKING } from "@/lib/planning-flags";
 
 const IMPROVEMENT_EPSILON = 1e-6;
+export const NO_COST_IMPROVEMENT_REASON = "Candidate plan did not reduce total cost.";
 
 type EvaluatedPlan = {
   dayGroups: DayGroup[];
@@ -29,6 +31,9 @@ export interface LlmRefinementResult {
   operationSummary: string;
   suggestedOperations: DayGroupingRefinementOperation[];
   reason: string | null;
+  llmRequestMessages?: Array<{ role: "system" | "user"; content: string }>;
+  llmRawResponse?: string | null;
+  llmResponseSource?: "openai" | "manual";
 }
 
 export interface LlmRefinementIterationOutcome {
@@ -44,17 +49,72 @@ export interface LlmRefinementIterationOutcome {
   result: LlmRefinementResult;
 }
 
+export function reconcileLlmRefinementResult({
+  result,
+  beforeTotalCost,
+  candidateTotalCost,
+}: {
+  result: LlmRefinementResult;
+  beforeTotalCost: number;
+  candidateTotalCost: number | null;
+}): LlmRefinementResult {
+  const costDelta =
+    candidateTotalCost != null
+      ? candidateTotalCost - beforeTotalCost
+      : null;
+  const accepted = costDelta != null ? costDelta < -IMPROVEMENT_EPSILON : false;
+
+  let reason = result.reason;
+  if (accepted && reason === NO_COST_IMPROVEMENT_REASON) {
+    reason = null;
+  } else if (!accepted && candidateTotalCost != null && costDelta != null && costDelta >= -IMPROVEMENT_EPSILON) {
+    reason = reason ?? NO_COST_IMPROVEMENT_REASON;
+  }
+
+  return {
+    ...result,
+    accepted,
+    beforeTotalCost,
+    candidateTotalCost,
+    afterTotalCost: accepted && candidateTotalCost != null ? candidateTotalCost : beforeTotalCost,
+    costDelta,
+    reason,
+  };
+}
+
 type NormalizedPlan = {
   dayGroups: DayGroup[];
   unassignedActivityIds: string[];
 };
+
+function cloneActivity(activity: SuggestedActivity): SuggestedActivity {
+  return {
+    ...activity,
+    recommendedStartWindow: activity.recommendedStartWindow
+      ? { ...activity.recommendedStartWindow }
+      : null,
+    interestTags: [...(activity.interestTags ?? [])],
+    routeWaypoints: activity.routeWaypoints ? activity.routeWaypoints.map((waypoint) => ({ ...waypoint })) : undefined,
+    routePoints: activity.routePoints ? activity.routePoints.map((point) => ({ ...point })) : undefined,
+    coordinates: activity.coordinates ? { ...activity.coordinates } : activity.coordinates,
+    startCoordinates: activity.startCoordinates ? { ...activity.startCoordinates } : activity.startCoordinates,
+    endCoordinates: activity.endCoordinates ? { ...activity.endCoordinates } : activity.endCoordinates,
+    photo_urls: activity.photo_urls ? [...activity.photo_urls] : activity.photo_urls,
+  };
+}
+
+function cloneActivitiesById(activities: SuggestedActivity[]): Map<string, SuggestedActivity> {
+  return new Map(activities.map((activity) => [activity.id, cloneActivity(activity)]));
+}
+
 
 function mapOperationsWithActivityNames(
   operations: DayGroupingRefinementOperation[],
   activityNameById: Map<string, string>
 ): Array<Record<string, unknown>> {
   return operations.map((operation) => {
-    if (operation.type !== "move" && operation.type !== "unschedule") {
+
+    if (operation.type !== "move" && operation.type !== "reorder_activities") {
       return operation as unknown as Record<string, unknown>;
     }
     const activityLabels = operation.activityIds.map((id) => {
@@ -148,7 +208,7 @@ function evaluatePlan({
     dayCapacities,
     preparedMap,
     commuteMinutesByPair,
-    options: { forceSchedule: true, tripInfo },
+    options: { forceSchedule: true, forceSource: "llm", tripInfo },
   });
   const firstDayCost = schedule.dayGroups.find(
     (day) => typeof day.debugCost?.overallTripCost === "number"
@@ -165,11 +225,14 @@ function evaluatePlan({
 function summarizeOperation(operation: DayGroupingRefinementOperation): string {
   switch (operation.type) {
     case "move":
-      return `Move to Day ${operation.dayNumber}: ${operation.activityIds.join(", ")}`;
-    case "unschedule":
-      return `Unschedule: ${operation.activityIds.join(", ")}`;
+      return operation.dayNumber === 0
+        ? `Move to Unassigned: ${operation.activityIds.join(", ")}`
+        : `Move to Day ${operation.dayNumber}: ${operation.activityIds.join(", ")}`;
+    case "reorder_activities":
+      return `Reorder Day ${operation.dayNumber}: ${operation.activityIds.join(", ")}`;
     case "set_night_stay":
       return `Set night stay Day ${operation.dayNumber}: ${operation.label}`;
+
     case "no_op":
       return "No refinement changes proposed.";
     default:
@@ -187,41 +250,18 @@ function removeActivityFromUnassigned(unassignedActivityIds: string[], activityI
   return unassignedActivityIds.filter((id) => id !== activityId);
 }
 
-function validateOperationBatch({
-  operations,
-  selectedActivityIdSet,
-}: {
-  operations: DayGroupingRefinementOperation[];
-  selectedActivityIdSet: Set<string>;
-}): { ok: boolean; reason: string | null } {
-  const seenActivityIds = new Map<string, string>();
-  for (const operation of operations) {
-    if (operation.type !== "move" && operation.type !== "unschedule") continue;
-    const dedupedActivityIds = [...new Set(operation.activityIds)].filter((id) => selectedActivityIdSet.has(id));
-    for (const activityId of dedupedActivityIds) {
-      const seenIn = seenActivityIds.get(activityId);
-      if (seenIn) {
-        return {
-          ok: false,
-          reason: `Activity ${activityId} appears in multiple operations (${seenIn} and ${operation.type}).`,
-        };
-      }
-      seenActivityIds.set(activityId, operation.type);
-    }
-  }
-  return { ok: true, reason: null };
-}
-
 function applyOperation({
   operation,
   dayGroups,
   unassignedActivityIds,
   selectedActivityIdSet,
+  activitiesById,
 }: {
   operation: DayGroupingRefinementOperation;
   dayGroups: DayGroup[];
   unassignedActivityIds: string[];
   selectedActivityIdSet: Set<string>;
+  activitiesById: Map<string, SuggestedActivity>;
 }): {
   ok: boolean;
   dayGroups: DayGroup[];
@@ -241,8 +281,11 @@ function applyOperation({
   }
 
   if (operation.type === "move") {
-    const targetDay = nextDayGroups.find((day) => day.dayNumber === operation.dayNumber);
-    if (!targetDay) {
+    const isUnassignedMove = operation.dayNumber === 0;
+    const targetDay = isUnassignedMove
+      ? null
+      : nextDayGroups.find((day) => day.dayNumber === operation.dayNumber);
+    if (!isUnassignedMove && !targetDay) {
       return {
         ok: false,
         dayGroups,
@@ -266,12 +309,26 @@ function applyOperation({
       nextUnassignedActivityIds = removeActivityFromUnassigned(nextUnassignedActivityIds, activityId);
     }
 
+    if (isUnassignedMove) {
+      for (const activityId of activityIds) {
+        if (!nextUnassignedActivityIds.includes(activityId)) {
+          nextUnassignedActivityIds.push(activityId);
+        }
+      }
+      return {
+        ok: true,
+        dayGroups: nextDayGroups,
+        unassignedActivityIds: nextUnassignedActivityIds,
+        rejectionReason: null,
+      };
+    }
+
     const insertionBase =
       typeof operation.insertIndex === "number"
-        ? Math.min(Math.max(0, operation.insertIndex), targetDay.activityIds.length)
-        : targetDay.activityIds.length;
+        ? Math.min(Math.max(0, operation.insertIndex), targetDay!.activityIds.length)
+        : targetDay!.activityIds.length;
     activityIds.forEach((activityId, index) => {
-      targetDay.activityIds.splice(insertionBase + index, 0, activityId);
+      targetDay!.activityIds.splice(insertionBase + index, 0, activityId);
     });
 
     return {
@@ -282,45 +339,49 @@ function applyOperation({
     };
   }
 
-  if (operation.type === "unschedule") {
-    const requestedIds = [...new Set(operation.activityIds)].filter((id) => selectedActivityIdSet.has(id));
-    if (requestedIds.length === 0) {
+  if (operation.type === "reorder_activities") {
+    const targetDay = nextDayGroups.find((day) => day.dayNumber === operation.dayNumber);
+    if (!targetDay) {
       return {
         ok: false,
         dayGroups,
         unassignedActivityIds,
-        rejectionReason: "Unschedule operation did not include valid activity IDs.",
+        rejectionReason: `Target day ${operation.dayNumber} does not exist.`,
       };
     }
 
-    let touched = 0;
-    for (const activityId of requestedIds) {
-      const wasAlreadyUnassigned = nextUnassignedActivityIds.includes(activityId);
-      let removedFromAnyDay = false;
-      for (const day of nextDayGroups) {
-        const before = day.activityIds.length;
-        day.activityIds = day.activityIds.filter((id) => id !== activityId);
-        if (day.activityIds.length < before) {
-          removedFromAnyDay = true;
-        }
-      }
-      if (!wasAlreadyUnassigned && !nextUnassignedActivityIds.includes(activityId)) {
-        nextUnassignedActivityIds.push(activityId);
-      }
-      if (removedFromAnyDay || wasAlreadyUnassigned) {
-        touched += 1;
-      }
-    }
-
-    if (touched === 0) {
+    const reorderedIds = [...new Set(operation.activityIds)].filter((id) => selectedActivityIdSet.has(id));
+    if (reorderedIds.length === 0) {
       return {
         ok: false,
         dayGroups,
         unassignedActivityIds,
-        rejectionReason: "None of the requested activities could be unscheduled.",
+        rejectionReason: "Reorder operation did not include valid activity IDs.",
       };
     }
 
+    const currentIds = targetDay.activityIds.filter((id) => selectedActivityIdSet.has(id));
+    if (currentIds.length !== reorderedIds.length) {
+      return {
+        ok: false,
+        dayGroups,
+        unassignedActivityIds,
+        rejectionReason: "Reorder operation must include the full activity list for the target day.",
+      };
+    }
+
+    const currentIdSet = new Set(currentIds);
+    const hasExactMembership = reorderedIds.every((id) => currentIdSet.has(id));
+    if (!hasExactMembership) {
+      return {
+        ok: false,
+        dayGroups,
+        unassignedActivityIds,
+        rejectionReason: "Reorder operation can only reorder activities already scheduled on the target day.",
+      };
+    }
+
+    targetDay.activityIds = reorderedIds;
     return {
       ok: true,
       dayGroups: nextDayGroups,
@@ -352,6 +413,8 @@ function applyOperation({
     };
   }
 
+
+
   return {
     ok: false,
     dayGroups,
@@ -377,32 +440,37 @@ export async function runLlmRefinementIteration({
   selectedActivities,
   dayGroups,
   unassignedActivityIds,
+  manualLlmResponse,
 }: {
   tripInfo: TripInfo;
   selectedActivities: SuggestedActivity[];
   dayGroups: DayGroup[];
   unassignedActivityIds: string[];
+  manualLlmResponse?: string | null;
 }): Promise<LlmRefinementIterationOutcome> {
   const selectedActivityIds = selectedActivities.map((activity) => activity.id);
   const selectedActivityIdSet = new Set(selectedActivityIds);
-  const activitiesById = new Map(selectedActivities.map((activity) => [activity.id, activity]));
+  const currentActivitiesById = cloneActivitiesById(selectedActivities);
+  const currentSelectedActivities = selectedActivityIds
+    .map((activityId) => currentActivitiesById.get(activityId))
+    .filter((activity): activity is SuggestedActivity => activity != null);
   const dayCapacities = buildDayCapacityProfiles(tripInfo, dayGroups.length);
-  const commuteMinutesByPair = await computeActivityCommuteMatrix(selectedActivities);
-  const preparedMap = buildPreparedActivityMap(selectedActivities);
+  const commuteMinutesByPair = await computeActivityCommuteMatrix(currentSelectedActivities);
+  const currentPreparedMap = buildPreparedActivityMap(currentSelectedActivities);
   const normalizedCurrent = normalizePlan({
     dayGroups,
     unassignedActivityIds,
     selectedActivityIds,
   });
-  const currentWithThemes = recomputeThemes(normalizedCurrent.dayGroups, activitiesById);
+  const currentWithThemes = recomputeThemes(normalizedCurrent.dayGroups, currentActivitiesById);
   const currentEvaluation = evaluatePlan({
     tripInfo,
     dayGroups: currentWithThemes,
-    selectedActivities,
+    selectedActivities: currentSelectedActivities,
     unassignedActivityIds: normalizedCurrent.unassignedActivityIds,
     dayCapacities,
     commuteMinutesByPair,
-    preparedMap,
+    preparedMap: currentPreparedMap,
   });
   const currentSnapshot = {
     currentDayGroups: currentEvaluation.dayGroups,
@@ -444,12 +512,19 @@ export async function runLlmRefinementIteration({
     tripInfo,
     activities: selectedActivities,
     dayGroups: currentEvaluation.dayGroups,
+    groupedDays: currentEvaluation.groupedDays,
     unassignedActivityIds: normalizedCurrent.unassignedActivityIds,
     currentCost: currentEvaluation.overallCost,
     allowDurationShrinking: ALLOW_DURATION_SHRINKING,
+    manualResponseText: manualLlmResponse,
   });
+  const llmDebug = {
+    llmRequestMessages: proposal.requestMessages,
+    llmRawResponse: proposal.rawResponseText,
+    llmResponseSource: proposal.source,
+  } as const;
   if (proposal.success && proposal.operations) {
-    const activityNameById = new Map(selectedActivities.map((activity) => [activity.id, activity.name]));
+    const activityNameById = new Map(currentSelectedActivities.map((activity) => [activity.id, activity.name]));
     const namedOperations = mapOperationsWithActivityNames(proposal.operations, activityNameById);
     console.debug("[LLM Refine] Suggested operations (named):", JSON.stringify(namedOperations));
   } else {
@@ -475,38 +550,13 @@ export async function runLlmRefinementIteration({
         operationSummary: "LLM proposal unavailable.",
         suggestedOperations: [],
         reason: "LLM did not return a valid refinement operation.",
+        ...llmDebug,
       },
     });
   }
 
   const operations = proposal.operations;
   const nonNoOpOperations = operations.filter((operation) => operation.type !== "no_op");
-  const batchValidation = validateOperationBatch({
-    operations: nonNoOpOperations,
-    selectedActivityIdSet,
-  });
-  if (!batchValidation.ok) {
-    return createOutcome({
-      dayGroups: currentEvaluation.dayGroups,
-      groupedDays: currentEvaluation.groupedDays,
-      unassignedActivityIds: normalizedCurrent.unassignedActivityIds,
-      candidateDayGroups: null,
-      candidateGroupedDays: null,
-      candidateUnassignedActivityIds: null,
-      result: {
-        accepted: false,
-        beforeTotalCost: currentEvaluation.overallCost,
-        candidateTotalCost: null,
-        afterTotalCost: currentEvaluation.overallCost,
-        costDelta: null,
-        operationType: nonNoOpOperations.length > 1 ? "multi" : (nonNoOpOperations[0]?.type ?? "error"),
-        operationCount: nonNoOpOperations.length,
-        operationSummary: nonNoOpOperations.map((operation) => summarizeOperation(operation)).join(" | "),
-        suggestedOperations: operations,
-        reason: batchValidation.reason ?? "Conflicting operation batch.",
-      },
-    });
-  }
   const noOpReason = operations.find((operation) => operation.type === "no_op")?.reason ?? null;
   if (nonNoOpOperations.length === 0) {
     return createOutcome({
@@ -527,12 +577,14 @@ export async function runLlmRefinementIteration({
         operationSummary: "No refinement changes proposed.",
         suggestedOperations: operations,
         reason: noOpReason ?? "No likely improvement identified.",
+        ...llmDebug,
       },
     });
   }
 
   let stagedDayGroups = currentEvaluation.dayGroups;
   let stagedUnassignedActivityIds = normalizedCurrent.unassignedActivityIds;
+  const stagedActivitiesById = cloneActivitiesById(currentSelectedActivities);
   const operationSummaries: string[] = [];
   for (let index = 0; index < nonNoOpOperations.length; index += 1) {
     const operation = nonNoOpOperations[index];
@@ -541,6 +593,7 @@ export async function runLlmRefinementIteration({
       dayGroups: stagedDayGroups,
       unassignedActivityIds: stagedUnassignedActivityIds,
       selectedActivityIdSet,
+      activitiesById: stagedActivitiesById,
     });
     if (!applied.ok) {
       return createOutcome({
@@ -561,6 +614,7 @@ export async function runLlmRefinementIteration({
           operationSummary: nonNoOpOperations.map((op) => summarizeOperation(op)).join(" | "),
           suggestedOperations: operations,
           reason: `Operation ${index + 1} failed: ${applied.rejectionReason}`,
+          ...llmDebug,
         },
       });
     }
@@ -574,15 +628,19 @@ export async function runLlmRefinementIteration({
     unassignedActivityIds: stagedUnassignedActivityIds,
     selectedActivityIds,
   });
-  const candidateWithThemes = recomputeThemes(normalizedCandidate.dayGroups, activitiesById);
+  const candidateSelectedActivities = selectedActivityIds
+    .map((activityId) => stagedActivitiesById.get(activityId))
+    .filter((activity): activity is SuggestedActivity => activity != null);
+  const candidatePreparedMap = buildPreparedActivityMap(candidateSelectedActivities);
+  const candidateWithThemes = recomputeThemes(normalizedCandidate.dayGroups, stagedActivitiesById);
   const candidateEvaluation = evaluatePlan({
     tripInfo,
     dayGroups: candidateWithThemes,
-    selectedActivities,
+    selectedActivities: candidateSelectedActivities,
     unassignedActivityIds: normalizedCandidate.unassignedActivityIds,
     dayCapacities,
     commuteMinutesByPair,
-    preparedMap,
+    preparedMap: candidatePreparedMap,
   });
 
   const isImproved = candidateEvaluation.overallCost + IMPROVEMENT_EPSILON < currentEvaluation.overallCost;
@@ -604,7 +662,8 @@ export async function runLlmRefinementIteration({
         operationCount: nonNoOpOperations.length,
         operationSummary: operationSummaries.join(" | "),
         suggestedOperations: operations,
-        reason: "Candidate plan did not reduce total cost.",
+        reason: NO_COST_IMPROVEMENT_REASON,
+        ...llmDebug,
       },
     });
   }
@@ -627,6 +686,7 @@ export async function runLlmRefinementIteration({
       operationSummary: operationSummaries.join(" | "),
       suggestedOperations: operations,
       reason: noOpReason,
+      ...llmDebug,
     },
   });
 }

@@ -201,11 +201,14 @@ export interface LlmRefinementResult {
   candidateTotalCost: number | null;
   afterTotalCost: number;
   costDelta: number | null;
-  operationType: "move" | "unschedule" | "set_night_stay" | "no_op" | "multi" | "error";
+  operationType: "move" | "reorder_activities" | "set_night_stay" | "no_op" | "multi" | "error";
   operationCount: number;
   operationSummary: string;
   suggestedOperations: Array<Record<string, unknown>>;
   reason: string | null;
+  llmRequestMessages?: Array<{ role: "system" | "user"; content: string }>;
+  llmRawResponse?: string | null;
+  llmResponseSource?: "openai" | "manual";
 }
 
 export interface LlmRefinementPreview {
@@ -763,10 +766,16 @@ export async function selectActivities(
   });
 }
 
-export async function runLlmRefinementStep(sessionId: string): Promise<SessionResponse> {
+export async function runLlmRefinementStep(
+  sessionId: string,
+  manualLlmResponse?: string | null
+): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/refine-day-grouping`, {
     method: "POST",
-    body: JSON.stringify({ sessionId }),
+    body: JSON.stringify({
+      sessionId,
+      manualLlmResponse: manualLlmResponse ?? null,
+    }),
   });
 }
 
@@ -789,7 +798,7 @@ export async function applyLlmRefinementCandidate(
 
 export async function resolveLlmRefinementPreview(
   sessionId: string,
-  action: "reject" | "discard"
+  action: "reject"
 ): Promise<SessionResponse> {
   return fetchJson(`${BASE_URL}/refine-day-grouping/resolve`, {
     method: "POST",

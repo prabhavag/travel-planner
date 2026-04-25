@@ -12,9 +12,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (action !== "reject" && action !== "discard") {
+    if (action !== "reject") {
       return NextResponse.json(
-        { success: false, message: "action must be reject or discard" },
+        { success: false, message: "action must be reject" },
         { status: 400 }
       );
     }
@@ -37,14 +37,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const resolvedResult =
-      action === "reject" && session.llmRefinementResult
-        ? {
-          ...session.llmRefinementResult,
-          accepted: false,
-          reason: session.llmRefinementResult.reason ?? "Rejected by user.",
-        }
-        : null;
+    const resolvedResult = session.llmRefinementResult
+      ? {
+        ...session.llmRefinementResult,
+        accepted: false,
+        reason: session.llmRefinementResult.reason ?? "Rejected by user.",
+      }
+      : null;
 
     sessionStore.update(sessionId, {
       llmRefinementResult: resolvedResult,
@@ -56,7 +55,7 @@ export async function POST(request: NextRequest) {
       success: true,
       sessionId,
       workflowState: session.workflowState,
-      message: action === "reject" ? "Rejected LLM itinerary changes." : "Discarded LLM refinement preview.",
+      message: "Rejected LLM itinerary changes.",
       llmRefinementResult: resolvedResult,
       llmRefinementPreview: null,
       currentSchedule: session.currentSchedule,

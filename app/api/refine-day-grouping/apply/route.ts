@@ -7,6 +7,8 @@ import {
   buildScoredSchedule,
   computeActivityCommuteMatrix,
 } from "@/lib/services/day-grouping";
+import { applyTimingOperationToActivities } from "@/lib/services/day-grouping-refinement";
+import type { DayGroupingRefinementOperation } from "@/lib/services/llm-client";
 
 function sanitizeDayGroups(dayGroups: DayGroup[]): DayGroup[] {
   return dayGroups
@@ -69,29 +71,55 @@ export async function POST(request: NextRequest) {
     const selectedActivities = session.suggestedActivities.filter((activity) =>
       session.selectedActivityIds.includes(activity.id)
     );
-    const selectedActivityIds = new Set(selectedActivities.map((activity) => activity.id));
+    const selectedActivityIdSet = new Set(selectedActivities.map((activity) => activity.id));
+    const updatedActivitiesById = new Map(selectedActivities.map((activity) => [activity.id, { ...activity }]));
+    const suggestedOperations = Array.isArray(llmRefinementResult?.suggestedOperations)
+      ? (llmRefinementResult.suggestedOperations as DayGroupingRefinementOperation[])
+      : [];
+    for (const operation of suggestedOperations) {
+      if (operation.type !== "set_activity_timings") continue;
+      const timingApply = applyTimingOperationToActivities({
+        operation,
+        activitiesById: updatedActivitiesById,
+        selectedActivityIdSet,
+      });
+      if (!timingApply.ok) {
+        return NextResponse.json(
+          { success: false, message: `Invalid timing suggestion: ${timingApply.rejectionReason}` },
+          { status: 400 }
+        );
+      }
+    }
+    const selectedActivitiesWithTiming = session.selectedActivityIds
+      .map((activityId) => updatedActivitiesById.get(activityId))
+      .filter((activity): activity is NonNullable<typeof selectedActivities[number]> => activity != null);
+
     const sanitizedDayGroups = sanitizeDayGroups(candidateDayGroups as DayGroup[]).map((day) => ({
       ...day,
-      activityIds: day.activityIds.filter((id) => selectedActivityIds.has(id)),
+      activityIds: day.activityIds.filter((id) => selectedActivityIdSet.has(id)),
     }));
     const sanitizedUnassigned = Array.isArray(candidateUnassignedActivityIds)
-      ? (candidateUnassignedActivityIds as unknown[]).filter((id): id is string => typeof id === "string" && selectedActivityIds.has(id))
+      ? (candidateUnassignedActivityIds as unknown[]).filter((id): id is string => typeof id === "string" && selectedActivityIdSet.has(id))
       : [];
 
     const dayCapacities = buildDayCapacityProfiles(session.tripInfo, sanitizedDayGroups.length);
-    const commuteMinutesByPair = await computeActivityCommuteMatrix(selectedActivities);
-    const preparedMap = buildPreparedActivityMap(selectedActivities);
+    const commuteMinutesByPair = await computeActivityCommuteMatrix(selectedActivitiesWithTiming);
+    const preparedMap = buildPreparedActivityMap(selectedActivitiesWithTiming);
     const currentSchedule = buildScoredSchedule({
       dayGroups: sanitizedDayGroups,
-      activities: selectedActivities,
+      activities: selectedActivitiesWithTiming,
       unassignedActivityIds: sanitizedUnassigned,
       dayCapacities,
       preparedMap,
       commuteMinutesByPair,
-      options: { forceSchedule: true, tripInfo: session.tripInfo },
+      options: { forceSchedule: true, forceSource: "llm", tripInfo: session.tripInfo },
     });
+    const updatedSuggestedActivities = session.suggestedActivities.map((activity) =>
+      updatedActivitiesById.get(activity.id) ?? activity
+    );
 
     sessionStore.update(sessionId, {
+      suggestedActivities: updatedSuggestedActivities,
       currentSchedule,
       tentativeSchedule: null,
       dayGroups: currentSchedule.dayGroups,

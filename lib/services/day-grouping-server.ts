@@ -7,6 +7,7 @@ import {
   computeActivityCommuteMatrix,
   computeDayCount,
   groupActivitiesByDay,
+  orderDayActivityIds,
   type ScheduleState,
 } from "@/lib/services/day-grouping";
 import type { ActivityGroupingStrategy } from "@/lib/services/day-grouping/types";
@@ -42,14 +43,23 @@ async function groupActivitiesByDayLlm({
     return null;
   }
 
+  const orderedDayGroups = response.dayGroups.map((dayGroup) => ({
+    ...dayGroup,
+    activityIds: orderDayActivityIds({
+      activityIds: dayGroup.activityIds,
+      preparedMap,
+      commuteMinutesByPair,
+    }),
+  }));
+
   const schedule = buildScoredSchedule({
-    dayGroups: response.dayGroups,
+    dayGroups: orderedDayGroups,
     activities,
     unassignedActivityIds: response.unassignedActivityIds,
     dayCapacities,
     preparedMap,
     commuteMinutesByPair,
-    options: { forceSchedule: true, tripInfo },
+    options: { forceSchedule: true, forceSource: "llm", tripInfo },
   });
 
   return {

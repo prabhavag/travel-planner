@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
-import { runLlmRefinementIteration } from "@/lib/services/day-grouping-refinement";
+import { reconcileLlmRefinementResult, runLlmRefinementIteration } from "@/lib/services/day-grouping-refinement";
 import {
   buildDayCapacityProfiles,
   buildPreparedActivityMap,
@@ -137,18 +137,33 @@ function summarizeSuggestedOperation(
     const activityIds = Array.isArray(operation.activityIds)
       ? operation.activityIds.filter((id): id is string => typeof id === "string")
       : [];
-    return `move to day ${dayNumber} [${formatActivityList(activityIds)}]`;
-  }
-  if (type === "unschedule") {
-    const activityIds = Array.isArray(operation.activityIds)
-      ? operation.activityIds.filter((id): id is string => typeof id === "string")
-      : [];
-    return `unschedule [${formatActivityList(activityIds)}]`;
+    return dayNumber === 0
+      ? `move to unassigned [${formatActivityList(activityIds)}]`
+      : `move to day ${dayNumber} [${formatActivityList(activityIds)}]`;
   }
   if (type === "set_night_stay") {
     const dayNumber = typeof operation.dayNumber === "number" ? operation.dayNumber : "?";
     const label = typeof operation.label === "string" ? operation.label : "unknown";
     return `set night stay day ${dayNumber} (${label})`;
+  }
+  if (type === "set_activity_timings") {
+    const timings = Array.isArray(operation.timings)
+      ? operation.timings
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") return null;
+          const timing = entry as Record<string, unknown>;
+          const activityId = typeof timing.activityId === "string" ? timing.activityId : null;
+          if (!activityId) return null;
+          const startTime = typeof timing.startTime === "string" ? timing.startTime : "clear";
+          const name = activityNameById.get(activityId);
+          const label = name ? `${name} (${activityId})` : activityId;
+          return `${label} -> ${startTime}`;
+        })
+        .filter((entry): entry is string => Boolean(entry))
+      : [];
+    return timings.length > 0
+      ? `set timings [${timings.join(", ")}]`
+      : "set timings";
   }
   if (type === "no_op") {
     return "no-op";
@@ -158,7 +173,11 @@ function summarizeSuggestedOperation(
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId } = await request.json();
+    const body = await request.json();
+    const sessionId = typeof body?.sessionId === "string" ? body.sessionId : null;
+    const manualLlmResponse = typeof body?.manualLlmResponse === "string"
+      ? body.manualLlmResponse
+      : null;
 
     if (!sessionId) {
       return NextResponse.json(
@@ -204,7 +223,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (session.llmRefinementPreview) {
+    if (session.llmRefinementPreview && !manualLlmResponse) {
       return NextResponse.json({
         success: true,
         sessionId,
@@ -233,6 +252,7 @@ export async function POST(request: NextRequest) {
       selectedActivities,
       dayGroups: refinementBaseDayGroups,
       unassignedActivityIds: refinementBaseUnassignedActivityIds,
+      manualLlmResponse,
     });
     const dayCapacities = buildDayCapacityProfiles(session.tripInfo, refinementBaseDayGroups.length);
     const commuteMinutesByPair = await computeActivityCommuteMatrix(selectedActivities);
@@ -246,7 +266,7 @@ export async function POST(request: NextRequest) {
         dayCapacities,
         preparedMap,
         commuteMinutesByPair,
-        options: { forceSchedule: true, tripInfo: session.tripInfo },
+        options: { forceSchedule: true, forceSource: "llm", tripInfo: session.tripInfo },
       });
     const rawTentativeSchedule = iteration.candidateDayGroups && iteration.candidateUnassignedActivityIds
       ? buildScoredSchedule({
@@ -256,7 +276,7 @@ export async function POST(request: NextRequest) {
         dayCapacities,
         preparedMap,
         commuteMinutesByPair,
-        options: { forceSchedule: true, tripInfo: session.tripInfo },
+        options: { forceSchedule: true, forceSource: "llm", tripInfo: session.tripInfo },
       })
       : null;
     const tentativeScheduleMatchesCurrent = Boolean(
@@ -269,19 +289,11 @@ export async function POST(request: NextRequest) {
 
     const beforeTotalCost = extractScheduleTotal(currentSchedule) ?? iteration.result.beforeTotalCost;
     const candidateTotalCost = extractScheduleTotal(tentativeSchedule) ?? iteration.result.candidateTotalCost;
-    const costDelta =
-      candidateTotalCost != null
-        ? candidateTotalCost - beforeTotalCost
-        : null;
-    const accepted = costDelta != null ? costDelta < -1e-6 : false;
-    const llmRefinementResult = {
-      ...iteration.result,
-      accepted,
+    const llmRefinementResult = reconcileLlmRefinementResult({
+      result: iteration.result,
       beforeTotalCost,
       candidateTotalCost,
-      afterTotalCost: accepted && candidateTotalCost != null ? candidateTotalCost : beforeTotalCost,
-      costDelta,
-    };
+    });
     const delta =
       llmRefinementResult.candidateTotalCost != null
         ? llmRefinementResult.candidateTotalCost - llmRefinementResult.beforeTotalCost
