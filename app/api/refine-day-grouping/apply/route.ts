@@ -8,7 +8,6 @@ import {
   computeActivityCommuteMatrix,
 } from "@/lib/services/day-grouping";
 import { applyTimingOperationToActivities } from "@/lib/services/day-grouping-refinement";
-import type { DayGroupingRefinementOperation } from "@/lib/services/llm-client";
 
 function sanitizeDayGroups(dayGroups: DayGroup[]): DayGroup[] {
   return dayGroups
@@ -74,10 +73,9 @@ export async function POST(request: NextRequest) {
     const selectedActivityIdSet = new Set(selectedActivities.map((activity) => activity.id));
     const updatedActivitiesById = new Map(selectedActivities.map((activity) => [activity.id, { ...activity }]));
     const suggestedOperations = Array.isArray(llmRefinementResult?.suggestedOperations)
-      ? (llmRefinementResult.suggestedOperations as DayGroupingRefinementOperation[])
+      ? llmRefinementResult.suggestedOperations
       : [];
     for (const operation of suggestedOperations) {
-      if (operation.type !== "set_activity_timings") continue;
       const timingApply = applyTimingOperationToActivities({
         operation,
         activitiesById: updatedActivitiesById,

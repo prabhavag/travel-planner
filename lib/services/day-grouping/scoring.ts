@@ -37,8 +37,6 @@ import {
 } from "./routing";
 import { computePlannableDurationHours } from "@/lib/planning-flags";
 
-export const structuralStatsCache = new Map<string, DayStructuralStats>();
-
 export interface ActivityCostDebug {
     kind: "scheduled" | "unscheduled";
     total: number;
@@ -414,14 +412,8 @@ export function getDayStructuralStats(
     commuteMinutesByPair: ActivityCommuteMatrix,
     dayCapacity: DayCapacityProfile
 ): DayStructuralStats {
-    const cacheKey = activityIds.slice().sort().join(",");
-    const cached = structuralStatsCache.get(cacheKey);
-    if (cached) return cached;
-
     if (activityIds.length === 0) {
-        const stats = { structuralCost: 0, commuteProxy: 0, totalHours: 0 };
-        structuralStatsCache.set(cacheKey, stats);
-        return stats;
+        return { structuralCost: 0, commuteProxy: 0, totalHours: 0 };
     }
 
     const activities = buildOptimalDayRoute(
@@ -584,9 +576,7 @@ export function getDayStructuralStats(
         daylightViolationHours * COST_WEIGHTS.daylightViolation +
         emptySlotHours * COST_WEIGHTS.emptySlot;
 
-    const stats = { structuralCost, commuteProxy, totalHours };
-    structuralStatsCache.set(cacheKey, stats);
-    return stats;
+    return { structuralCost, commuteProxy, totalHours };
 }
 
 export function computeAllDayStats(

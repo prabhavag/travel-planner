@@ -19,7 +19,7 @@ const DEPARTURE_AIRPORT_LEAD_MINUTES = 120;
 const DEPARTURE_TRANSFER_MINUTES_ESTIMATE = 90;
 const DEPARTURE_COMMUTE_BUFFER_MINUTES = 20;
 
-function roundToQuarterMinutes(minutes: number): number {
+export function roundToQuarterMinutes(minutes: number): number {
     return Math.round(minutes / 15) * 15;
 }
 

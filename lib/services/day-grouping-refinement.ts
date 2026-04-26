@@ -49,6 +49,95 @@ export interface LlmRefinementIterationOutcome {
   result: LlmRefinementResult;
 }
 
+type SetActivityTimingsRefinementOperation = {
+  type: "set_activity_timings";
+  timings: Array<{
+    activityId: string;
+    startTime: string;
+  }>;
+};
+
+function isSetActivityTimingsOperation(operation: unknown): operation is SetActivityTimingsRefinementOperation {
+  if (!operation || typeof operation !== "object") return false;
+  const candidate = operation as Record<string, unknown>;
+  return candidate.type === "set_activity_timings";
+}
+
+export function applyTimingOperationToActivities({
+  operation,
+  activitiesById,
+  selectedActivityIdSet,
+}: {
+  operation: unknown;
+  activitiesById: Map<string, SuggestedActivity>;
+  selectedActivityIdSet: Set<string>;
+}): {
+  ok: boolean;
+  applied: boolean;
+  rejectionReason: string | null;
+} {
+  if (!isSetActivityTimingsOperation(operation)) {
+    return {
+      ok: true,
+      applied: false,
+      rejectionReason: null,
+    };
+  }
+
+  if (!Array.isArray(operation.timings) || operation.timings.length === 0) {
+    return {
+      ok: false,
+      applied: false,
+      rejectionReason: "Timing operation did not include any timing entries.",
+    };
+  }
+
+  for (const timing of operation.timings) {
+    const activityId = typeof timing.activityId === "string" ? timing.activityId : "";
+    if (!activityId || !selectedActivityIdSet.has(activityId)) {
+      return {
+        ok: false,
+        applied: false,
+        rejectionReason: `Timing operation referenced unknown activity '${activityId || "unknown"}'.`,
+      };
+    }
+
+    const activity = activitiesById.get(activityId);
+    if (!activity) {
+      return {
+        ok: false,
+        applied: false,
+        rejectionReason: `Timing operation could not find activity '${activityId}'.`,
+      };
+    }
+
+    const startTimeRaw = typeof timing.startTime === "string" ? timing.startTime.trim() : "";
+    const shouldClear = startTimeRaw.toLowerCase() === "clear";
+    if (shouldClear) {
+      activity.isFixedStartTime = false;
+      activity.fixedStartTime = null;
+      continue;
+    }
+
+    if (!startTimeRaw || parseFixedStartTimeMinutes(startTimeRaw) == null) {
+      return {
+        ok: false,
+        applied: false,
+        rejectionReason: `Invalid startTime '${startTimeRaw || "empty"}' for activity '${activityId}'.`,
+      };
+    }
+
+    activity.isFixedStartTime = true;
+    activity.fixedStartTime = startTimeRaw;
+  }
+
+  return {
+    ok: true,
+    applied: true,
+    rejectionReason: null,
+  };
+}
+
 export function reconcileLlmRefinementResult({
   result,
   beforeTotalCost,

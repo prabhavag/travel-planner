@@ -1,9 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
     parseDurationHours,
     buildDayCapacityProfiles,
     getDayStructuralStats,
-    structuralStatsCache,
     computeAllDayStats,
     computeTotalCost,
     activityCommuteMinutes,
@@ -59,10 +58,6 @@ describe('day-grouping duration parsing', () => {
 });
 
 describe('day-grouping structural stats', () => {
-    beforeEach(() => {
-        structuralStatsCache.clear();
-    });
-
     it('should calculate stats for an empty day', () => {
         const stats = getDayStructuralStats([], new Map(), new Map(), {
             maxHours: 8,
@@ -71,28 +66,6 @@ describe('day-grouping structural stats', () => {
         });
         expect(stats.totalHours).toBe(0);
         expect(stats.structuralCost).toBe(0);
-    });
-
-    it('should use cache for identical activity sets', () => {
-        const preparedMap = new Map();
-        const commuteMatrix = new Map();
-        const capacity = {
-            maxHours: 8,
-            slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
-            targetWeight: 1
-        };
-
-        const activityA = mockActivity('a');
-        const activityB = mockActivity('b');
-        preparedMap.set('a', { activity: activityA, durationHours: 2, loadDurationHours: 2, isFullDay: false });
-        preparedMap.set('b', { activity: activityB, durationHours: 2, loadDurationHours: 2, isFullDay: false });
-
-        getDayStructuralStats(['a', 'b'], preparedMap, commuteMatrix, capacity);
-        expect(structuralStatsCache.size).toBe(1);
-
-        // Different order should still hit cache because we sort keys
-        getDayStructuralStats(['b', 'a'], preparedMap, commuteMatrix, capacity);
-        expect(structuralStatsCache.size).toBe(1);
     });
 
     it('does not include duration mismatch in structural cost', () => {
@@ -149,7 +122,6 @@ describe('day-grouping structural stats', () => {
         flexibleMap.set('flexible', { activity: flexible, durationHours: 3, loadDurationHours: 3, isFullDay: false });
 
         const daylightStats = getDayStructuralStats(['daylight'], daylightMap, commuteMatrix, capacity);
-        structuralStatsCache.clear();
         const flexibleStats = getDayStructuralStats(['flexible'], flexibleMap, commuteMatrix, capacity);
 
         expect(daylightStats.structuralCost).toBeGreaterThan(flexibleStats.structuralCost);
@@ -337,6 +309,107 @@ describe('day-grouping structural stats', () => {
         );
 
         expect(hintTimelineItem?.timeRange).toBe('9:30 AM-11:30 AM');
+    });
+
+    it('rounds server timeline activity times to quarter-hour increments', () => {
+        const oddlyTimed = {
+            ...mockActivity('oddly-timed'),
+            name: 'Oddly Timed Activity',
+            estimatedDuration: '1 hour',
+            isFixedStartTime: true,
+            fixedStartTime: '10:07 AM',
+        };
+        const activities = [oddlyTimed];
+        const preparedMap = buildPreparedActivityMap(activities);
+
+        const schedule = buildScoredSchedule({
+            dayGroups: [
+                {
+                    dayNumber: 1,
+                    date: '',
+                    theme: 'Arrival',
+                    activityIds: [],
+                    nightStay: { label: 'Base' } as any,
+                    debugCost: null,
+                },
+                {
+                    dayNumber: 2,
+                    date: '',
+                    theme: 'Rounded',
+                    activityIds: ['oddly-timed'],
+                    nightStay: null,
+                    debugCost: null,
+                },
+            ],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities: Array.from({ length: 2 }, () => ({
+                maxHours: 8,
+                slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+                targetWeight: 1,
+            })),
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+            options: { forceSchedule: true },
+        });
+
+        const timelineItem = schedule.groupedDays[1]?.timelineItems?.find(
+            (item) => item.activityId === 'oddly-timed'
+        );
+
+        expect(timelineItem?.timeRange).toBe('10 AM-11 AM');
+    });
+
+    it('adds a backend free-slot timeline item when the day has spare time', () => {
+        const shortMorning = {
+            ...mockActivity('short-morning'),
+            name: 'Short Morning Activity',
+            estimatedDuration: '1 hour',
+            isDurationFlexible: false,
+        };
+        const activities = [shortMorning];
+        const preparedMap = buildPreparedActivityMap(activities);
+
+        const schedule = buildScoredSchedule({
+            dayGroups: [
+                {
+                    dayNumber: 1,
+                    date: '',
+                    theme: 'Arrival',
+                    activityIds: [],
+                    nightStay: { label: 'Base' } as any,
+                    debugCost: null,
+                },
+                {
+                    dayNumber: 2,
+                    date: '',
+                    theme: 'Flexible Day',
+                    activityIds: ['short-morning'],
+                    nightStay: null,
+                    debugCost: null,
+                },
+            ],
+            activities,
+            unassignedActivityIds: [],
+            dayCapacities: Array.from({ length: 2 }, () => ({
+                maxHours: 8,
+                slotCapacity: { morning: 4, afternoon: 4, evening: 3 },
+                targetWeight: 1,
+            })),
+            preparedMap,
+            commuteMinutesByPair: new Map(),
+            options: { forceSchedule: true },
+        });
+
+        const freeSlotItem = schedule.groupedDays[1]?.timelineItems?.find(
+            (item) => item.type === 'free'
+        );
+
+        expect(freeSlotItem).toMatchObject({
+            title: 'Free slot',
+            detail: 'Afternoon slot is open. Add a nearby activity, cafe, or scenic stop.',
+            timeRange: '1 PM-5:30 PM',
+        });
     });
 
     it('uses the previous day night stay as the next day start stay', () => {
@@ -614,9 +687,7 @@ describe('day-grouping structural stats', () => {
         lateMissMap.set('late-window-miss', { activity: lateWindowMiss, durationHours: 2, loadDurationHours: 2, isFullDay: false });
 
         const onWindowStats = getDayStructuralStats(['on-window'], onWindowMap, commuteMatrix, capacity);
-        structuralStatsCache.clear();
         const earlyMissStats = getDayStructuralStats(['early-window-miss'], earlyMissMap, commuteMatrix, capacity);
-        structuralStatsCache.clear();
         const lateMissStats = getDayStructuralStats(['late-window-miss'], lateMissMap, commuteMatrix, capacity);
 
         expect(earlyMissStats.structuralCost).toBeGreaterThan(onWindowStats.structuralCost);
@@ -650,7 +721,6 @@ describe('day-grouping structural stats', () => {
         eveningMap.set('evening-placed', { activity: eveningPlaced, durationHours: 2, loadDurationHours: 2, isFullDay: false });
 
         const alignedStats = getDayStructuralStats(['morning-aligned'], alignedMap, commuteMatrix, capacity);
-        structuralStatsCache.clear();
         const eveningStats = getDayStructuralStats(['evening-placed'], eveningMap, commuteMatrix, capacity);
 
         expect(eveningStats.structuralCost).toBeGreaterThan(alignedStats.structuralCost);
@@ -678,7 +748,6 @@ describe('day-grouping structural stats', () => {
         };
 
         const roomyStats = getDayStructuralStats(['single'], preparedMap, commuteMatrix, roomyCapacity);
-        structuralStatsCache.clear();
         const tightStats = getDayStructuralStats(['single'], preparedMap, commuteMatrix, tightCapacity);
 
         expect(roomyStats.structuralCost).toBeGreaterThan(tightStats.structuralCost);
@@ -733,7 +802,6 @@ describe('day-grouping structural stats', () => {
         ]);
 
         const daytimeStats = getDayStructuralStats(['daytime-a', 'daytime-b'], daytimeMap, daytimeCommuteMatrix, capacity);
-        structuralStatsCache.clear();
         const nightStats = getDayStructuralStats(['night-a', 'night-b'], nightMap, nightCommuteMatrix, capacity);
 
         expect(nightStats.structuralCost).toBeGreaterThan(daytimeStats.structuralCost);
@@ -778,7 +846,6 @@ describe('day-grouping total cost', () => {
     });
 
     it('penalizes duration mismatch for unscheduled activities', () => {
-        structuralStatsCache.clear();
         const activity = { ...mockActivity('duration-mismatch'), bestTimeOfDay: 'morning' as const, estimatedDuration: '2 hours' };
         const preparedMap = new Map();
         preparedMap.set('duration-mismatch', { activity, durationHours: 2, loadDurationHours: 2, isFullDay: false });
@@ -930,7 +997,6 @@ describe('day-grouping flight timing constraints', () => {
             targetWeight: 1,
             overflowPenaltyMultiplier: 1,
         });
-        structuralStatsCache.clear();
         const strictStats = getDayStructuralStats(['long'], preparedMap, commuteMatrix, {
             maxHours: 4,
             slotCapacity: { morning: 4, afternoon: 4, evening: 3 },

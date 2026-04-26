@@ -26,6 +26,7 @@ import {
     parseFixedStartTimeMinutes,
     getConstrainedDayStartMinutes,
     recommendedWindowLatestStartMinutes,
+    roundToQuarterMinutes,
 } from "./utils";
 import {
     activityCommuteMinutes,
@@ -422,7 +423,7 @@ function buildPackedDayActivityTimings({
     dayStartMinutes: number;
 }): PackedDayActivityTiming[] {
     const timings: PackedDayActivityTiming[] = [];
-    let cursorMinutes = dayStartMinutes;
+    let cursorMinutes = roundToQuarterMinutes(dayStartMinutes);
 
     for (let index = 0; index < activityIds.length; index += 1) {
         const activityId = activityIds[index];
@@ -433,12 +434,13 @@ function buildPackedDayActivityTimings({
         const fixedStartMinutes = activity.isFixedStartTime
             ? parseFixedStartTimeMinutes(activity.fixedStartTime || null)
             : null;
-        const startMinutes = fixedStartMinutes != null ? Math.max(cursorMinutes, fixedStartMinutes) : cursorMinutes;
-        const durationMinutes = Math.round(prepared.loadDurationHours * 60);
+        const alignedFixedStartMinutes = fixedStartMinutes != null ? roundToQuarterMinutes(fixedStartMinutes) : null;
+        const startMinutes = alignedFixedStartMinutes != null ? Math.max(cursorMinutes, alignedFixedStartMinutes) : cursorMinutes;
+        const durationMinutes = Math.max(15, roundToQuarterMinutes(prepared.loadDurationHours * 60));
         const endMinutes = startMinutes + durationMinutes;
         const nextPrepared = activityIds[index + 1] ? preparedMap.get(activityIds[index + 1]) : null;
         const commuteToNextMinutes = nextPrepared
-            ? Math.round(activityCommuteMinutes(activity, nextPrepared.activity, commuteMinutesByPair))
+            ? Math.max(15, roundToQuarterMinutes(activityCommuteMinutes(activity, nextPrepared.activity, commuteMinutesByPair)))
             : 0;
 
         timings.push({
@@ -448,7 +450,7 @@ function buildPackedDayActivityTimings({
             endMinutes,
             commuteToNextMinutes,
         });
-        cursorMinutes = endMinutes + commuteToNextMinutes;
+        cursorMinutes = roundToQuarterMinutes(endMinutes + commuteToNextMinutes);
     }
 
 
@@ -492,7 +494,7 @@ function buildScheduleTimelineItems({
             baseDayStartMinutes,
             timingConstraints: capacity.timingConstraints,
         });
-        let cursorMinutes = dayStartMinutes;
+        let cursorMinutes = roundToQuarterMinutes(dayStartMinutes);
         let lunchInserted = false;
         let scheduledMinutes = 0;
         const items: TimelineItem[] = [];
@@ -521,7 +523,7 @@ function buildScheduleTimelineItems({
                 title: "Hotel check-in",
                 detail: day.nightStay?.label || "At your stay",
             });
-            cursorMinutes = Math.max(cursorMinutes, arrivalMinutes + transferMinutes);
+            cursorMinutes = roundToQuarterMinutes(Math.max(cursorMinutes, arrivalMinutes + transferMinutes));
         } else {
             const previousNightStayLabel = dayGroups[dayIndex - 1]?.nightStay?.label;
             const startStayLabel = previousNightStayLabel || day.nightStay?.label;
@@ -553,7 +555,7 @@ function buildScheduleTimelineItems({
             const fixedStart = packedTiming.fixedStartMinutes;
 
             if (!lunchInserted && cursorMinutes >= 12 * 60) {
-                const lunchStart = cursorMinutes;
+                const lunchStart = roundToQuarterMinutes(cursorMinutes);
                 const lunchEnd = lunchStart + 60;
                 items.push({
                     type: "lunch",
@@ -562,11 +564,11 @@ function buildScheduleTimelineItems({
                     detail: "About 1 hr",
                     timeRange: formatTimeRange(lunchStart, lunchEnd),
                 });
-                cursorMinutes = lunchEnd;
+                cursorMinutes = roundToQuarterMinutes(lunchEnd);
                 lunchInserted = true;
             }
             if (!lunchInserted && cursorMinutes < 12 * 60 && startMinutes >= 12 * 60) {
-                const lunchStart = Math.max(cursorMinutes, 12 * 60);
+                const lunchStart = roundToQuarterMinutes(Math.max(cursorMinutes, 12 * 60));
                 const lunchEnd = lunchStart + 60;
                 if (lunchEnd <= startMinutes) {
                     items.push({
@@ -576,7 +578,7 @@ function buildScheduleTimelineItems({
                         detail: "About 1 hr",
                         timeRange: formatTimeRange(lunchStart, lunchEnd),
                     });
-                    cursorMinutes = lunchEnd;
+                    cursorMinutes = roundToQuarterMinutes(lunchEnd);
                     lunchInserted = true;
                 }
             }
@@ -596,7 +598,7 @@ function buildScheduleTimelineItems({
                 warnings.push(warning);
                 hardConstraintWarnings.push(warning);
             }
-            const dayEndMinutes = dayStartMinutes + Math.round(capacity.maxHours * 60);
+            const dayEndMinutes = roundToQuarterMinutes(dayStartMinutes + capacity.maxHours * 60);
             if (endMinutes > dayEndMinutes) {
                 warnings.push(`Over capacity: scheduled past ${formatClockLabel(dayEndMinutes)}.`);
             }
@@ -620,12 +622,12 @@ function buildScheduleTimelineItems({
                 affordLabel: `Spend up to ${formatHoursLabel(prepared.loadDurationHours)} here${warnings.length > 0 ? ` • ${warnings.join(" ")}` : ""}`,
             });
             scheduledMinutes += Math.max(0, endMinutes - startMinutes);
-            cursorMinutes = endMinutes;
+            cursorMinutes = roundToQuarterMinutes(endMinutes);
 
             const nextPrepared = day.activityIds[index + 1] ? preparedMap.get(day.activityIds[index + 1]) : null;
             if (nextPrepared) {
                 const commuteMinutes = packedTiming.commuteToNextMinutes;
-                const commuteStart = cursorMinutes;
+                const commuteStart = roundToQuarterMinutes(cursorMinutes);
                 const commuteEnd = commuteStart + commuteMinutes;
                 items.push({
                     type: "commute",
@@ -634,7 +636,7 @@ function buildScheduleTimelineItems({
                     detail: `Estimated travel ~${commuteMinutes} min`,
                     timeRange: formatTimeRange(commuteStart, commuteEnd),
                 });
-                cursorMinutes = commuteEnd;
+                cursorMinutes = roundToQuarterMinutes(commuteEnd);
             }
         });
 
@@ -649,7 +651,7 @@ function buildScheduleTimelineItems({
             });
         }
         if (!lunchInserted && day.activityIds.length > 0) {
-            const lunchStart = Math.max(cursorMinutes, 12 * 60);
+            const lunchStart = roundToQuarterMinutes(Math.max(cursorMinutes, 12 * 60));
             items.push({
                 type: "lunch",
                 id: `lunch-${day.dayNumber}`,
@@ -657,6 +659,29 @@ function buildScheduleTimelineItems({
                 detail: "About 1 hr",
                 timeRange: formatTimeRange(lunchStart, lunchStart + 60),
             });
+            cursorMinutes = roundToQuarterMinutes(lunchStart + 60);
+        }
+        const dayEndMinutes = roundToQuarterMinutes(dayStartMinutes + capacity.maxHours * 60);
+        const departureTransferStartMinutes = departureConstraint?.airportArrivalDeadlineMinutes != null
+            ? roundToQuarterMinutes(departureConstraint.airportArrivalDeadlineMinutes - 90)
+            : null;
+        const freeSlotEndMinutes = departureTransferStartMinutes != null
+            ? Math.max(cursorMinutes, departureTransferStartMinutes)
+            : dayEndMinutes;
+        const freeSlotStartMinutes = roundToQuarterMinutes(cursorMinutes);
+        const freeSlotMinutes = Math.max(0, freeSlotEndMinutes - freeSlotStartMinutes);
+        if (freeSlotMinutes >= 45) {
+            const detail = freeSlotStartMinutes >= 12 * 60
+                ? "Afternoon slot is open. Add a nearby activity, cafe, or scenic stop."
+                : "A slot is free, consider adding or moving an activity.";
+            items.push({
+                type: "free",
+                id: `free-slot-${day.dayNumber}`,
+                title: "Free slot",
+                detail,
+                timeRange: formatTimeRange(freeSlotStartMinutes, freeSlotEndMinutes),
+            });
+            cursorMinutes = freeSlotEndMinutes;
         }
         appendDayEndTimelineItems({
             items,
